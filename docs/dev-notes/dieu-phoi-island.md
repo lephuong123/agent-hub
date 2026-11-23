@@ -19,8 +19,9 @@ daemon ──events.subscribe{level:summary, detail_agent_id:<điều phối vi�
   đăng ký tiếp từ `hub_seq` cuối (ring/DB của daemon phát lại — không mất event).
 - Subscription daemon: event MỌI agent ở mức `summary` (đủ cho trạng thái luồng, câu hỏi, duyệt) + event của điều phối viên tới mức `detail`
   (chữ chạy, suy nghĩ). Điều phối viên đổi (`manager.designated`) → đăng ký lại với `detail_agent_id` mới + `resync`.
-- `msg.done` gộp đúng toàn bộ chữ đã chạy của lượt (Converter giữ bộ đệm theo run trong `Feed`, không theo kết nối) — trình duyệt nối lại giữa
-  chừng vẫn nhận câu trả lời đầy đủ.
+- `msg.done` mang ĐÚNG chữ đã lưu của câu trả lời (`manager.reply.text` + `message_id`, dựng qua `present.mgr_message` như ảnh chụp, id
+  `m<message_id>`; event cũ không có `message_id` → `e<seq>`) — bản SSE và bản tải lại là một mục. Lời dẫn đã chạy chữ giữa các lần dùng tool
+  chỉ hiện lúc đang chạy (verify r4; trước đây Converter gộp chữ đã chạy → chữ đổi khi tải lại).
 
 ## `GET /api/manager/snapshot?c=&w=&new=&run=`
 
@@ -93,6 +94,7 @@ Mỗi message là `data: {"t": "<loại>", …}` (không dùng trường `event:
 | `tool.end` | hội thoại/luồng | `id`, `name`, `error` |
 | `todo` | hội thoại/luồng | `todo` (`present.todo_view` — chữ thô) |
 | `msg.done` | hội thoại/luồng | `item` (Item `manager`, `html` đã cứng hoá — MỘT lần mỗi câu trả lời; thay khung đang chạy chữ của `run`) |
+| `msg.user` | hội thoại/luồng | `item` (Item `user` đã lưu, id `m<message_id>`) — từ event `manager.message` (tin người vừa lưu, mọi kênh). Khung đang mở (kể cả ẩn) thêm ngay; khung vừa gửi thay tin lạc quan |
 | `act.item` | hội thoại/luồng | `item` (ActionItem) — gom vào khối "Đã làm N việc" cùng `run` |
 | `action.pending` | hội thoại/luồng | `action` (Action: câu hỏi `question.open|escalated` của hội thoại, thao tác phá huỷ chờ duyệt `approval.waiting_human` của lượt điều phối viên) |
 | `action.resolved` | hội thoại/luồng | `kind: question|approval`, `id`, `status` (`answered|cancelled` / `allowed|denied`), `answer?`, `answered_by?` |
@@ -283,3 +285,22 @@ Mã mới: `static/coord/scroll.js` (cuộn dính đáy — THUẦN), `static/co
   `::after` transform/opacity cho MỌI trang (app.css), bỏ `ws-ping`/`voice-pulse` box-shadow.
 - **Còn mở:** ngân sách JS 30 KB gzip (coord ~30.6 + vendor ~11.1 ≈ 41.7 KB, chặn ở 42 KB) — chờ người dùng chốt; `msg.done` có đoạn mở
   đầu trước tool mà ảnh chụp bỏ (chữ đổi khi tải lại); long task 50–75 ms khi cuộn rất nhanh xuống qua 2000 mục đã vẽ hết.
+
+## Verify vòng 4
+- **Chữ SSE ≠ chữ tải lại:** hub gắn `message_id` vào `manager.reply` (`_add_msg` trả id); Converter bỏ bộ đệm chữ đã chạy, dựng `msg.done`
+  từ chữ đã lưu qua `present.mgr_message` → id/chữ/HTML/`cut` trùng ảnh chụp (test so với `manager.history` qua daemon thật). Đo headless:
+  2 mục cuối trước/sau tải lại trùng id (`m12`,`m14`), chữ và DOM.
+- **Tin người từ client khác ở khung ẩn:** event mới `manager.message{conversation_id, run_id, message_id, role: user, text, channel}` (gửi
+  mới và steer) → `msg.user`. Store: thêm vào khung (kể cả ẩn), khung vừa gửi thay tin `tmp…` (giữ key Row qua `tmp`), `sendOk`/`sendFail`
+  khớp cả `tmp`. Vẫn giữ nhánh tải lại nền khi `msg.done` không có tin người (hub cũ / lỡ message). Đo: khung ẩn có tin ngay, không `stale`.
+- **CLS 0.08 khi vuốt mạnh lên ngay sau khi mở (vẽ dần):** mỗi lượt chèn đổi cỡ mục đầu đang vẽ — luật `.mm.mgr + .mm.mgr` của app.css ẩn
+  dòng "Điều phối viên" (24 px) khi mục chèn trước nó là câu trả lời; neo theo đỉnh mục đầu nên mọi mục đang thấy bị kéo lên 24 px. Sửa: lớp
+  `cont` tính trên CẢ dòng thời gian (views/Flow) thay luật anh em; neo = mục đầu tiên bắt đầu trong khung (tìm nhị phân), khoảng giữ chỗ
+  co/nở đúng `-d` trong cùng useLayoutEffect; `contain-intrinsic-size` = offsetHeight − padding − viền (là cỡ hộp nội dung). `MORE_STEP`
+  60 → 40 (đợt 60 mục có khối code chạm 51 ms). Đo (Chromium headless, lăn chuột thật 60 × −2500 px mỗi 25 ms, kịch bản verify): CLS 0
+  (trước 0.0819), End rồi vuốt lên 0–0.002, vuốt xuống 0; long task 0.
+- **Panel xem tệp mở/đóng:** ResizeObserver của khung thấy bề ngang đổi → `keepRead` đưa mục đang đọc (ghi sau mỗi lần cuộn, gộp theo
+  khung hình) về đúng khoảng cách cũ; xuống dòng lại không bật "Tin mới nhất"; hiện lại khung ẩn cũng neo theo mục. files.js trả focus về
+  chip với `preventScroll`. Đo: lệch 0 px khi mở và khi đóng (trước khi thêm preventScroll: −54 px lúc đóng).
+- **Ngân sách JS:** +0.5 KB gzip bản phục vụ (42.2 KB) → test chặn nâng lên 42.5 KB (nguồn 58.5 KB); ngân sách cuối vẫn chờ người dùng chốt.
+- **Còn mở:** chữ chạy `[demo]` có CLS ~0.011 mỗi lượt (dịch 2 px dòng chữ dưới cùng + bảng markdown) — y hệt trước vòng 4, chưa xử lý.

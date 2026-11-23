@@ -514,7 +514,9 @@ class ManagerService:
         if last:
             self.conn.execute("UPDATE manager_conversations SET read_upto=? WHERE id=? AND COALESCE(read_upto, 0) < ?", (int(last), cid, int(last)))
 
-    def _add_msg(self, cid: str, role: str, text: str, run_id: str | None) -> None:
+    def _add_msg(self, cid: str, role: str, text: str, run_id: str | None) -> int:
+        """Ghi một tin vào hội thoại; trả id hàng (`message_id` trong `manager.reply` / `manager.message` — web dùng làm id mục dòng thời
+        gian: bản tới qua SSE và bản đọc lại sau khi tải lại trang là MỘT mục, cùng chữ)."""
         cur = self.conn.execute("INSERT INTO manager_messages (conversation_id, role, text, run_id, ts) VALUES (?,?,?,?,?)",
                                 (cid, role, text[:MSG_MAX], run_id, now_iso()))
         self.conn.execute("UPDATE manager_conversations SET updated_at=? WHERE id=?", (now_iso(), cid))
@@ -524,6 +526,13 @@ class ManagerService:
             indexer_for(self.hub.store).index_manager_row(int(cur.lastrowid))
         except Exception:  # pragma: no cover - lỗi chỉ mục không chặn hội thoại
             log.exception("không chỉ mục được tin điều phối viên")
+        return int(cur.lastrowid or 0)
+
+    def _user_msg(self, conv: dict[str, Any], text: str, run_id: str, aid: str) -> None:
+        """Tin người: lưu + `manager.message` (web: tab/khung khác đang mở hội thoại thấy tin ngay, không phải tải lại ảnh chụp)."""
+        mid = self._add_msg(conv["id"], "user", text, run_id)
+        self.hub.publish(make_event("manager.message", aid, {"conversation_id": conv["id"], "run_id": run_id, "message_id": mid, "role": "user",
+                                                             "text": text[:MSG_MAX], "channel": conv.get("channel")}, run_id=run_id))
 
     def _save_images(self, agent_id: str, cid: str, imgs: list[tuple[str, bytes]]) -> list[str]:
         """Ảnh người gửi → `<cwd hội thoại>/attachments/` (0600, tên do hub đặt). Trả đường dẫn tương đối theo cwd."""
@@ -764,12 +773,12 @@ class ManagerService:
                 res = await steer(self.hub, r["id"], self.render_prompt(r["id"], prompts.chat_prompt(channel, conv["id"], prompt_text, result_only=ro, workstream=wsl)), by="user", channel=channel)
             except Conflict:
                 raise Conflict(f"điều phối viên đang kết thúc lượt trả lời trước (run {r['id']}) — gửi lại sau giây lát") from None
-            self._add_msg(conv["id"], "user", text, r["id"])
+            self._user_msg(conv, text, r["id"], aid)
             self.mark_read(conv["id"])
             return {"conversation_id": conv["id"], "run_id": r["id"], "steered": True, "seq": (res or {}).get("seq"),
                     "workstream_id": conv.get("workstream_id")}
         run = self._submit(conv, prompts.chat_prompt(channel, conv["id"], prompt_text, result_only=ro, workstream=wsl), kind="chat", budget=self.cfg("chat_budget_usd"))
-        self._add_msg(conv["id"], "user", text, run["id"])
+        self._user_msg(conv, text, run["id"], aid)
         self.mark_read(conv["id"])
         self.conn.execute("UPDATE manager_conversations SET turns=turns+1 WHERE id=?", (conv["id"],))
         out = {"conversation_id": conv["id"], "run_id": run["id"], "session_id": run["session_id"], "resumed": bool(run.get("resumed_from_session")),
@@ -946,7 +955,7 @@ class ManagerService:
             # chữ hub cho người (P1-10): không ghép run id (đã có ở payload `run_id`); giữ tiền tố `chatview.FAIL_PREFIX`
             text = (f"(Điều phối viên không trả lời được: {OUTCOME_VI.get(str(outcome), str(outcome))}"
                     + (f" — {str(run.get('error'))[:300]}" if run.get("error") else "") + ")")
-        self._add_msg(cid, "manager", text, run["id"])
+        mid = self._add_msg(cid, "manager", text, run["id"])
         sess = run.get("session_id") if ok or outcome == "cancelled" else None  # lỗi → session mới lần sau (mang theo tóm tắt)
         self.conn.execute("UPDATE manager_conversations SET session_id=?, session_turns=session_turns+1, last_run_id=?, updated_at=? WHERE id=?",
                           (sess, run["id"], now_iso(), cid))
@@ -960,6 +969,7 @@ class ManagerService:
                 if not keep:
                     self._first_pending = None
         self.hub.publish(make_event("manager.reply", run["agent_id"], {"conversation_id": cid, "run_id": run["id"], "text": text[:TEXT_MAX],
+                                                                       "message_id": mid,
                                                                        **({"truncated": True} if len(text) > TEXT_MAX else {}),
                                                                        "channel": conv["channel"], "kind": "tick" if kind == "tick" else "reply", "ok": ok,
                                                                        "outcome": outcome,
@@ -987,12 +997,12 @@ class ManagerService:
             return False
         text = task_report.owner_report(t)
         try:
-            self._add_msg(conv["id"], "notify", text, None)
+            mid = self._add_msg(conv["id"], "notify", text, None)
             self.hub.audit.record("manager.notify", self.agent_id(), None, {"text": text[:1000], "kind": "task_report", "task_id": t["id"],
                                                                              "conversation_id": conv["id"]},
                                   actor="hub", channel="manager", target=conv["id"], summary="hub.task_report")
             self.hub.publish(make_event("manager.reply", self.agent_id(), {
-                "conversation_id": conv["id"], "run_id": None, "text": text[:TEXT_MAX], **({"truncated": True} if len(text) > TEXT_MAX else {}),
+                "conversation_id": conv["id"], "run_id": None, "text": text[:TEXT_MAX], "message_id": mid, **({"truncated": True} if len(text) > TEXT_MAX else {}),
                 "channel": conv["channel"], "kind": "notify", "notify_kind": "need_human" if task_report.needs_owner(t) else "done",
                 "ok": True, "conversation_guessed": False, "task_id": t["id"], "auto_report": True}))
         except Exception:  # pragma: no cover — gửi lỗi → để điều phối viên báo như cũ

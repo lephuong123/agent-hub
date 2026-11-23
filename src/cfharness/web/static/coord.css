@@ -37,6 +37,10 @@
    keepAnchor) — neo của trình duyệt bật lại sau một lần chèn còn bù thêm theo vị trí cũ (nhảy cả đợt), và bù scrollTop làm toạ độ các mục
    ngoài màn hình đổi → Chrome tính dịch bố cục khi cuộn tới (verify r2). */
 .coord .mgr-log { overflow-anchor: none; }
+/* dòng "Điều phối viên" của câu trả lời nối tiếp: theo lớp `cont` (views/Flow tính trên CẢ dòng thời gian) thay `.mm.mgr + .mm.mgr` của app.css
+   — luật anh em đổi cỡ mục đầu đang vẽ mỗi lần vẽ dần chèn một đợt mục cũ trước nó (dịch bố cục khi cuộn nhanh lên, verify r4) */
+.coord .coord-flow > .mm.mgr:not(.cont) > .mm-who { display: flex; }
+.coord .coord-flow > .mm.mgr.cont > .mm-who { display: none; }
 /* khung đang trả lời: giữ chỗ dòng "Đang dùng …" → hiện/ẩn không đẩy chữ (CLS) */
 .coord .mm.pending .mm-tool { min-height: 1.5em; }
 .coord .mm.pending .mm-tool .tx-spin[hidden] { display: inline-block !important; visibility: hidden; }  /* thắng `[hidden] { display: none !important }` của app.css */

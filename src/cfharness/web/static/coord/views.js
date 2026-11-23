@@ -298,7 +298,7 @@ function Approval({ a, p, cv }) {
   </article>`;
 }
 
-function Item({ it, p, run, last }) {
+function Item({ it, p, run, last, cont }) {
   const agent = (ui.store.manager.value || {}).agent_id;
   // content-visibility CHỈ cho mục cũ của ảnh chụp đầu (store `p.cv`) — lớp `cvx` (nhớ cỡ) cố định theo mục; `data-cv` (bật bỏ qua vẽ) do
   // Flow gắn SAU khung hình đầu tiên mục được dựng đầy đủ → cỡ đã nhớ là cỡ thật, cuộn tới không nhảy (CLS). Đổi qua lại visible ↔ auto khi mục ở ngoài màn
@@ -314,7 +314,7 @@ function Item({ it, p, run, last }) {
           <button type="button" class="mm-btn" title="Sửa — đưa tin này vào ô nhập" aria-label="Sửa tin" onClick=${() => ui.fill(p, it.text, false)}><${Icon} n="edit" c="sm" /></button></div></div>`;
     case "manager": {
       const files = it.files || [], fa = it.agent || agent;
-      return html`<div class=${"mm mgr" + C + (it.notify ? " notify" : "") + (last ? " last" : "")} data-run=${it.run_id || undefined}>
+      return html`<div class=${"mm mgr" + C + (it.notify ? " notify" : "") + (last ? " last" : "") + (cont ? " cont" : "")} data-run=${it.run_id || undefined}>
         <div class="mm-who"><span class="mm-mark" aria-hidden="true"><${Icon} n="logo" /></span>${it.notify
           ? html`<${Icon} n="alert" c="sm" />Điều phối viên báo` : it.tick ? "Điều phối viên · nhịp" : "Điều phối viên"}</div>
         <div class="ti msg tx-msg mm-md"><div class="md" dangerouslySetInnerHTML=${{ __html: it.html || "" }}></div>
@@ -383,8 +383,8 @@ function PendingSlot({ p }) {
 
 /** Một mục — chỉ vẽ lại khi CHÍNH nó đổi (chữ đang chạy không làm vẽ lại cả dòng thời gian 2000 mục). */
 class Row extends Component {
-  shouldComponentUpdate(n) { const o = this.props; return n.it !== o.it || n.run !== o.run || n.last !== o.last; }
-  render({ it, p, run, last }) { return html`<${Item} it=${it} p=${p} run=${run} last=${last} />`; }
+  shouldComponentUpdate(n) { const o = this.props; return n.it !== o.it || n.run !== o.run || n.last !== o.last || n.cont !== o.cont; }
+  render({ it, p, run, last, cont }) { return html`<${Item} it=${it} p=${p} run=${run} last=${last} cont=${cont} />`; }
 }
 
 const apItems = new WeakMap();  // approval → mục dòng thời gian (cùng object → Row không vẽ lại)
@@ -394,7 +394,7 @@ function apItem(a) {
   return it;
 }
 
-const MORE_STEP = 60;  // ~30 ms dựng mỗi đợt (100 mục ~55 ms, 200 mục 60–90 ms = long task khi cuộn nhanh)
+const MORE_STEP = 40;  // ~20–35 ms dựng mỗi đợt (60 mục có khối code ~50 ms — verify r4; 100 mục ~55 ms, 200 mục 60–90 ms = long task khi cuộn nhanh)
 const SPACER_MIN = 40;   // chỗ của nút "Hiện N mục trước"
 
 /* Vẽ dần mục cũ KHÔNG làm dịch bố cục (CLS) khi cuộn nhanh lên:
@@ -414,13 +414,33 @@ function initSpacer(p) {
   p.spacer = Math.max(SPACER_MIN, Math.round(p.hide.value * avg));
   sp.style.height = p.spacer + "px";
 }
-/** Mục đầu tiên đang có (sau mốc) + toạ độ của nó trong nội dung khung — ghi TRƯỚC khi chèn. */
+/** Mốc neo — ghi TRƯỚC khi chèn: mục đầu tiên BẮT ĐẦU trong khung (đỉnh dưới mép trên; tìm nhị phân theo thứ tự DOM), hoặc mục cuối khi
+ *  mọi mục ở trên. Neo mục đang thấy chứ không phải mục đầu: mục nào phía trên đổi cỡ trong lượt chèn cũng không kéo theo phần đang thấy.
+ *  (Mục đầu cũ từng co 24 px mỗi lượt chèn — dòng "Điều phối viên" ẩn theo `.mm.mgr + .mm.mgr` khi có mục chèn trước nó; nay `cont` tính
+ *  theo cả dòng thời gian, không theo mục đang vẽ → không đổi cỡ. Verify r4: CLS 0.08.) */
 function grabAnchor(p) {
-  const el = p.el, fl = flowOf(p), node = fl && fl.children[1];
-  if (!node || !el.clientHeight) return null;
-  return { node, y: node.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop };
+  const el = p.el, fl = flowOf(p), kids = fl && fl.children, n = kids ? kids.length : 0;
+  if (n < 2 || !el.clientHeight) return null;
+  const top = el.getBoundingClientRect().top;
+  let lo = 1, hi = n - 1;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (kids[m].getBoundingClientRect().top < top) lo = m + 1; else hi = m; }
+  const node = kids[lo];
+  return { node, y: node.getBoundingClientRect().top - top + el.scrollTop };
 }
-/** Sau khi chèn (trước khi vẽ): co khoảng giữ chỗ đúng bằng phần mục đầu cũ bị đẩy xuống; phần không co được mới bù scrollTop. */
+/** Mốc ĐỌC của khung (mục đầu tiên bắt đầu trong khung + khoảng cách tới mép trên) — ghi sau mỗi lần cuộn; `keepRead` đưa mục đó về đúng
+ *  chỗ khi bề ngang khung đổi (panel xem tệp mở/đóng làm dòng thời gian hẹp/rộng → chữ xuống dòng lại, scrollTop cũ trỏ sang mục khác). */
+function noteRead(p) {
+  const a = p.el && grabAnchor(p);
+  p.read = a ? { node: a.node, off: a.y - p.el.scrollTop } : null;
+}
+function keepRead(p) {
+  const r = p.read, el = p.el;
+  if (!r || !el || !r.node.isConnected || !el.clientHeight) return;
+  const d = r.node.getBoundingClientRect().top - el.getBoundingClientRect().top - r.off;
+  if (Math.abs(d) >= 0.5) el.scrollTop += d;
+}
+/** Sau khi chèn (trước khi vẽ — useLayoutEffect, cùng khung hình): mốc neo dời `d` → khoảng giữ chỗ đổi đúng `-d` (co khi bị đẩy xuống, nở khi
+ *  bị kéo lên) → mốc neo và mọi mục bên dưới GIỮ NGUYÊN toạ độ, không đụng scrollTop; phần khoảng giữ chỗ không gánh được mới bù scrollTop. */
 function keepAnchor(p) {
   const a = p.anchor, el = p.el;
   if (!a) return;
@@ -428,8 +448,8 @@ function keepAnchor(p) {
   if (el && a.node.isConnected) {
     const fl = flowOf(p), sp = fl && fl.firstElementChild;
     let d = a.node.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - a.y;
-    if (sp && sp.classList.contains("coord-more") && p.spacer > SPACER_MIN && d > 0) {
-      const cut = Math.min(d, p.spacer - SPACER_MIN);
+    if (sp && sp.classList.contains("coord-more") && p.spacer >= SPACER_MIN && Math.abs(d) >= 0.5) {
+      const cut = d > 0 ? Math.min(d, p.spacer - SPACER_MIN) : d;
       p.spacer -= cut;
       sp.style.height = p.spacer + "px";
       d -= cut;
@@ -510,7 +530,10 @@ function Flow({ p }) {
   if (from > 0 || p.spacer >= SPACER_MIN) rows.push(html`<${More} key="more" p=${p} n=${from} />`);
   for (let i = from; i < list.length; i++) {
     const it = list[i];
-    rows.push(html`<${Row} key=${it.id || "i" + i} it=${it} p=${p} run=${it.kind === "actions" ? run : null} last=${i === last} />`);
+    // `cont`: câu trả lời nối tiếp câu trả lời (ẩn dòng "Điều phối viên") — tính theo CẢ dòng thời gian, không theo anh em trong DOM: mục
+    // đầu đang vẽ không đổi cỡ khi một đợt mục cũ được chèn trước nó (views/grabAnchor)
+    const cont = it.kind === "manager" && !it.notify && i > 0 && list[i - 1].kind === "manager";
+    rows.push(html`<${Row} key=${it.tmp || it.id || "i" + i} it=${it} p=${p} run=${it.kind === "actions" ? run : null} last=${i === last} cont=${cont} />`);
   }
   return rows;
 }
@@ -523,6 +546,17 @@ function Flow({ p }) {
  * - mục xa vẫn bỏ qua dựng/vẽ → chữ chạy ở cuối không phải vẽ lại cả 2000 mục.
  * Gắn bằng thuộc tính DOM (Preact không quản) → vẽ lại một dòng không làm mất. */
 const CV_FAR = 4000;
+const extra = new Map();  // lớp → padding + viền dọc (cùng lớp cùng giá trị; getComputedStyle một lần mỗi lớp)
+function boxExtra(x) {
+  const k = x.className;
+  let v = extra.get(k);
+  if (v === undefined) {
+    const c = getComputedStyle(x);
+    v = (parseFloat(c.paddingTop) || 0) + (parseFloat(c.paddingBottom) || 0) + (parseFloat(c.borderTopWidth) || 0) + (parseFloat(c.borderBottomWidth) || 0);
+    extra.set(k, v);
+  }
+  return v;
+}
 function cvArm(p) {
   if (p.cvT) return;
   p.cvT = requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -533,8 +567,10 @@ function cvArm(p) {
       p.cvIO = new IntersectionObserver((es) => {
         if (!el.clientHeight) return;  // khung vừa ẩn: giữ nguyên
         const far = es.filter((e) => !e.isIntersecting).map((e) => e.target);
-        const hs = far.map((x) => (x.hasAttribute("data-cv") ? 0 : x.offsetHeight));  // đọc hết rồi mới ghi (một lần layout)
-        far.forEach((x, k) => { if (hs[k]) x.style.containIntrinsicSize = "auto " + hs[k] + "px"; x.setAttribute("data-cv", ""); });
+        // đọc hết rồi mới ghi (một lần layout). `contain-intrinsic-size` là cỡ HỘP NỘI DUNG (padding + viền cộng thêm) → trừ phần đó
+        // (thẻ câu hỏi/duyệt có padding 16 px + viền): ghi nguyên offsetHeight thì mục bỏ qua vẽ cao hơn thật, vẽ lại là co → dịch bố cục
+        const hs = far.map((x) => (x.hasAttribute("data-cv") ? 0 : x.offsetHeight - boxExtra(x)));
+        far.forEach((x, k) => { if (hs[k] > 0) x.style.containIntrinsicSize = "auto " + hs[k] + "px"; x.setAttribute("data-cv", ""); });
         for (const e of es) if (e.isIntersecting) e.target.removeAttribute("data-cv");
       }, { root: el, rootMargin: CV_FAR + "px 0px" });
     }
@@ -578,7 +614,9 @@ function Pane({ p, on }) {
     // "người đang cuộn": lăn chuột / vuốt / phím cuộn trong 400 ms qua, hoặc đang giữ chuột trên khung (kéo thanh cuộn)
     let userAt = 0, down = false;
     const now = () => performance.now();
-    const onSc = () => { cvNear(p); fitSpacer(p); sc(); };
+    const onSc = () => { cvNear(p); fitSpacer(p); sc(); noteSoon(); };
+    let noteT = 0;  // mốc đọc (mục đầu đang thấy) ghi lại sau mỗi lần cuộn, gộp theo khung hình
+    const noteSoon = () => { if (!noteT) noteT = requestAnimationFrame(() => { noteT = 0; noteRead(p); }); };
     const sc = () => put(onScroll(p.scroll, { top: el.scrollTop, height: el.scrollHeight, client: el.clientHeight }, down || now() - userAt < 400));
     const onWheel = (e) => { userAt = now(); if (e.deltaY < 0) put(onUserUp(p.scroll)); };
     let ty = 0;
@@ -592,10 +630,15 @@ function Pane({ p, on }) {
       if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
       userAt = now();
     };
-    let lastH = fl.offsetHeight;
+    let lastH = fl.offsetHeight, lastW = el.clientWidth;
     const ro = typeof ResizeObserver === "function" ? new ResizeObserver(() => {
       if (!el.clientHeight) return;  // khung ẩn
-      const hh = fl.offsetHeight, r = onGrow(p.scroll, hh > lastH + 1);
+      // khung đổi BỀ NGANG (panel xem tệp mở/đóng, đổi cỡ cửa sổ): chữ xuống dòng lại → giữ mục đang đọc tại chỗ (đang dính đáy thì ghim đáy
+      // như mọi lần đổi cỡ); nội dung cao thêm vì xuống dòng không phải "tin mới chưa thấy"
+      const w = el.clientWidth, wide = w !== lastW;
+      lastW = w;
+      if (wide && !p.scroll.stick) keepRead(p);
+      const hh = fl.offsetHeight, r = onGrow(p.scroll, !wide && hh > lastH + 1);
       lastH = hh;
       put(r.s);
       if (r.pin) el.scrollTop = el.scrollHeight;
@@ -616,6 +659,7 @@ function Pane({ p, on }) {
       el.removeEventListener("pointerdown", onPd); window.removeEventListener("pointerup", onPu);
       document.removeEventListener("keydown", onKey, true);
       if (p.cvIO) { p.cvIO.disconnect(); p.cvIO = null; p.cvSet = null; }
+      if (noteT) cancelAnimationFrame(noteT);
       if (p.el === el) p.el = null;
     };
   }, []);
@@ -625,6 +669,7 @@ function Pane({ p, on }) {
     if (!el || !on) return;
     initSpacer(p);
     el.scrollTop = p.scroll.stick ? el.scrollHeight : p.scroll.top;
+    if (!p.scroll.stick) keepRead(p);  // bề ngang đổi trong lúc khung ẩn (panel xem tệp, cửa sổ) → về đúng mục đang đọc, không chỉ đúng số px
     cvArm(p);
   }, [on, loaded]);
   return html`<div class=${"mgr-log" + (empty ? " is-empty" : "")} ref=${setRef} hidden=${!on} data-pane=${p.id} aria-label="Dòng trò chuyện">

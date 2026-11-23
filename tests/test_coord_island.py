@@ -85,7 +85,7 @@ def test_island_js_size_budget():
     files = [STATIC / C.VENDOR[k] for k in ("preact", "preact/hooks", "@preact/signals-core", "@preact/signals", "htm")]
     files += list((STATIC / "coord").glob("*.js"))
     total = sum(len(gzip.compress(f.read_bytes(), 9)) for f in files)
-    assert total < 57_000, total  # nguồn có chú thích (verify r2 thêm ~0.5 KB: canh im lặng SSE, neo cuộn, thử lại tải nền; r3 ~0.3 KB: vẽ mục gần ngay khi cuộn, gỡ khoảng dư); cỡ phục vụ kiểm riêng
+    assert total < 58_500, total  # nguồn có chú thích (verify r2 thêm ~0.5 KB: canh im lặng SSE, neo cuộn, thử lại tải nền; r3 ~0.3 KB: vẽ mục gần ngay khi cuộn, gỡ khoảng dư; r4 ~1 KB: msg.user, neo mục đang thấy, giữ chỗ đọc khi đổi bề ngang); cỡ phục vụ kiểm riêng
 
 
 @pytest.mark.skipif(not NODE, reason="cần Node để chạy store/SSE của island")

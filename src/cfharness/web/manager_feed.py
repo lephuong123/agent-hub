@@ -52,7 +52,6 @@ IDEM_TTL_S = 600.0
 PING = '{"t":"ping"}'  # nhịp giữ luồng (mỗi HEARTBEAT_S khi rảnh) — client không áp gì, chỉ đo im lặng
 LOBBY = "_"  # khoá phạm vi của Sảnh (hội thoại không gắn luồng)
 MAX_WATCH = 64
-STREAM_KEEP = 200_000
 
 # event làm đổi chấm/số chưa đọc của tab luồng → tính lại `ws.status` (gom WS_DEBOUNCE_S)
 WS_TRIGGERS = ("run.queued", "run.started", "workstream.updated", "manager.reply", "manager.designated")
@@ -194,30 +193,13 @@ class Scope:
 ALL = Scope(all=True)
 
 
-def _norm(s: str) -> str:
-    return " ".join(s.split())
-
-
 class Converter:
-    """Event hub (dict wire) + ngữ cảnh run → [(message, Scope)]. Một bản cho cả tiến trình web (trong `Feed`) → `msg.done` gộp đúng chữ đã
-    chạy dù trình duyệt nối lại giữa chừng. `mgr` = điều phối viên hiện tại (event agent khác chỉ dùng cho trạng thái luồng)."""
+    """Event hub (dict wire) + ngữ cảnh run → [(message, Scope)]. Không trạng thái theo kết nối: `msg.done` mang chữ ĐÃ LƯU của câu trả lời
+    (không gộp chữ đã chạy) → trình duyệt nối lại giữa chừng / tải lại trang thấy cùng một mục. `mgr` = điều phối viên hiện tại (event agent
+    khác chỉ dùng cho trạng thái luồng)."""
 
     def __init__(self) -> None:
-        self.bufs: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self.mgr: str | None = None
-
-    def _buf(self, rid: str) -> dict[str, Any]:
-        b = self.bufs.get(rid)
-        if b is None:
-            b = self.bufs[rid] = {"done": [], "cur": ""}
-            while len(self.bufs) > 16:
-                self.bufs.popitem(last=False)
-        return b
-
-    @staticmethod
-    def _full(b: dict[str, Any]) -> str:
-        parts = [x for x in b["done"] if x.strip()] + ([b["cur"]] if b["cur"].strip() else [])
-        return "\n\n".join(parts)
 
     def convert(self, ev: dict[str, Any], ctx: Scope | None = None, conv_ws: dict[str, str] | None = None) -> list[tuple[dict[str, Any], Scope]]:
         t = str(ev.get("type") or "")
@@ -244,17 +226,10 @@ class Converter:
         if t == "message.delta":
             if sub or not rid:
                 return []
-            text = str(p.get("text") or "")
-            b = self._buf(rid)
-            if len(b["cur"]) + sum(len(x) for x in b["done"]) < STREAM_KEEP:
-                b["cur"] += text
-            return [({"t": "msg.delta", **here, "text": text}, sc)]
+            return [({"t": "msg.delta", **here, "text": str(p.get("text") or "")}, sc)]
         if t == "message.complete":
             if sub or not rid:
                 return []
-            b = self._buf(rid)
-            b["done"].append(str(p.get("text") or "") or b["cur"])
-            b["cur"] = ""
             return [({"t": "msg.seg", **here}, sc)]
         if t == "reasoning.delta":
             return [] if sub else [({"t": "think.delta", **here, "text": str(p.get("text") or "")}, sc)]
@@ -274,20 +249,26 @@ class Converter:
                 out.append(({"t": "todo", **here, "todo": todo.get("todo")}, sc))
             return out
         if t == "manager.reply":
+            # chữ = ĐÚNG chữ đã lưu (`text` của event = tin trong `manager_messages`), dựng qua CÙNG `present.mgr_message` như ảnh chụp, id
+            # `m<message_id>` → bản tới qua SSE và bản đọc lại sau khi tải trang là MỘT mục (cùng id, chữ, HTML). Lời dẫn đã chạy chữ giữa các
+            # lần dùng tool (không thuộc kết quả cuối) chỉ hiện lúc đang chạy — như sau khi tải lại.
             run = p.get("run_id") or rid
-            notify = p.get("kind") == "notify" or bool(p.get("notify"))
-            text = str(p.get("text") or "")
-            if not notify and run and run in self.bufs:
-                b = self.bufs.pop(run)
-                streamed = self._full(b)
-                if streamed.strip():
-                    text = streamed if _norm(text) in _norm(streamed) else streamed + "\n\n" + text
+            role = "notify" if p.get("kind") == "notify" or p.get("notify") else "tick" if p.get("kind") == "tick" else "manager"
             conv = p.get("conversation_id") or sc.conv
             ws = sc.ws if sc.conv == conv and sc.ws else (conv_ws or {}).get(conv) if conv else sc.ws
-            it = {"kind": "manager", "_id": f"e{ev.get('seq')}", "text": text, "ts": ev.get("ts"), "run_id": run, "notify": notify,
-                  "tick": p.get("kind") == "tick", "agent": ev.get("agent_id"),
-                  "cut": P.cut_note("Tin", len(str(p.get("text") or "")), run) if p.get("truncated") else ""}
+            it = P.mgr_message({"role": role, "text": str(p.get("text") or ""), "ts": ev.get("ts"), "run_id": run, "id": p.get("message_id"),
+                                "truncated": bool(p.get("truncated"))}) or {}
+            it |= {"_id": f"e{ev.get('seq')}", "agent": ev.get("agent_id")}
             return [({"t": "msg.done", "run": run, "conv": conv, "ws": ws, "item": item_json(it)}, Scope(conv=conv, ws=ws))]
+        if t == "manager.message":
+            # tin NGƯỜI (gửi từ tab/thiết bị/kênh khác) → khung đang mở hội thoại thêm ngay; khung đã gửi thay tin lạc quan bằng bản đã lưu
+            conv = p.get("conversation_id") or sc.conv
+            run = p.get("run_id") or rid
+            if not conv or p.get("role", "user") != "user":
+                return []
+            ws = sc.ws if sc.conv == conv and sc.ws else (conv_ws or {}).get(conv) or sc.ws
+            it = P.mgr_message({"role": "user", "text": str(p.get("text") or ""), "ts": ev.get("ts"), "run_id": run, "id": p.get("message_id")}) or {}
+            return [({"t": "msg.user", "run": run, "conv": conv, "ws": ws, "item": item_json(it)}, Scope(conv=conv, ws=ws))]
         if t == "manager.action":
             it = action_json(P.mgr_action_item(ev))
             conv = it.get("conversation_id") or sc.conv
@@ -295,8 +276,6 @@ class Converter:
         if t in TERMINAL_RUN_EVENTS and ev.get("source") == "hub" and rid:
             outcome = str(p.get("outcome") or t.removeprefix("run."))
             label, tone = P.run_status(outcome)
-            if outcome != "completed":
-                self.bufs.pop(rid, None)  # không có `manager.reply` theo sau — bỏ chữ đã gom
             return [({"t": "run.end", **here, "ok": outcome == "completed", "outcome": outcome, "label": label, "tone": tone}, sc)]
         if t in ("run.queued", "run.started") and rid:
             return [({"t": "run.start", **here, "state": t.removeprefix("run.")}, sc)]

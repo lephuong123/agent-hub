@@ -124,7 +124,7 @@
     var back = cur;
     mark(null);
     closeTimer = setTimeout(function () { panel.hidden = true; pbody.replaceChildren(); }, 240);
-    if (back && document.contains(back)) back.focus();
+    if (back && document.contains(back)) back.focus({ preventScroll: true });  // không cuộn dòng thời gian: khung tự giữ mục đang đọc khi rộng lại
   }
   function show(a) {
     var href = a.getAttribute("href");

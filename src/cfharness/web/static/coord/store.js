@@ -304,10 +304,27 @@ export function createStore(S, opts) {
         if (cur && run && cur.run === run) p.pending.value = null;
         st.bufs.delete(run);
         if (!dup) fx.push({ fx: "reply", pane: p, conv: p.conv.value, item: it });
-        // lượt do client KHÁC mở (tin gửi qua RPC/Telegram/tab khác): luồng v2 không có event tin người → tải lại ảnh chụp để có tin đó
-        // (kèm id/chữ đã lưu thay bản tạm). Bỏ qua khi khung đang gửi (tin lạc quan chưa kịp gắn lượt).
+        // lượt do client KHÁC mở mà tin người chưa tới qua `msg.user` (hub cũ / lỡ message) → tải lại ảnh chụp để có tin đó. Bỏ qua khi
+        // khung đang gửi (tin lạc quan chưa kịp gắn lượt).
         if (!dup && run && !it.notify && !it.tick && !p.sending.value && !p.items.value.some((x) => x.kind === "user" && x.run_id === run))
           fx.push({ fx: "refresh", pane: p });
+        break;
+      }
+      case "msg.user": {
+        // tin người đã lưu (gửi từ tab/thiết bị/kênh khác — hoặc chính khung này): thêm ngay, kể cả khung đang ẩn. Khung vừa gửi: thay tin
+        // lạc quan (`tmp…`) bằng bản đã lưu (id `m<id>` + chữ đã lưu = đúng như sau khi tải lại), không thêm lần hai.
+        const it = m.item;
+        if (!it || !it.id) break;
+        const items = p.items.value;
+        if (items.some((x) => x.id === it.id)) break;
+        const i = items.findIndex((x) => x.kind === "user" && !x.saved && String(x.id || "").startsWith("tmp")
+                                        && (x.run_id ? x.run_id === it.run_id : p.sending.value > 0));
+        if (i >= 0) {
+          const n = items.slice();
+          n[i] = { ...items[i], id: it.id, tmp: items[i].id, text: it.text, ts: it.ts || items[i].ts, run_id: it.run_id || items[i].run_id, saved: true };
+          p.items.value = n;
+        } else pushItem(p, it);
+        if (run) p.runs.add(run);
         break;
       }
       case "act.item": {
@@ -459,7 +476,7 @@ export function createStore(S, opts) {
         p.conv.value = conv;
         convAdd(p.scope, { id: conv, title: null, updated_at: new Date().toISOString(), count: 1, unread: 0, running: !!res.run_id });
       }
-      p.items.value = p.items.value.map((x) => (x.id === tok.id ? { ...x, optimistic: false, run_id: res.run_id || null } : x));
+      p.items.value = p.items.value.map((x) => (x.id === tok.id || x.tmp === tok.id ? { ...x, optimistic: false, run_id: x.run_id || res.run_id || null } : x));
       if (res.run_id) {
         p.runs.add(res.run_id);
         const cur = p.pending.value;
@@ -474,7 +491,7 @@ export function createStore(S, opts) {
   }
   function sendFail(p, tok, err) {
     batch(() => {
-      p.items.value = p.items.value.filter((x) => x.id !== tok.id);
+      p.items.value = p.items.value.filter((x) => x.id !== tok.id && x.tmp !== tok.id);
       const cur = p.pending.value;
       if (cur && !cur.run && !tok.hadPending) p.pending.value = null;
       if (!p.draft.value.trim()) setDraft(p, tok.text);           // trả chữ về ô nhập (người chưa gõ gì mới)

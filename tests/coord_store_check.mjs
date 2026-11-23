@@ -365,5 +365,34 @@ ok("draftKey tương thích trang cũ", U.draftKey("c1", "ws1") === "c:c1" && U.
   ok("đang dính đáy: vẽ lại từ cuối", p.hide.value === first + 3 && p.spacer === -1, { hide: p.hide.value, first });
 }
 
+
+{
+  // msg.user (tin người đã lưu — verify r4): khung đang mở (kể cả ẨN) thêm ngay; khung vừa gửi thay tin lạc quan bằng bản đã lưu (id m<id>, chữ
+  // đã lưu), không nhân đôi, không tải lại; sendOk tới SAU vẫn gỡ "đang gửi"
+  const store = createStore(S, { storage: mem() });
+  const a = store.applySnapshot(snap({ conv: "c1", items: [], conversations: [{ id: "c1" }] }), null);
+  const b = store.applySnapshot(snap({ conv: "c2", items: [], conversations: [{ id: "c2" }] }), store.makePane("_", null));
+  store.activate(a);  // b ẩn
+  let fx = store.apply({ t: "msg.user", run: "r5", conv: "c2", item: { kind: "user", id: "m50", text: "từ máy khác", ts: today, run_id: "r5" } }, "b1.11");
+  ok("msg.user: khung ẩn có tin ngay", b.items.value.some((x) => x.id === "m50" && x.text === "từ máy khác") && b.runs.has("r5") && !b.stale);
+  store.apply({ t: "msg.user", run: "r5", conv: "c2", item: { kind: "user", id: "m50", text: "từ máy khác", ts: today, run_id: "r5" } }, "b1.12");
+  ok("msg.user lặp → không nhân đôi", b.items.value.filter((x) => x.id === "m50").length === 1);
+  fx = store.apply({ t: "msg.done", run: "r5", conv: "c2", item: { kind: "manager", id: "m51", text: "đáp", html: "<p>đáp</p>", run_id: "r5", ts: today } }, "b1.13");
+  ok("đã có tin người của lượt → msg.done không đòi tải lại", !fx.some((f) => f.fx === "refresh"));
+  // khung gửi: msg.user tới TRƯỚC khi POST trả về
+  const tok = store.beginSend(a, "xin chào", []);
+  store.apply({ t: "msg.user", run: "r6", conv: "c1", item: { kind: "user", id: "m60", text: "xin chào", ts: today, run_id: "r6" } }, "b1.14");
+  const us = a.items.value.filter((x) => x.kind === "user");
+  ok("msg.user trước sendOk: thay tin lạc quan (id đã lưu), không thêm", us.length === 1 && us[0].id === "m60" && us[0].tmp === tok.id, us);
+  store.sendOk(a, tok, { conversation_id: "c1", run_id: "r6" });
+  const u = a.items.value.find((x) => x.kind === "user");
+  ok("sendOk sau msg.user: hết 'đang gửi', giữ id đã lưu", u.optimistic === false && u.id === "m60" && u.run_id === "r6" && a.items.value.filter((x) => x.kind === "user").length === 1, u);
+  // khung gửi: msg.user tới SAU sendOk (gắn theo run)
+  const tok2 = store.beginSend(a, "tin hai", []);
+  store.sendOk(a, tok2, { conversation_id: "c1", run_id: "r7" });
+  store.apply({ t: "msg.user", run: "r7", conv: "c1", item: { kind: "user", id: "m70", text: "tin hai", ts: today, run_id: "r7" } }, "b1.15");
+  ok("msg.user sau sendOk: thay theo run", a.items.value.filter((x) => x.kind === "user").map((x) => x.id).join() === "m60,m70");
+}
+
 if (fails) { console.log("FAIL tổng " + fails); process.exit(1); }
 console.log("ALL OK");

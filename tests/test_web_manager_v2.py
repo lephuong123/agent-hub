@@ -210,7 +210,8 @@ async def test_delta_is_raw_text_and_done_is_sanitized_html(feed):
     assert "<strong>đậm</strong>" in item["html"]
     low = item["html"].lower()
     assert "<script" not in low and "<img" not in low and "onerror" not in low.replace("onerror=alert(1)&gt;", "")
-    assert "<img src=x" in item["text"]  # chữ gốc (đã gộp đoạn đã chạy) cho nút Sao chép — island gán textContent
+    # chữ gốc (= chữ đã lưu của câu trả lời, KHÔNG gộp đoạn đã chạy — tải lại trang thấy y hệt) cho nút Sao chép — island gán textContent
+    assert item["text"] == "**đậm** <script>alert(2)</script>"
     assert F.md_cached(item["id"], item["text"]) == item["html"]  # cache theo id
 
 
