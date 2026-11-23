@@ -264,6 +264,13 @@ DEFAULTS: dict[str, Any] = {
         "levels": {},
         "slow_rpc_ms": 2000,  # L2: lời gọi RPC chậm hơn → WARNING `rpc.slow` trong hub.log (0 = tắt)
     },
+    # Đo hiệu năng (perf.py, docs/dev-notes/perf-monitor.md): web đo từng request (route, RPC, render) + header Server-Timing, trình duyệt
+    # gửi beacon (tải trang, htmx, chuyển tab/luồng, SSE, long task); tổng hợp cuộn trong RAM → trang /perf, `cfharness perf`.
+    "perf": {
+        "enabled": True,  # tắt = web không đo/không nhận beacon (daemon vẫn đo RPC — gần như miễn phí)
+        "slow_ms": 1500,  # request web chậm hơn → WARNING `http.slow` trong web.jsonl (0 = tắt)
+        "window_min": 15,  # cửa sổ mặc định của bảng "chậm nhất" (tối đa 60 phút — dữ liệu chỉ ở RAM)
+    },
     "recovery": {
         "auto_resume": True,  # Q-09: daemon restart → dừng-và-resume tự động (trừ waiting_human)
         "pid_start_tolerance_s": 5,
@@ -1002,6 +1009,11 @@ class HubConfig:
 
 def validate_setting(key: str, value: Any) -> None:
     """Kiểm tối thiểu các khoá quan trọng; khoá lạ vẫn cho ghi (mở rộng sau)."""
+    if key in ("perf.slow_ms", "perf.window_min"):  # đo hiệu năng (perf.py)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise ValueError(f"{key} phải là số ≥ 0")
+        if key == "perf.window_min" and not 1 <= value <= 60:
+            raise ValueError("perf.window_min phải từ 1 tới 60 (dữ liệu chỉ giữ 60 phút trong RAM)")
     if key == "manager" or key.startswith("manager.capabilities"):
         from .manager.permissions import validate_capabilities
 

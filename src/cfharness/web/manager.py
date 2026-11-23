@@ -622,7 +622,7 @@ async def sse_manager(request: Request) -> Response:
         raise HTTPException(404, "Chưa có điều phối viên")
     q = request.query_params
     params = {"agent_id": st["agent_id"], "since_seq": int(q.get("since") or 0), "epoch": q.get("epoch") or None, "level": "detail"}
-    return StreamingResponse(_stream(request, params, _converter(request)), media_type="text/event-stream",
+    return StreamingResponse(_stream(request, params, _converter(request), stamp=True), media_type="text/event-stream",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
