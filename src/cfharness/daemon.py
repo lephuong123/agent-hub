@@ -70,6 +70,9 @@ class Daemon:
         self.callers = _auth.CallerResolver(self.hub)
         self._mutating: frozenset[str] = frozenset()
         self._slow_cache: tuple[float, float] = (float(DEFAULT_SLOW_RPC_MS), 0.0)
+        from .perf import DaemonPerf
+
+        self.perf = DaemonPerf()  # thời gian mỗi RPC + ảnh chụp web (`perf.stats`/`perf.report`, perf.py)
         self.server: asyncio.base_events.Server | None = None
         self.stopping = asyncio.Event()
         self.exit_code = 0  # ≠ 0 khi dừng để launchd chạy lại (cập nhật dưới LaunchAgent/LaunchDaemon — `SUPERVISED_RESTART_CODE`)
@@ -100,7 +103,12 @@ class Daemon:
             "config.get": self._config_get,
             "config.set": self._config_set,
             "events.query": lambda p: [
-                e.to_wire() for e in self.hub.store.query_events(run_id=p.get("run_id"), agent_id=p.get("agent_id"), limit=int(p.get("limit", 10_000)))
+                e.to_wire() for e in self.hub.store.query_events(
+                    run_id=p.get("run_id"), agent_id=p.get("agent_id"), limit=int(p.get("limit", 10_000)),
+                    types=[str(t) for t in p["types"]] if isinstance(p.get("types"), list) else None,
+                    newest_first=p.get("order") == "desc",
+                    manager_workstream=None if p.get("workstream") is None else str(p.get("workstream")),
+                )
             ],
         }
         # M1 luồng B: approval.*, guard.*, notify.*, run.continue|resume, agent.purge (guard/rpc.py)
@@ -193,6 +201,10 @@ class Daemon:
         _register_filehub(self)  # thư mục chung Không gian số: filehub.status|list|link (đọc) + setup|login|add|remove|pause|resume (HUMAN_ONLY, tự audit)
 
         _register_files(self)
+        # Đo hiệu năng: perf.stats (đọc tổng hợp) + perf.report (web đẩy ảnh chụp) — HUMAN_ONLY, chỉ RAM (perf.py)
+        from .perf import register_rpc as _register_perf
+
+        _register_perf(self)
         # M1 luồng A: thêm mcp.*/secret.*/audit.*/feedback.* và bọc audit các method thay đổi trạng thái.
         # GIỮ Ở CUỐI __init__ — method thêm sau dòng này sẽ không được audit tự động.
         from .mcp_server.rpc import register_rpc
@@ -219,10 +231,11 @@ class Daemon:
     # ------------------------------------------------------------------ handlers
     def _agent_list(self, p: dict[str, Any]) -> list[dict[str, Any]]:
         rows = self.hub.agents.list(include_archived=bool(p.get("archived")))
+        costs = self.hub.store.cost_today_by_agent()  # một truy vấn GROUP BY thay vì N lần cost_today
         for r in rows:
             live = self.hub.aggregator.agents.get(r["id"])
             r["last_tool"] = live.last_tool if live else None
-            r["cost_today_usd"] = round(self.hub.store.cost_today(r["id"]), 8)
+            r["cost_today_usd"] = round(costs.get(r["id"], 0.0), 8)
         ov = self.hub.guard.sandbox_overrides()  # SEC: nhãn cảnh báo ngoại lệ sandbox cho TUI/web
         trusts = self.hub.guard.trust_all()
         for r in rows:
@@ -488,6 +501,8 @@ class Daemon:
             level = logging.WARNING
         else:
             level = logging.INFO
+        if method not in SLOW_EXEMPT:
+            self.perf.note(method, dur_ms)  # tổng hợp cuộn trong RAM (perf.py) — method chờ lâu theo thiết kế không tính
         slow_ms = self._slow_rpc_ms()
         slow = bool(slow_ms) and dur_ms >= slow_ms and method not in SLOW_EXEMPT
         if slow:

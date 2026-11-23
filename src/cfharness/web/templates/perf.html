@@ -1,0 +1,44 @@
+{#- Hiệu năng (/perf) — tổng hợp cuộn trong RAM (perf.py, web/perf_pages.py). Chỉ số liệu; khoá là route template/method/metric. -#}
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Hiệu năng{% endblock %}
+{% macro perf_table(rows, first_label, extra=None) -%}
+  {% if not rows %}{{ m.empty("Chưa có dữ liệu trong cửa sổ này.") }}{% else %}
+  <table class="tbl stack"><thead><tr><th>{{ first_label }}</th><th>Số lần</th><th>p50</th><th>p95</th><th>Max</th>{% if extra is not none %}<th>p95 web thấy</th>{% endif %}</tr></thead><tbody>
+  {% for r in rows %}{% set kind, label = split(r.key) %}<tr>
+    <td data-label="{{ first_label }}">{% if kind %}<span class="pill muted">{{ kind }}</span> {% endif %}<code>{{ label }}</code></td>
+    <td data-label="Số lần">{{ r.count }}</td>
+    <td data-label="p50">{{ r.p50|round|int }} ms</td>
+    <td data-label="p95"><b>{{ r.p95|round|int }} ms</b></td>
+    <td data-label="Max">{{ r.max|round|int }} ms</td>
+    {% if extra is not none %}<td data-label="p95 web thấy">{% if extra.get(r.key) %}{{ extra[r.key].p95|round|int }} ms{% else %}—{% endif %}</td>{% endif %}
+  </tr>{% endfor %}
+  </tbody></table>{% endif %}
+{%- endmacro %}
+{% block content %}
+<div class="page-head"><h1>Hiệu năng</h1><span class="muted">phần nào chậm nhất — trình duyệt, web, RPC daemon · {{ d.window_min }} phút gần nhất · sắp theo p95 · <a href="/logs?logger=cfharness.web.perf">request chậm</a> · <a href="/perf.json?w={{ d.window_min }}">JSON</a></span></div>
+<form method="get" action="/perf" class="filters">
+  <label>Cửa sổ <select name="w">{% for w in windows %}<option value="{{ w }}" {{ 'selected' if d.window_min == w }}>{{ w }} phút</option>{% endfor %}</select></label>
+  <button class="btn sm" type="submit">Xem</button>
+</form>
+{% if not d.config.enabled %}{{ m.empty("Đo hiệu năng đang tắt (perf.enabled = false).", "alert", "warn") }}{% endif %}
+<div class="grid2">
+<section class="card">
+  <h2>Trình duyệt (FE)</h2>
+  <p class="muted small">nav.ttfb/dcl/load = tải trang · htmx = request htmx tới khi vẽ xong · switch.tab/ws = bấm tab/luồng tới khi trang mới tải xong · sse.first = (nối lại) tới event đầu · sse.lag = ts event → trình duyệt nhận · longtask = JS chặn luồng chính</p>
+  {{ perf_table(d.frontend, "Metric · route") }}
+</section>
+<section class="card">
+  <h2>Web (BE)</h2>
+  <p class="muted small">thời gian xử lý từng request của tiến trình web, theo route. Phân rã từng request: devtools → Network → Timing (header <code>Server-Timing</code>: app, rpc, tpl, rpc-&lt;method&gt;). Chậm hơn {{ d.config.slow_ms|round|int }} ms → <code>http.slow</code> trong web.jsonl.</p>
+  {{ perf_table(d.backend, "Route") }}
+</section>
+</div>
+<section class="card">
+  <h2>RPC daemon</h2>
+  <p class="muted small">thời gian xử lý trong daemon theo method (mọi client: web, CLI, Telegram, agent). Cột cuối: p95 web đo được (gồm socket + chờ). Method chờ lâu theo thiết kế (run.wait, guard.check…) không tính.</p>
+  {% if d.daemon_error %}{{ m.empty("Không đọc được số liệu daemon (" ~ d.daemon_error ~ ").", "alert", "danger") }}{% endif %}
+  {{ perf_table(d.daemon_rpc, "Method", web_rpc) }}
+</section>
+<p class="muted small">Terminal: <code>cfharness perf --window 15</code> · dữ liệu chỉ ở RAM (mất khi khởi động lại), tối đa 60 phút.</p>
+{% endblock %}
