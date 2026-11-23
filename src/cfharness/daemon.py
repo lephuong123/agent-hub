@@ -6,6 +6,7 @@ Daemon là writer DUY NHẤT của `hub.db`. CLI/TUI/MCP chỉ là client.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -40,6 +41,23 @@ CLIENT_PARAM = "_client"  # L3: metadata client (web: session_ref/ip; MCP: trans
 from .mcp_server.rpc import READ_COALESCE_S as _READ_COALESCE_S, SENSITIVE_READS as _SENSITIVE_READS  # noqa: E402
 RPC_LIMIT = 16 * 1024 * 1024
 LISTENER_CHECK_S = 2.0  # chu kỳ kiểm socket nghe còn mở (`Daemon._watch_listener`)
+# RPC CHỈ ĐỌC chạy trên luồng đọc của Store (`Store.read`, kết nối `mode=ro`) thay vì trên event loop — một truy vấn chậm không còn
+# làm đứng mọi RPC khác + luồng SSE. Chọn theo ĐO trên bản sao hub.db thật 1,5 GB (PR perf/daemon-offload-reads): handler ĐỒNG BỘ,
+# chỉ SELECT qua `store.conn`, không đụng trạng thái RAM dùng chung (bus, RunManager, cache service). Thêm method vào đây → thêm vào
+# `tests/test_daemon_offload.py` (so kết quả với đường cũ). KHÔNG thêm method ghi (đã chặn: method ∈ MUTATING bị bỏ qua + log lỗi).
+OFFLOAD_READS = frozenset({
+    "run.list",  # danh sách run (trang Run, TUI)
+    "events.query",  # replay transcript một run / agent (đổi tab, mở run) — ~100 ms với run 4k event
+    "task.list",  # bảng việc — mỗi task thêm 3 truy vấn con
+    "learn.feed",  # quét `events` theo ts + LIKE — 0,4–0,7 s
+    "learn.proposals",
+    "report.get", "report.hangs", "report.kpi", "report.overhead", "report.cost",  # báo cáo quét `runs`/`events` — 0,1–0,6 s
+    "approval.stats",
+    "audit.list", "audit.activity",
+    "system.list",  # chờ PowerShell/launchctl (tiến trình con, 1,3–2,6 s) — không phải SQLite nhưng cũng chặn loop
+})
+LOOP_LAG_INTERVAL_S = 1.0  # chu kỳ đo độ trễ event loop (`Daemon._loop_lag`)
+from .perf import DEFAULT_LOOP_LAG_WARN_MS  # noqa: E402
 
 
 class Daemon:
@@ -70,6 +88,7 @@ class Daemon:
         self.callers = _auth.CallerResolver(self.hub)
         self._mutating: frozenset[str] = frozenset()
         self._slow_cache: tuple[float, float] = (float(DEFAULT_SLOW_RPC_MS), 0.0)
+        self._lag_cache: tuple[float, float] = (float(DEFAULT_LOOP_LAG_WARN_MS), 0.0)
         from .perf import DaemonPerf
 
         self.perf = DaemonPerf()  # thời gian mỗi RPC + ảnh chụp web (`perf.stats`/`perf.report`, perf.py)
@@ -227,6 +246,62 @@ class Daemon:
 
         _register_manager(self)
         self._mutating = _auth.all_mutating()
+        self._wrap_offload_reads()  # SAU mọi register_rpc: bọc ngoài cùng handler đã đăng ký
+
+    # ------------------------------------------------------------------ đọc ngoài event loop
+    def _wrap_offload_reads(self) -> None:
+        """Bọc từng method ∈ `OFFLOAD_READS` để chạy trên luồng đọc của Store. Bỏ qua (log lỗi) method ghi hoặc handler async —
+        lỗi lập trình, không được lặng lẽ chuyển sang luồng khác."""
+        for method in sorted(OFFLOAD_READS):
+            fn = self.methods.get(method)
+            if fn is None:
+                continue
+            if method in self._mutating or inspect.iscoroutinefunction(fn):
+                log.error("không chạy %s ngoài event loop: method ghi hoặc handler async", method)
+                continue
+            self.methods[method] = self._offloaded(method, fn)
+
+    def _offloaded(self, method: str, fn: Handler) -> Handler:
+        store = self.hub.store
+
+        def _call(p: dict[str, Any]) -> Any:
+            res = fn(p)
+            if asyncio.iscoroutine(res):  # handler trả coroutine → không chạy được trên luồng đọc (không có loop)
+                res.close()
+                raise TypeError(f"{method}: handler trả coroutine, không chạy được ngoài event loop")
+            return res
+
+        async def offloaded(p: dict[str, Any]) -> Any:
+            return await store.read(_call, p)
+
+        offloaded.__wrapped__ = fn  # type: ignore[attr-defined]
+        offloaded.offloaded = True  # type: ignore[attr-defined]
+        return offloaded
+
+    def _loop_lag_warn_ms(self) -> float:
+        """`perf.loop_lag_warn_ms` (mặc định 250; 0 = không cảnh báo) — đọc lại tối đa mỗi 5 s."""
+        now = time.monotonic()
+        if now >= self._lag_cache[1]:
+            try:
+                v = float(self.hub.config.get("perf.loop_lag_warn_ms") or 0)
+            except (KeyError, TypeError, ValueError):
+                v = float(DEFAULT_LOOP_LAG_WARN_MS)
+            self._lag_cache = (v, now + 5.0)
+        return self._lag_cache[0]
+
+    async def _loop_lag(self, interval: float = LOOP_LAG_INTERVAL_S) -> None:
+        """Đo độ trễ event loop: ngủ `interval` rồi so giờ thức thật với giờ hẹn. Trễ = loop bị chặn (code đồng bộ chậm trên loop).
+        Nạp `loop.lag` vào `DaemonPerf` (`/perf`, `cfharness perf`); vượt `perf.loop_lag_warn_ms` → WARNING `loop.lag` trong hub.log.
+        Một lần thức mỗi giây — gần như không tốn."""
+        loop = asyncio.get_running_loop()
+        while not self.stopping.is_set():
+            t0 = loop.time()
+            await asyncio.sleep(interval)
+            lag_ms = max(0.0, (loop.time() - t0 - interval) * 1000.0)
+            self.perf.note_loop_lag(lag_ms)
+            warn = self._loop_lag_warn_ms()
+            if warn and lag_ms >= warn:
+                log.warning("loop.lag event loop bị chặn %.0f ms", lag_ms, extra={"event": "loop.lag", "duration_ms": round(lag_ms, 1)})
 
     # ------------------------------------------------------------------ handlers
     def _agent_list(self, p: dict[str, Any]) -> list[dict[str, Any]]:
@@ -710,11 +785,13 @@ class Daemon:
                 pass
         log.info("daemon sẵn sàng tại %s (epoch %s)", sock, self.hub.bus.epoch)
         watch = asyncio.create_task(self._watch_listener())
+        lag = asyncio.create_task(self._loop_lag())
         try:
             await self.stopping.wait()
         finally:
             log.info("daemon đang dừng")
             watch.cancel()
+            lag.cancel()
             self.server.close()
             self._flush_reads(all_=True)  # A4: ghi nốt phần gộp lượt đọc nhạy cảm
             await self.hub.stop()

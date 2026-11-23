@@ -82,7 +82,7 @@ def test_query_filters_and_pagination(hub_home, monkeypatch):
 async def test_rpc_list_relative_time_and_bad_params(hub_home):
     d = Daemon(hub_home, runtime=FakeRuntime())
     rec(d.hub, "agent.update", principal="os:boss", outcome="ok")
-    rows = d.methods["audit.list"]({"since": "1h", "principal": "os:boss"})
+    rows = await d.methods["audit.list"]({"since": "1h", "principal": "os:boss"})  # chạy trên luồng đọc (daemon.OFFLOAD_READS)
     assert [r["kind"] for r in rows] == ["agent.update"]
     for bad in ({"outcome": "maybe"}, {"since": "hôm qua"}, {"before_id": "x"}):
         resp = await d._dispatch({"jsonrpc": "2.0", "id": 1, "method": "audit.list", "params": bad})
