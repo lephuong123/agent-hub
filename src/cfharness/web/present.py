@@ -1097,7 +1097,7 @@ def mgr_action_item(ev: dict[str, Any]) -> dict[str, Any]:
     ok = p.get("ok", True) is not False and not p.get("error")
     return {"kind": "action", "tool": short_tool(tool) if tool else "", "summary": str(p.get("summary") or tool or "hành động"),
             "target": tgt, "run_id": ev.get("run_id"), "ts": ev.get("ts"), "audit_id": p.get("audit_id"), "ok": ok,
-            "error": str(p.get("error") or "") or None}
+            "error": str(p.get("error") or "") or None, "conversation_id": p.get("conversation_id") or None}
 
 
 def mgr_message(m: dict[str, Any]) -> dict[str, Any] | None:

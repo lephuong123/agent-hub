@@ -193,11 +193,27 @@ async def _actions(request: Request, agent_id: str, workstream: str | None = Non
     return sorted(acts, key=lambda a: str(a.get("ts") or ""))
 
 
-def _timeline(msgs: list[dict[str, Any]], acts: list[dict[str, Any]], qs: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+def own_runs(msgs: list[dict[str, Any]]) -> set[str]:
+    """Run THUỘC hội thoại (có tin người/trả lời/ghi chú ở đây). Run chỉ để lại tin báo chủ động (lượt nhịp báo vào nhiều hội thoại)
+    KHÔNG tính — mọi hành động của nó không tự động thuộc hội thoại này."""
+    return {str(m["run_id"]) for m in msgs if m.get("run_id") and not m.get("notify")}
+
+
+def _timeline(msgs: list[dict[str, Any]], acts: list[dict[str, Any]], qs: list[dict[str, Any]] | None = None,
+              conv_id: str | None = None) -> list[dict[str, Any]]:
     """Tin nhắn + thẻ hành động của các run thuộc hội thoại (+ câu hỏi của điều phối viên), theo thời gian. Thẻ hành động liên tiếp của
-    cùng một lượt gom thành MỘT khối "Đã làm N việc" (UX v2)."""
-    runs = {m.get("run_id") for m in msgs if m.get("run_id")}
-    items = list(msgs) + [a for a in acts if a.get("run_id") in runs]
+    cùng một lượt gom thành MỘT khối "Đã làm N việc" (UX v2). Run chỉ báo chủ động vào đây (lượt nhịp) → chỉ thẻ gắn đúng hội thoại
+    này (`conversation_id` của thẻ notify/câu hỏi); thẻ gắn hội thoại KHÁC không bao giờ hiện."""
+    own = own_runs(msgs)
+    notified = {str(m["run_id"]) for m in msgs if m.get("run_id")} - own
+
+    def mine(a: dict[str, Any]) -> bool:
+        ac, rid = a.get("conversation_id"), str(a.get("run_id") or "")
+        if ac and conv_id and ac != conv_id:
+            return False
+        return rid in own or (rid in notified and bool(conv_id) and ac == conv_id)
+
+    items = list(msgs) + [a for a in acts if mine(a)]
     items += [{"kind": "question", "q": q, "ts": q.get("created_at"), "run_id": q.get("run_id")} for q in qs or []]
 
     def key(it: dict[str, Any]) -> tuple[str, int]:
@@ -324,7 +340,7 @@ async def manager_page(request: Request) -> Response:
     from .app import questions as _questions
 
     conv_qs = [q for q in await _questions(request, "all", agent_id=st["agent_id"]) if cid and q.get("conversation_id") == cid and q["status"] != "cancelled"]
-    items = _timeline(msgs, acts, conv_qs)
+    items = _timeline(msgs, acts, conv_qs, cid)
     # tin cuối của người chưa có trả lời + run còn chạy → khung "đang trả lời" (chữ chạy tới qua SSE)
     pending = None
     pinfo: dict[str, Any] = {}
@@ -356,7 +372,7 @@ async def manager_page(request: Request) -> Response:
                 if wsx and c.get("workstream_id") == wsx["id"] and c.get("channel") != "heartbeat"]
     ws_convs.sort(key=lambda c: str(c.get("updated_at") or ""), reverse=True)
     ctx.update({"convs": convs, "conv": cid, "items": items, "side_actions": list(reversed(acts))[:12], "pending": pending, "pinfo": pinfo,
-                "conv_runs": sorted({m["run_id"] for m in msgs if m.get("run_id")} | ({pending} if pending else set())),
+                "conv_runs": sorted(own_runs(msgs) | ({pending} if pending else set())),
                 "wsd": wsd, "wsx": wsx, "ws_convs": ws_convs, "cur_conv": cur_conv,
                 "ws_web_convs": [c | {"unread": 0 if c["id"] == cid else int(((wsd.get("convs") or {}).get(c["id"]) or {}).get("unread") or 0)}
                                  for c in ws_convs if c.get("channel") == CHANNEL],
@@ -594,7 +610,8 @@ def _converter(request: Request, clock: Any = None) -> Any:
         if t == "manager.action":
             it = P.mgr_action_item(ev)
             group = {"kind": "actions", "run_id": rid, "items": [it], "ok": it["ok"], "ts": it.get("ts")}
-            return [{"t": "action", "run": rid, "html": str(mod.item(group)), "one": str(mod.item(it)), "ok": it["ok"], "side": str(mod.side_action(it))}]
+            return [{"t": "action", "run": rid, "conv": it.get("conversation_id"), "html": str(mod.item(group)), "one": str(mod.item(it)),
+                     "ok": it["ok"], "side": str(mod.side_action(it))}]
         if t.startswith("question.") and t != "question.reminder":
             q = question_from_event(ev)
             if not q.get("conversation_id"):
