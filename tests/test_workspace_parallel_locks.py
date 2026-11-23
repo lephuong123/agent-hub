@@ -217,7 +217,7 @@ async def test_b2_checkpoint_and_diff_on_existing_worktree_dir(make_hub, repo):
     hub.agents.create({"id": "c1", "name": "C1"})
     t = _legacy_worktree_task(hub, "c1", repo, "w3")
     await settle(lambda: hub.tasks.row(t["id"])["status"] == "done")
-    run = hub.store.list_runs()[0]
+    run = hub.store.get_run(hub.store.list_runs()[0]["id"])
     assert run["workspace_key"] == str(wt.resolve()) == run["checkpoint"]["root"]
     assert run["checkpoint"]["branch"] == "w3"
     assert [f["path"] for f in run["diff"]["files"]] == ["new.txt"] and run["diff"]["root"] == str(wt.resolve())
@@ -230,7 +230,7 @@ async def test_b2_no_checkpoint_when_worktree_not_created_yet(make_hub, repo):
     hub.agents.create({"id": "c1", "name": "C1"})
     t = _legacy_worktree_task(hub, "c1", repo, "w4")
     await settle(lambda: hub.tasks.row(t["id"])["status"] == "done")
-    run = hub.store.list_runs()[0]
+    run = hub.store.get_run(hub.store.list_runs()[0]["id"])
     assert not run.get("checkpoint") and not run.get("diff")  # không chụp repo chính thay cho worktree
 
 

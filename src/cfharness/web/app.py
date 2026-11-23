@@ -39,6 +39,7 @@ from ..rpc import METHOD_NOT_FOUND, DaemonUnavailable, RpcError
 from ..tui.client import AsyncHubClient, subscribe
 from ..tui.model import STATUS_ORDER
 from . import desktop as _desktop
+from . import perf_pages as _perf_pages
 from . import present as P
 from . import settings_schema as _settings
 from .public import LoginLimiter, client_ip, public_hosts
@@ -140,6 +141,7 @@ class WebState:
     # directory hub (C5, web/desktop.py): giới hạn lần sai token + trần lần trả danh mục — chỉ RAM
     dir_limiter: Any = field(default_factory=lambda: _desktop.directory_limiter())
     dir_window: Any = field(default_factory=lambda: _desktop.SuccessWindow())
+    perf: _perf_pages.WebPerf = field(default_factory=_perf_pages.WebPerf)  # đo hiệu năng (perf.py, web/perf_pages.py) — chỉ RAM
 
     @property
     def public_hosts(self) -> set[str]:
@@ -235,7 +237,7 @@ class GuardMiddleware:
             _desktop.note_app_ua(headers.get("user-agent", ""))  # C7: chỉ ghi log, không đổi giao diện
         sid = cookie_parser(headers.get("cookie", "")).get(self.state.cookie)
         # polling/SSE không gia hạn phiên — chỉ thao tác của người (trang, POST) mới gia hạn
-        poll = path.startswith(("/sse/", "/partials/")) or path.startswith(self.API)
+        poll = path.startswith(("/sse/", "/partials/")) or path.startswith(self.API) or path == _perf_pages.BEACON_PATH  # beacon không gia hạn
         # GET JSON của cảnh 3D không gia hạn; POST /office/do (thao tác của người) thì có
         sess = self.state.auth.get(sid, touch=not poll or (path.startswith(self.API) and scope.get("method") != "GET"))
         scope.setdefault("state", {})["session"] = sess
@@ -1826,7 +1828,9 @@ def _sse(obj: dict[str, Any]) -> str:
     return f"data: {data}\n\n"
 
 
-async def _stream(request: Request, params: dict[str, Any], convert: Callable[[dict[str, Any]], list[dict[str, Any]]]) -> AsyncIterator[str]:
+async def _stream(request: Request, params: dict[str, Any], convert: Callable[[dict[str, Any]], list[dict[str, Any]]], *,
+                  stamp: bool = False) -> AsyncIterator[str]:
+    """`stamp`: gắn `ets` (ts của event, ISO) vào message CUỐI của mỗi event → static/perf.js đo độ trễ giao event (perf-monitor.md)."""
     st = ws(request)
     q: asyncio.Queue = asyncio.Queue(maxsize=20_000)
     sub = subscribe(st.client, params)
@@ -1862,7 +1866,10 @@ async def _stream(request: Request, params: dict[str, Any], convert: Callable[[d
             if "end" in msg:
                 yield _sse({"t": "end", "reason": (msg["end"] or {}).get("reason") or "closed"})
                 break
-            for out in convert(msg):
+            outs = convert(msg)
+            if stamp and outs and isinstance(outs[-1], dict) and isinstance(msg.get("ts"), str):
+                outs[-1] = {**outs[-1], "ets": msg["ts"]}
+            for out in outs:
                 yield _sse(out)
     finally:
         sub.close()
@@ -1982,7 +1989,7 @@ async def sse_run(request: Request) -> Response:
         except RpcError:
             evs = []
         prime = [e for e in evs if not (str(e.get("epoch")) == str(epoch) and int(e.get("seq") or 0) > since)]
-    return StreamingResponse(_stream(request, params, _run_converter(ws(request).templates, prime=prime)), media_type="text/event-stream",
+    return StreamingResponse(_stream(request, params, _run_converter(ws(request).templates, prime=prime), stamp=True), media_type="text/event-stream",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
@@ -1995,7 +2002,7 @@ async def sse_firehose(request: Request) -> Response:
 
     st = await rpc(request, "hub.status")
     params = {"level": "summary", "since_seq": max(0, int(st.get("last_seq") or 0) - 300), "epoch": st.get("epoch")}
-    return StreamingResponse(_stream(request, params, conv), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+    return StreamingResponse(_stream(request, params, conv, stamp=True), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 # Bảng Công việc realtime (docs/dev-notes/tasks-realtime.md): chỉ báo "vẽ lại", trình duyệt gom loạt rồi tải /partials/tasks
@@ -2023,7 +2030,7 @@ async def sse_tasks(request: Request) -> Response:
 
     st = await rpc(request, "hub.status")  # không phát lại: trang vừa vẽ (hoặc nối lại → client tự tải lại một lần)
     params = {"level": "summary", "since_seq": int(st.get("last_seq") or 0), "epoch": st.get("epoch")}
-    return StreamingResponse(_stream(request, params, conv), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+    return StreamingResponse(_stream(request, params, conv, stamp=True), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 # ============================================================================ lỗi
@@ -2120,8 +2127,21 @@ def static_url(name: str) -> str:
     return f"/static/{name}?v={v}"
 
 
+class TimedTemplates(Jinja2Templates):
+    """Jinja2Templates đo thời gian render (Starlette render ngay trong `TemplateResponse`) → phân rã request (perf.py)."""
+
+    def TemplateResponse(self, *args: Any, **kw: Any) -> Any:  # noqa: N802 - tên API của Starlette
+        from ..perf import note_render
+
+        t0 = time.perf_counter()
+        try:
+            return super().TemplateResponse(*args, **kw)
+        finally:
+            note_render((time.perf_counter() - t0) * 1000.0)
+
+
 def make_templates() -> Jinja2Templates:
-    t = Jinja2Templates(directory=str(HERE / "templates"))
+    t = TimedTemplates(directory=str(HERE / "templates"))
     env = t.env
     env.autoescape = True
     env.globals.update({"agent_status": P.agent_status, "run_status": P.run_status, "task_status": lambda s: P.TASK_STATUS.get(s or "", (s or "—", "muted")),
@@ -2200,11 +2220,13 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_admin_pages.routes(),  # /admin/overview — "Tổng quan máy" (chỉ đọc, admin_overview.py)
         *_desktop.routes(),  # /.well-known/cfharness.json + /app/badge — app desktop (web/desktop.py, docs/dev-notes/desktop-app.md)
         *_file_pages.routes(),  # /files/view|raw|open — xem/mở file agent đã thao tác (web/file_pages.py, docs/dev-notes/file-open.md)
+        *_perf_pages.routes(),  # /perf "Hiệu năng", /perf.json, POST /perf/beacon — đo hiệu năng (web/perf_pages.py, perf-monitor.md)
         Mount("/static", app=StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
     app = Starlette(routes=routes, exception_handlers={HTTPException: http_error, RpcError: rpc_error, DaemonUnavailable: rpc_error})
     app.state.web = state
     app.add_middleware(GuardMiddleware, state=state)
+    app.add_middleware(_perf_pages.PerfMiddleware, state=state)  # NGOÀI cùng: đo cả Guard; Server-Timing (web/perf_pages.py)
     return app
 
 

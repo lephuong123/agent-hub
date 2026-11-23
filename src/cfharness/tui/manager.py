@@ -32,7 +32,7 @@ from ..ui import theme as th
 from .client import subscribe
 
 NEW = "__new__"
-ACTIONS_SCAN = 3000
+ACTIONS_SCAN = 500  # thẻ `manager.action` gần nhất (chỉ loại này, mới nhất trước) đọc lại khi mở hội thoại
 HISTORY = 100
 NAVIGABLE = ("run", "task", "agent")
 
@@ -137,7 +137,7 @@ class ManagerScreen(Screen):
         evs: list[dict[str, Any]] = []
         if rows:
             try:
-                evs = [e for e in await self.client.call("events.query", {"agent_id": mid, "limit": ACTIONS_SCAN}) or [] if e.get("type") == "manager.action"]
+                evs = await self.client.call("events.query", {"agent_id": mid, "types": ["manager.action"], "order": "desc", "limit": ACTIONS_SCAN}) or []
             except RpcError:
                 evs = []
         conv = next((c for c in self.convs if c["id"] == cid), None)

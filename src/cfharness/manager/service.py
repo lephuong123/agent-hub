@@ -897,12 +897,23 @@ class ManagerService:
             tid = str(r[1]) if r and r[1] else None
         return None
 
-    def _home_conversation(self) -> dict[str, Any] | None:
-        """Hội thoại của NGƯỜI hoạt động gần nhất (đích của notify_owner trong tick)."""
+    def fallback_conversation(self, wid: Any = None, *, channel: str | None = None) -> dict[str, Any] | None:
+        """Đích DỰ PHÒNG khi không biết chắc hội thoại nhận tin (notify_owner/câu hỏi của lượt nhịp, trả lời câu hỏi mà hội thoại gốc đã
+        mất, lịch không còn hội thoại chỉ định) — KHÔNG BAO GIỜ đoán chéo luồng: `wid` là luồng còn tồn tại → hội thoại người cập nhật gần
+        nhất TRONG luồng đó; không luồng (hoặc luồng đã xoá) → hội thoại người gần nhất ở Sảnh (`workstream_id IS NULL`). Có `channel` →
+        ưu tiên kênh đó trong cùng phạm vi. Không có → None (không tạo mới)."""
         aid = self.agent_id()
-        r = self.conn.execute("SELECT id FROM manager_conversations WHERE agent_id=? AND channel != ? AND archived_at IS NULL ORDER BY updated_at DESC LIMIT 1",
-                              (aid, HEARTBEAT_CHANNEL)).fetchone()
-        return self._conv_row(r[0]) if r else None
+        if not aid:
+            return None
+        w = str(wid) if wid and self.ws.maybe(wid) else None
+        scope = "workstream_id=?" if w else "workstream_id IS NULL"
+        base = (f"SELECT id FROM manager_conversations WHERE agent_id=? AND channel != ? AND archived_at IS NULL AND {scope}")
+        args: list[Any] = [aid, HEARTBEAT_CHANNEL] + ([w] if w else [])
+        for extra, xargs in (((" AND channel=?", [channel]),) if channel else ()) + (("", []),):
+            r = self.conn.execute(base + extra + " ORDER BY updated_at DESC LIMIT 1", (*args, *xargs)).fetchone()
+            if r:
+                return self._conv_row(r[0])
+        return None
 
     # ------------------------------------------------------------------ kết thúc run → manager.reply
     def _on_event(self, ev: HubEvent) -> None:

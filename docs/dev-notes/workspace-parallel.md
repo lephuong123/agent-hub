@@ -130,7 +130,7 @@ agent/hub tạo, lưu kind `dir`), 0 task dùng kind `worktree`.
   `_run`/dispatcher `_lock_block` không cần sửa: chỉ người giữ ĐỘC QUYỀN chặn. `lock_pending` trả False ở chế độ `files`. `list()` (RPC
   `workspace.locks`) giữ nguyên = khoá độc quyền; thêm `list_shared()`/`shared_holders()`. `release_*`/`force_release`/`sweep` xử lý cả hai
   map; `unlock`/`_lost_locks` hiểu khoá chia sẻ. `repo_locks_shared` ∈ `hub_transfer.MACHINE_STATE`.
-- Lease: bảng `file_leases` (migration **v32**; khoá chính (repo chuẩn hoá, đường dẫn tương đối chuẩn hoá — chữ thường trên Windows) → một
+- Lease: bảng `file_leases` (migration **v33**; khoá chính (repo chuẩn hoá, đường dẫn tương đối chuẩn hoá — chữ thường trên Windows) → một
   người giữ, `INSERT OR IGNORE` nguyên tử trên writer duy nhất của daemon), cột sha256 + `pending`. Lớp `guard/leases.FileLeases`
   (`WorkspaceLocks.leases`). Lease nhả trong `WorkspaceLocks._on_session_released` — móc ở MỌI đường nhả khoá của A (hết run, stop,
   `_release_unstarted`, approval/recovery `release_session`, `force_release`, quét session chết); lease của session chết còn bị dọn lười khi
