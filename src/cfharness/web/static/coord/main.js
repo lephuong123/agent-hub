@@ -7,13 +7,14 @@
  * - `resync` (hở ring / web hoặc daemon khởi động lại): tải lại ảnh chụp khung đang hiện; khung khác đánh dấu cũ, tải lại khi mở.
  */
 import { render } from "preact";
-import { signal, batch } from "@preact/signals";
+import { signal, batch, computed } from "@preact/signals";
 import { createStore } from "./store.js";
 import { createFeed } from "./sse.js";
 import { getJSON, postForm, setCsrf, snapshotUrl } from "./api.js";
-import { LOBBY, parseNav, paneUrl } from "./util.js";
-import { html, ui, App, ConvList } from "./views.js";
+import { LOBBY, parseNav, paneUrl, rafBatch, newIdem } from "./util.js";
+import { html, ui, App, ConvList, jumpBottom } from "./views.js";
 
+try { performance.mark("coord:start"); } catch (_) {}  // đo khởi động island (DevTools → Performance / performance.measure)
 const root = document.getElementById("coord");
 const bootEl = document.getElementById("coord-boot");
 const boot = JSON.parse(bootEl.textContent);
@@ -23,7 +24,8 @@ ui.icons = boot.icons || ui.icons;
 
 let storage = null;
 try { storage = window.sessionStorage; } catch (_) { storage = null; }
-const store = createStore({ signal, batch }, { storage });
+const store = createStore({ signal, batch, computed }, { storage });
+store.hub.value = boot.hub || {};
 ui.store = store;
 window.cfhCoord = store;  // gỡ lỗi / đo hiệu năng trong trình duyệt (không có dữ liệu bí mật: chỉ những gì trang đang hiện)
 
@@ -66,15 +68,22 @@ function statusSoon(ms) {
   clearTimeout(statusT);
   statusT = setTimeout(() => {
     if (!visible()) return;
-    getJSON("/api/manager/status").then((j) => { if (j.manager) store.manager.value = j.manager; }, () => {});
+    getJSON("/api/manager/status").then((j) => { if (j.manager) store.manager.value = j.manager; if (j.hub) store.hub.value = j.hub; }, () => {});
   }, ms == null ? 1200 : ms);
 }
 
 // ------------------------------------------------------------------ hiệu ứng từ store
-let raf = 0;
+// chữ đang chạy: store gom delta vào bộ đệm, đổ vào signal MỘT lần mỗi khung hình (~100 token/s không thành 100 lần vẽ/s)
+const flushSoon = rafBatch((f) => requestAnimationFrame(f), () => store.flush());
+function announce(t) {
+  const el = document.getElementById("mgr-status-live");
+  if (!el) return;
+  el.textContent = "";
+  setTimeout(() => { el.textContent = t; }, 60);
+}
 function runFx(fx) {
   for (const f of fx || []) {
-    if (f.fx === "flush") { if (!raf) raf = requestAnimationFrame(() => { raf = 0; store.flush(); }); }
+    if (f.fx === "flush") flushSoon();
     else if (f.fx === "status") statusSoon();
     else if (f.fx === "resync") resync(f.reason);
     else if (f.fx === "event") emit(f.name, f.detail);
@@ -82,6 +91,7 @@ function runFx(fx) {
       const a = store.active.value;
       if (f.pane && f.pane === a && visible()) markRead(f.conv);
       else if (f.conv && !(a && a.conv.value === f.conv)) store.bumpUnread(f.conv);
+      if (f.pane && f.pane === a) announce(f.item && f.item.notify ? "Điều phối viên gửi thông báo mới" : "Điều phối viên đã trả lời");
       if (f.item) {
         const node = document.createElement("div");
         node.textContent = f.item.text || "";
@@ -188,7 +198,7 @@ function resync(reason) {
 // ------------------------------------------------------------------ gửi / dừng / điền
 async function send(p, text, files, voice) {
   const tok = store.beginSend(p, text, files);
-  p.scroll = { top: 0, stick: true };
+  jumpBottom(p, false);
   const fd = new FormData();
   fd.set("text", text);
   if (p.conv.value) fd.set("c", p.conv.value); else if (p.scope !== LOBBY) fd.set("w", p.scope);
@@ -221,6 +231,40 @@ async function stop(p) {
 }
 ui.stop = stop;
 document.addEventListener("mgr:stop", () => stop(store.active.value));
+
+// ------------------------------------------------------------------ trả lời câu hỏi / duyệt thao tác phá huỷ (lạc quan + idem)
+/** POST /api/manager/act/<name> với idem → {ok} | {error, retry (mạng lỗi: bấm lại dùng cùng idem)} | {need2}. */
+async function act(name, fields) {
+  let j;
+  try { j = await postForm("/api/manager/act/" + name, fields); } catch (e) {
+    return { error: "Không gửi được — kiểm tra kết nối rồi bấm lại (an toàn: không bị làm hai lần).", retry: true };
+  }
+  if (j.need === "confirm2") return { error: "Thao tác này cần xác nhận bước 2 (thao tác nặng / theo luật).", need2: true };
+  if (j.need) return { error: j.message || "Cần xác nhận thêm." };
+  if (j.error || j.ok === false) return { error: j.error || "Không thực hiện được." };
+  return { ok: true };
+}
+
+ui.answer = async (p, q, form) => {
+  const keys = Array.from(form.querySelectorAll('input[name="keys"]:checked')).map((x) => x.value);
+  const ta = form.querySelector('textarea[name="text"]'), text = ta ? ta.value.trim() : "";
+  if (!keys.length && !text) { store.patchQ(p, q.id, (x) => ({ ...x, err: "Chọn một phương án hoặc nhập câu trả lời." })); return; }
+  const labels = keys.map((k) => ((q.options || []).find((o) => o.key === k) || {}).label || "");
+  const idem = q.retryIdem || newIdem();
+  const tok = store.actBegin(p, "answer", q.id, { idem, answer: { keys, labels, text: text || null } });
+  const r = await act("answer", { id: q.id, keys, text, confirm: "yes", idem });
+  if (r.ok) store.actOk(tok);
+  else { store.actFail(tok, r.error, { retry: r.retry, draft: { keys, text } }); emit("send_error", { error: r.error }); }
+};
+
+ui.decide = async (p, a, kind, note) => {
+  const idem = a.retryIdem || newIdem();
+  const tok = store.actBegin(p, kind, a.id, { idem });
+  const r = await act(kind, { id: a.id, confirm: "yes", idem, note: note || "", preview: a.text || "" });
+  if (r.ok) store.actOk(tok);
+  else store.actFail(tok, r.error, { retry: r.retry });
+  if (r.need2) store.patchAp(p, a.id, (x) => ({ ...x, need2: true }));
+};
 
 ui.fill = (p, text, doSend) => {
   store.setDraft(p, text);
@@ -257,6 +301,7 @@ root.removeAttribute("data-state");
 render(html`<${App} />`, root);
 const side = document.getElementById("coord-convs");
 if (side) { side.textContent = ""; render(html`<${ConvList} />`, side); }
+try { performance.measure("coord:boot", "coord:start"); } catch (_) {}
 if (first.conv.value) markRead(first.conv.value);
 
 feed = createFeed({

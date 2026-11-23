@@ -54,14 +54,14 @@ def csp_with(script: str) -> str:
 
 async def coord_page(request: Request) -> Response:
     from .manager import _page
-    from .manager_feed import build_snapshot
+    from .manager_feed import build_snapshot, hub_flags
 
     ctx, snap = await build_snapshot(request)
     if "setup" in snap:  # chưa có điều phối viên / daemon cũ: trang cũ vẽ phần chỉ định (form + xác nhận) — island chỉ cho trang chat
         return await _page(request, ctx)
     sess = session_of(request)
     imap = import_map()
-    boot: dict[str, Any] = {"snap": snap, "csrf": sess.csrf if sess else "", "icons": static_url("icons.svg")}
+    boot: dict[str, Any] = {"snap": snap, "csrf": sess.csrf if sess else "", "icons": static_url("icons.svg"), "hub": await hub_flags(request)}
     resp = await render(request, "manager_next.html", {"nav": "manager", "boot": boot, "importmap": imap, "entry": static_url(ENTRY),
                                                        "title": snap.get("title")})
     resp.headers["content-security-policy"] = csp_with(imap)

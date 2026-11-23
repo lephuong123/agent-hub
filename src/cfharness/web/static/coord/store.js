@@ -10,24 +10,20 @@
  * Chữ của agent là DỮ LIỆU: store chỉ giữ chữ thô (`text`, `label`, …) — chỗ DUY NHẤT là HTML là `item.html` của mục `manager` (server đã
  * cứng hoá bằng present.md). Không có hàm nào ở đây dựng HTML.
  */
-import { LOBBY, draftKey } from "./util.js";
+import { LOBBY, draftKey, dayKey, dayLabel } from "./util.js";
 
 const EARLY_MAX = 400;   // message của lượt chưa biết thuộc khung nào (tin vừa gửi, chưa có run id) — giữ tối đa chừng này
 const SIDE_MAX = 12;
-
-function dayKey(iso) {
-  const d = iso ? new Date(iso) : new Date();
-  if (isNaN(d.getTime())) return null;
-  const p = (x) => String(x).padStart(2, "0");
-  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
-}
+const CV_TAIL = 12;      // số mục cuối của ảnh chụp KHÔNG dùng content-visibility (thấy ngay khi mở → đo thật từ khung hình đầu)
+export const FIRST_SHOW = 60;  // mục vẽ ngay khi mở một hội thoại dài; cũ hơn vẽ dần khi cuộn lên (views/More) — 2000 mục mở ~45 ms
 
 export function createStore(S, opts) {
-  const { signal, batch } = S;
+  const { signal, batch, computed } = S;
   const storage = (opts && opts.storage) || null;
-  let seq = 0, tmpSeq = 0;
+  let seq = 0, tmpSeq = 0, actSeq = 0;
   const st = {
     manager: signal(null),
+    hub: signal({}),              // {estop, admin_estop} — dải ESTOP
     tabs: signal({ enabled: false, lobby: null, active: [], closed: [] }),
     convs: signal({}),            // phạm vi → [hội thoại]
     side: signal([]),             // "Hành động gần đây" (mới → cũ)
@@ -58,7 +54,12 @@ export function createStore(S, opts) {
       items: signal([]), pending: signal(null), actions: signal([]), workstream: signal(null), wsConvs: signal([]),
       runs: new Set(), loaded: signal(false), stale: false, error: signal(""),
       draft: signal(""), files: signal([]), sendErr: signal(""), sending: signal(0), voice: "",
+      jump: signal(false), scroll: null, el: null, hide: signal(0),  // hide = số mục ĐẦU chưa vẽ (cuộn lên → vẽ dần)  // nút "Tin mới nhất" + trạng thái cuộn dính đáy (scroll.js) + phần tử cuộn
     };
+    // tín hiệu dẫn xuất: chỉ đổi khi GIÁ TRỊ đổi → chữ chạy (pending đổi mỗi khung hình) không làm vẽ lại khung/dòng thời gian/ô nhập
+    p.runId = computed(() => (p.pending.value ? p.pending.value.run || null : null));
+    p.busy = computed(() => !!(p.pending.value && p.pending.value.run));
+    p.empty = computed(() => p.loaded.value && !p.items.value.length && !p.pending.value && !p.actions.value.length);
     p.draft.value = draftLoad(p.conv.value, p.scope);
     st.panes.value = st.panes.value.concat([p]);
     return p;
@@ -149,6 +150,9 @@ export function createStore(S, opts) {
       if (wasFresh && p.conv.value && !p.draft.value) p.draft.value = draftLoad(p.conv.value, scope);
       p.title.value = snap.title || null;
       p.items.value = snap.items || [];
+      p.hide.value = Math.max(0, p.items.value.length - FIRST_SHOW);
+      // mục cũ (trừ CV_TAIL mục cuối — phần thấy ngay khi mở) dùng content-visibility; tập cố định tới lần ảnh chụp sau (views/Item)
+      p.cv = new Set(p.items.value.slice(0, Math.max(0, p.items.value.length - CV_TAIL)).map((x) => x.id).filter(Boolean));
       p.pending.value = pendingOf(snap.pending, p.pending.value);
       p.actions.value = snap.actions || [];
       p.workstream.value = snap.workstream || null;
@@ -184,7 +188,7 @@ export function createStore(S, opts) {
       const key = dayKey(item.ts);
       let last = null;
       for (let i = items.length - 1; i >= 0; i--) if (items[i].kind === "day") { last = items[i].key; break; }
-      if (key && last !== key) add.push({ kind: "day", id: "d" + key, key, text: key === dayKey() ? "Hôm nay" : key });
+      if (key && last !== key) add.push({ kind: "day", id: "d" + key, key, text: dayLabel(key) });
     }
     add.push(item);
     p.items.value = items.concat(add);
@@ -227,7 +231,8 @@ export function createStore(S, opts) {
       }
       case "tool.start": {
         if (!run || !ensurePending(p, run)) break;
-        p.pending.value = { ...p.pending.value, tool: m.label || m.name || "", toolId: m.id || "" };
+        const c0 = p.pending.value;
+        p.pending.value = { ...c0, tool: m.label || m.name || "", toolId: m.id || "", tools: (c0.tools || 0) + 1 };
         fx.push({ fx: "event", name: "tool", detail: { run, label: m.label || m.name || "" } });
         break;
       }
@@ -282,12 +287,15 @@ export function createStore(S, opts) {
         break;
       }
       case "action.resolved": {
-        p.actions.value = p.actions.value.filter((x) => !(x.kind === m.kind && x.id === m.id));
+        p.actions.value = m.kind === "approval"
+          ? p.actions.value.map((x) => (x.kind === "approval" && x.id === m.id ? { ...x, status: m.status, done: m.status, busy: false, opt: 0, err: "" } : x))
+          : p.actions.value.filter((x) => !(x.kind === m.kind && x.id === m.id));
         if (m.kind === "question") {
           const qid = "q-" + m.id, items = p.items.value, i = items.findIndex((x) => x.id === qid);
           if (i >= 0) {
             const n = items.slice();
-            n[i] = { ...n[i], q: { ...n[i].q, status: m.status, answer: m.answer != null ? m.answer : n[i].q.answer, answered_by: m.answered_by || n[i].q.answered_by } };
+            n[i] = { ...n[i], q: { ...n[i].q, status: m.status, answer: m.answer != null ? m.answer : n[i].q.answer, answered_by: m.answered_by || n[i].q.answered_by,
+                                   busy: false, opt: 0, err: "" } };
             p.items.value = n;
           }
         }
@@ -414,7 +422,52 @@ export function createStore(S, opts) {
     });
   }
 
+  // ---------------------------------------------------------------- duyệt / trả lời lạc quan (idempotency key do main sinh mỗi lần bấm)
+  function findQ(p, id) { const items = p.items.value, i = items.findIndex((x) => x.id === "q-" + id); return [items, i]; }
+  function patchQ(p, id, fn) {
+    const [items, i] = findQ(p, id);
+    if (i < 0) return null;
+    const n = items.slice(); n[i] = { ...n[i], q: fn(n[i].q) }; p.items.value = n;
+    return n[i].q;
+  }
+  function patchAp(p, id, fn) {
+    let hit = null;
+    p.actions.value = p.actions.value.map((x) => (x.kind === "approval" && x.id === id ? (hit = fn(x)) : x));
+    return hit;
+  }
+  /** Bắt đầu thao tác: hiện kết quả mong đợi NGAY (`busy`). kind: approve|deny|answer. Trả token cho actOk/actFail. */
+  function actBegin(p, kind, id, extra) {
+    const tok = { p, kind, id, seq: ++actSeq, prev: null, idem: (extra && extra.idem) || "" };
+    batch(() => {
+      if (kind === "answer") {
+        const a = (extra && extra.answer) || {};
+        patchQ(p, id, (q) => { tok.prev = q; return { ...q, status: "answered", answer: a, answered_by: "user", busy: true, opt: tok.seq, err: "", draft: null }; });
+      } else {
+        patchAp(p, id, (x) => { tok.prev = x; return { ...x, done: kind === "approve" ? "allowed" : "denied", busy: true, opt: tok.seq, err: "", ask: "" }; });
+      }
+    });
+    return tok;
+  }
+  function mine(tok) {
+    if (tok.kind === "answer") { const [items, i] = findQ(tok.p, tok.id); return i >= 0 && items[i].q.opt === tok.seq; }
+    return tok.p.actions.value.some((x) => x.kind === "approval" && x.id === tok.id && x.opt === tok.seq);
+  }
+  /** Server nhận: bỏ `busy` (trạng thái cuối do `action.resolved` chốt — tới trước hay sau đều được). */
+  function actOk(tok) {
+    if (!mine(tok)) return;
+    if (tok.kind === "answer") patchQ(tok.p, tok.id, (q) => ({ ...q, busy: false }));
+    else patchAp(tok.p, tok.id, (x) => ({ ...x, busy: false }));
+  }
+  /** Lỗi → hoàn tác về trạng thái trước (giữ lựa chọn/chữ người đã nhập ở `draft`) + lỗi. `retry` = mạng lỗi: giữ idem để bấm lại cùng khoá. */
+  function actFail(tok, err, o) {
+    if (!mine(tok) || !tok.prev) return;
+    const keep = { err: err || "Không gửi được.", busy: false, opt: 0, retryIdem: o && o.retry ? tok.idem : "" };
+    if (tok.kind === "answer") patchQ(tok.p, tok.id, () => ({ ...tok.prev, ...keep, draft: (o && o.draft) || null }));
+    else patchAp(tok.p, tok.id, () => ({ ...tok.prev, ...keep, ask: (o && o.ask) || "" }));
+  }
+
   return Object.assign(st, {
+    actBegin, actOk, actFail, patchAp, patchQ,
     makePane, paneByConv, paneFresh, paneFor, activate, closePane, applySnapshot, apply, flush,
     setDraft, beginSend, sendOk, sendFail, markSeen, bumpUnread, convPatch,
   });

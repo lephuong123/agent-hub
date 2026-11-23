@@ -77,14 +77,15 @@ def test_island_sources_have_no_unsafe_dom_sinks():
 
 def test_island_js_size_budget():
     """JS của island (không tính markdown/sanitizer), gzip từng tệp như khi phục vụ: preact + hooks + signals + htm + coord/*.js.
-    Ngân sách kế hoạch là < 30 KB; GĐ2 phần 1 đo ~40 KB (vendor ~11 KB, coord ~29 KB, trong đó ~6 KB là chú thích tiếng Việt — không có
-    bước build/minify). Ở đây chặn hồi quy ở 45 KB; thu về 30 KB là việc của GĐ3 (bỏ chú thích khi phục vụ hoặc gói khi phát hành)."""
+    Ngân sách kế hoạch là < 30 KB; GĐ2 phần 1 đo ~40 KB (vendor ~11 KB, coord ~29 KB), phần 2 (dòng thời gian, chạy chữ markdown, cuộn,
+    thẻ duyệt, vẽ dần) đo ~50 KB (coord ~38 KB, trong đó ~8 KB là chú thích tiếng Việt — không có bước build/minify). Chặn hồi quy ở 52 KB;
+    thu về 30 KB là việc của GĐ3 (minify/bỏ chú thích khi phục vụ hoặc gói khi phát hành)."""
     import gzip
 
     files = [STATIC / C.VENDOR[k] for k in ("preact", "preact/hooks", "@preact/signals-core", "@preact/signals", "htm")]
     files += list((STATIC / "coord").glob("*.js"))
     total = sum(len(gzip.compress(f.read_bytes(), 9)) for f in files)
-    assert total < 45_000, total
+    assert total < 52_000, total
 
 
 @pytest.mark.skipif(not NODE, reason="cần Node để chạy store/SSE của island")
@@ -93,6 +94,31 @@ def test_store_and_sse_reducer_headless():
                        encoding="utf-8", timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "FAIL" not in r.stdout and "ALL OK" in r.stdout and r.stdout.count("\nok ") >= 40, r.stdout
+
+
+@pytest.mark.skipif(not NODE, reason="cần Node để chạy logic dòng thời gian của island")
+def test_timeline_scroll_stream_logic_headless():
+    """GĐ2 phần 2: cuộn dính đáy, gom delta theo khung hình, bỏ trùng theo id, thẻ duyệt theo giờ, lọc URL, duyệt/trả lời lạc quan + hoàn tác."""
+    r = subprocess.run([NODE, str(ROOT / "tests" / "coord_timeline_check.mjs"), str(ROOT)], capture_output=True, text=True,
+                       encoding="utf-8", timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "FAIL" not in r.stdout and "ALL OK" in r.stdout and r.stdout.count("\nok ") >= 35, r.stdout
+
+
+def test_island_no_infinite_box_shadow_animation():
+    """Không animation box-shadow vô hạn trong island: chấm đang chạy / mic dùng ::after transform + opacity (coord.css ghi đè app.css)."""
+    css = (STATIC / "coord.css").read_text(encoding="utf-8")
+    assert ".coord-next .ws-dot.run { position: relative; animation: none; box-shadow: none; }" in css
+    assert ".coord-next .voice-mic.on { position: relative; animation: none; }" in css
+    kf = re.search(r"@keyframes coord-ping \{(.*?)\}\s*\n", css, re.S).group(1)
+    assert "box-shadow" not in kf and "transform" in kf and "opacity" in kf
+    assert "content-visibility: auto" in css and "contain-intrinsic-size: auto 400px" in css
+
+
+def test_streaming_markdown_filters_urls_via_dompurify():
+    src = (STATIC / "coord" / "md.js").read_text(encoding="utf-8")
+    assert "DOMPurify.isValidAttribute" in src and "safeUrl(value)" in src and "innerHTML" not in src
+    assert 'from "streaming-markdown"' in src and 'from "dompurify"' in src
 
 
 @pytest.mark.skipif(not shutil.which("uv"), reason="cần uv để dựng wheel")
@@ -129,6 +155,7 @@ async def test_island_page_csp_boot_and_static(menv):
     assert "</script" not in boot_raw.lower() and "<script" not in boot_raw.lower()  # |tojson escape `<`
     boot = json.loads(boot_raw)
     assert boot["snap"]["conv"] == cid and boot["csrf"] and boot["icons"].startswith("/static/icons.svg")
+    assert boot["hub"] == {"estop": False, "admin_estop": False}
     assert any(it.get("text", "").startswith("</script>") for it in boot["snap"]["items"] if it["kind"] == "user")
     # trang khác vẫn CSP gốc
     assert "sha256-" not in (await e.client.get("/manager")).headers["content-security-policy"]
@@ -149,6 +176,7 @@ async def test_status_api_and_auth(menv):
     assert r.status_code == 200
     m = r.json()["manager"]
     assert m["agent_id"] == "boss" and m["name"] == "Điều phối" and m["status_label"] and m["cost_today"].startswith("$")
+    assert r.json()["hub"] == {"estop": False, "admin_estop": False}  # dải ESTOP của island
     s = (await e.client.get("/api/manager/snapshot")).json()
     assert s["manager"]["name"] == "Điều phối" and "status_tone" in s["manager"]
 

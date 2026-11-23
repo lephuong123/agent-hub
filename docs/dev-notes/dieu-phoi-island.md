@@ -154,9 +154,46 @@ Mã: `web/coord.py` (trang + import map + CSP), `templates/manager_next.html`, `
 - Đọc: island gọi `POST /manager/read` khi hội thoại đang hiện; server sau đó `feed.kick_tabs()` → `ws.status` có số chưa đọc đúng.
 - Thêm vào hợp đồng: `GET /api/manager/status` (`manager_json`: tên, trạng thái + nhãn/tông, chi phí hôm nay, nhịp), snapshot `manager` cùng
   dạng, `workstream` thêm `created_at/created_by/closed_at/last_activity/state_updated_at/conversations`; `/api/manager/*` hết phiên → 401 JSON.
-- Phần 2 (chưa làm): chạy chữ markdown (streaming-markdown + DOMPurify, gom theo khung hình), cuộn dính đáy + nút "Tin mới nhất", thẻ câu
-  hỏi/duyệt lạc quan qua `/api/manager/act`, content-visibility. Tạm thời: chữ đang chạy hiện dạng thô (`.mm-tail`), câu hỏi trả lời bằng form
-  `/do/question_answer` (tải lại trang), thao tác phá huỷ chờ duyệt → link trang Duyệt.
+- Phần 2: xem mục "GĐ2 phần 2" bên dưới.
 - Đo trên hub demo (Chrome, Playwright): mở luồng lần đầu ~41 ms (tới khi vẽ xong), đổi tab đã mở 10–16 ms, gửi → tin hiện 11 ms,
   không long task > 50 ms khi chạy chữ `[demo]`. JS island ~40 KB gzip (vendor ~11 KB) — vượt ngân sách 30 KB (không có bước build;
   ~6 KB là chú thích), thu gọn ở GĐ3.
+
+## GĐ2 phần 2 — dòng thời gian đủ tính năng
+
+Mã mới: `static/coord/scroll.js` (cuộn dính đáy — THUẦN), `static/coord/md.js` (chạy chữ markdown), thêm vào `util.js` (`dayLabel`,
+`safeUrl`, `mergeTimeline`, `rafBatch`, `newIdem`), `store.js` (duyệt/trả lời lạc quan, `p.hide`/`p.cv`, tín hiệu dẫn xuất), `views.js`
+(Flow/Row/More, Approval, LiveMd). Test: `tests/coord_timeline_check.mjs` (Node) + `tests/test_coord_island.py`.
+
+- **Vẽ lại tối thiểu.** Chữ chạy chỉ đổi `p.pending`; khung/ô nhập/dòng thời gian đọc tín hiệu dẫn xuất (`p.runId`, `p.busy`, `p.empty` —
+  `computed`, chỉ báo khi GIÁ TRỊ đổi) → mỗi khung hình chỉ `PendingSlot` vẽ lại. Mục dòng thời gian là `Row` (`shouldComponentUpdate`
+  theo object mục) → 2000 mục không bị duyệt lại khi một mục đổi.
+- **Chạy chữ.** Delta gom ở store, `rafBatch` đổ MỘT lần mỗi khung hình; `LiveMd` đẩy phần chữ MỚI vào `streaming-markdown` (parser tăng
+  dần, chữ luôn là text node). `set_attr` bọc lại: URL qua `safeUrl` (chỉ http(s)/mailto/tương đối; chặn `javascript:`, `data:`, `//host`)
+  + `DOMPurify.isValidAttribute`; link mở tab mới `rel=noopener noreferrer nofollow`; lớp code chỉ `language-[\w+-]`. `msg.done` → mục
+  `manager` với HTML server (present.md) thay khung đang chạy.
+- **Cuộn dính đáy** (`scroll.js`): ở đáy → dính; ResizeObserver trên `.coord-flow` + `pinNow` trong layout effect của Flow/PendingSlot (ghim
+  TRƯỚC khi vẽ — nếu chỉ dựa ResizeObserver, Chrome đã tính mục bị đẩy khỏi màn hình là một lần dịch chuyển). Chỉ bỏ dính khi NGƯỜI cuộn
+  lên (lăn chuột/vuốt/phím/kéo thanh cuộn trong 400 ms qua) — trình duyệt kẹp scrollTop khi ô nhập co lại thì không. Không dính + nội dung
+  lớn thêm → nút "Tin mới nhất" (`p.jump`). Vị trí cuộn nhớ theo khung.
+- **Hội thoại dài.** Mở chỉ vẽ `FIRST_SHOW=60` mục cuối (`p.hide` = số mục đầu chưa vẽ); mốc `More` ở đầu + IntersectionObserver (cách 1500 px)
+  vẽ thêm 200 mục; `overflow-anchor: auto` (trừ khung đang trả lời) giữ nguyên phần đang xem khi chèn phía trên. `content-visibility: auto`
+  chỉ cho mục CŨ của ảnh chụp (trừ 12 mục cuối, `p.cv` cố định theo mục — đổi qua lại visible/auto khi mục ở ngoài màn hình làm mất cỡ đã
+  nhớ → scrollHeight nhảy).
+- **Duyệt / trả lời lạc quan.** Thẻ thao tác phá huỷ: Cho phép một lần / Từ chối (ghi chú) → bước xác nhận nội tuyến → `POST
+  /api/manager/act/approve|deny` với `confirm=yes` + `idem` (sinh mỗi lần bấm). Thẻ hiện kết quả ngay (`busy`); `action.resolved` chốt; lỗi →
+  hoàn tác (giữ lựa chọn/chữ đã nhập), mạng lỗi → giữ `idem` để bấm lại cùng khoá (server trả kết quả cũ, không chạy hai lần); bước 2 (thao
+  tác nặng) / luôn cho phép / theo luật → trang Duyệt. Câu hỏi: form gửi `POST /api/manager/act/answer` (không tải lại trang). Thẻ duyệt
+  xếp theo giờ tạo (`mergeTimeline`), thẻ đã xử lý còn lại dạng thu gọn tới lần tải ảnh chụp sau.
+- **Khác.** Nhãn vạch ngày như `present.day_label`; "Đang dùng X (+n)…"; khối "Đã làm N việc" quay khi lượt đang chạy; chỉ tin cuối có
+  "Thử lại"; chip tệp thêm "Không gian số" khi có `fh`; dải ESTOP (`/api/manager/status` → `hub: {estop, admin_estop}`, cùng nguồn huy hiệu
+  menu); nút mic của ô trả lời câu hỏi do island vẽ (`data-voice-for`, voice.js chỉ bỏ `hidden`) và giữ chỗ; danh sách hội thoại ở thanh
+  bên vẽ sẵn ở server rồi island thay trong cùng tác vụ; chấm "đang chạy" và mic dùng `::after` transform/opacity thay animation box-shadow
+  vô hạn; announcer `#mgr-status-live` báo khi có trả lời.
+- **Đo trên hub demo** (Chrome headless, 1280×860): gửi → tin + khung chờ hiện 15–26 ms; chạy chữ `[demo]` ~100 token/s không long task
+  > 50 ms, vẫn dính đáy (cách đáy 0 px); lăn chuột lên → bỏ dính + hiện nút, bấm nút → về đáy; CLS cả lượt 0.0016; trả lời câu hỏi / cho
+  phép / từ chối không tải lại trang; đổi tab đã mở ≤ 37 ms tới khi vẽ (2 rAF), mở tab mới 13–17 ms; nháp + vị trí cuộn giữ nguyên;
+  2000 mục: mở 45 ms tới khi vẽ (trước khi vẽ dần: 337 ms), cuộn lên tới hết không nhảy; khởi động island (`performance.measure
+  ("coord:boot")`) ~70 ms khi đã cache cho hội thoại demo ~120 mục.
+- **Còn lại (GĐ3):** JS island ~50 KB gzip (coord ~38 KB, vendor ~11 KB) (ngân sách 30 KB — cần minify/bỏ chú thích khi phục vụ); voice.js MutationObserver vẫn quan sát
+  cả `body`.

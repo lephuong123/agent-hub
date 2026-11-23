@@ -4,10 +4,12 @@
  * `manager` (present.md phía server đã cứng hoá: không raw HTML, link lọc, không style=). Link nội bộ chỉ từ `target.href` do server dựng.
  * Thao tác ghi khác (đổi tên, đóng luồng, chạy nhịp…) là <form method=post action=/do/…> như trang cũ: app.js gắn khoá phiên `k` + hộp xác nhận.
  */
-import { h } from "preact";
+import { h, Component } from "preact";
 import { useRef, useLayoutEffect, useEffect } from "preact/hooks";
 import htm from "htm";
-import { LOBBY, fmtTs, relText, paneUrl } from "./util.js";
+import { LOBBY, fmtTs, relText, paneUrl, mergeTimeline } from "./util.js";
+import { initScroll, onScroll, onUserUp, onGrow } from "./scroll.js";
+import { liveMd } from "./md.js";
 import { Composer } from "./composer.js";
 
 export const html = htm.bind(h);
@@ -162,6 +164,15 @@ function ConvMenu({ p }) {
     </div></details>`;
 }
 
+/** ESTOP đang bật (hub hoặc quản trị) — thấy ngay trên đầu khung chat; trạng thái từ /api/manager/status (làm mới theo nhịp/sự kiện). */
+function Estop() {
+  const hub = ui.store.hub.value || {};
+  if (!hub.estop && !hub.admin_estop) return null;
+  return html`<div class="coord-estop" role="status"><${Icon} n="stop" c="sm" /><span>${hub.admin_estop
+    ? "Hub đang tạm dừng bởi quản trị — không run mới nào được chạy."
+    : "ESTOP đang bật — không run mới nào được chạy (điều phối viên cũng vậy)."}</span>${hub.admin_estop ? null : html`<a href="/settings#estop">Cài đặt ESTOP</a>`}</div>`;
+}
+
 function Header({ p }) {
   const s = ui.store, m = s.manager.value || {}, tabs = s.tabs.value;
   const scope = p ? p.scope : LOBBY, wsTab = scope !== LOBBY ? [...tabs.active, ...tabs.closed].find((t) => t.ws === scope) : null;
@@ -187,7 +198,7 @@ function Header({ p }) {
   </header>`;
 }
 
-// ------------------------------------------------------------------ mục dòng thời gian (bản tối giản — GĐ2 phần 2 thêm chạy chữ markdown, cuộn, thẻ duyệt)
+// ------------------------------------------------------------------ mục dòng thời gian
 function copyText(text) {
   if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
   return new Promise((ok, fail) => {
@@ -211,6 +222,7 @@ function FileChip({ f, agent }) {
     <a class="fchip-view" href=${"/files/view?" + q} target="_blank" rel="noopener" title=${"Xem " + f.path + " trong trình duyệt (chỉ đọc — dùng được cả qua link public)"}><${Icon} n="external" c="sm" /><span>Xem</span></a>
     <button type="button" class="fchip-act" data-fopen="open" title=${"Mở " + f.name + " bằng ứng dụng mặc định trên máy chạy hub (chỉ khi dùng web trên chính máy đó)"}><${Icon} n="clip" c="sm" /><span>Mở</span></button>
     <button type="button" class="fchip-act" data-fopen="reveal" title="Mở thư mục chứa file trong Explorer/Finder trên máy chạy hub"><${Icon} n="inbox" c="sm" /><span>Thư mục</span></button>
+    ${f.fh ? html`<a class="fchip-view fchip-fh" href=${"/filehub/open?" + q} target="_blank" rel="noopener noreferrer" title=${"Mở " + f.path + " trên Không gian số (xem/sửa, phiên bản, thùng rác)"}><${Icon} n="external" c="sm" /><span>Không gian số</span></a>` : null}
   </span></span>`;
 }
 
@@ -225,59 +237,83 @@ function ActionRow({ a }) {
 
 const Q_STATUS = { with_manager: ["Đang chờ điều phối viên", "info"], open: ["Chờ bạn trả lời", "ask"], answered: ["Đã trả lời", "ok"], cancelled: ["Đã huỷ", "muted"] };
 
-function Question({ q, back }) {
-  const [label, tone] = Q_STATUS[q.status] || [q.status || "", "muted"];
+function Question({ q, back, p, cv }) {
+  const [label, tone] = q.busy ? ["Đang gửi…", "muted"] : Q_STATUS[q.status] || [q.status || "", "muted"];
   const pending = q.status === "open" || q.status === "with_manager";
   const a = q.answer || {}, keys = a.keys || [], labels = a.labels || [];
   const by = String(q.answered_by || ""), who = by.startsWith("manager:") ? "Điều phối viên" : by === "hub" ? "Hub" : "Bạn";
-  const opts = q.options || [];
-  return html`<article class=${"xcard ask" + (pending ? "" : " done")} id=${"q-" + q.id}>
+  const opts = q.options || [], dr = q.draft || {};
+  return html`<article class=${"xcard ask" + (cv ? " cv" : "") + (pending ? "" : " done") + (q.busy ? " busy" : "")} id=${"q-" + q.id} aria-busy=${q.busy ? "true" : undefined}>
     <div class="xcard-head"><span class="xcard-ic"><${Icon} n=${pending ? "question" : "check"} /></span>
       <div class="xcard-title"><div class="t">${q.agent_id} hỏi ${q.status === "with_manager" ? "điều phối viên" : "bạn"} <span class=${"pill " + tone}>${label}</span></div>
         <div class="m"><a href=${"/agents/" + encodeURIComponent(q.agent_id || "")}>${q.agent_id}</a>${q.task_id ? html`<span>·</span><a href=${"/tasks/" + encodeURIComponent(q.task_id)}>task ${q.task_id}</a>` : null}${
           q.run_id ? html`<span>·</span><a href=${"/runs/" + encodeURIComponent(q.run_id)}>lượt chạy</a>` : null}<span>·</span><${Time} ts=${q.created_at} /></div></div></div>
     <div class="q-text">${q.text}</div>
     ${q.escalation_note && q.status === "open" ? html`<div class="q-note"><${Icon} n="chat" /><div class="pre"><b>Ghi chú:</b> ${q.escalation_note}</div></div>` : null}
-    ${q.status === "answered" ? html`<div class="q-answer"><${Icon} n="check" /><div class="pre"><b>${who}</b> đã trả lời: ${keys.map((k, i) => k + ". " + (labels[i] || "")).join("; ")}${
+    ${q.status === "answered" ? html`<div class="q-answer"><${Icon} n="check" /><div class="pre"><b>${who}</b> ${q.busy ? "đang gửi câu trả lời" : "đã trả lời"}: ${keys.map((k, i) => k + ". " + (labels[i] || "")).join("; ")}${
       a.text ? (keys.length ? " — " : "") + a.text : ""}</div></div>` : null}
-    ${q.status === "open" ? html`<form method="post" action="/do/question_answer" class="q-form">
+    ${q.err ? html`<p class="flash error q-err" role="alert">${q.err}</p>` : null}
+    ${q.status === "open" ? html`<form method="post" action="/do/question_answer" class="q-form" onSubmit=${(e) => { e.preventDefault(); ui.answer(p, q, e.currentTarget); }}>
       <${Hidden} name="csrf" value=${ui.csrf} /><${Hidden} name="id" value=${q.id} /><${Hidden} name="next" value=${back} />
       ${opts.length ? html`<fieldset class="q-opts"><legend class="sr-only">Chọn ${q.multi ? "một hoặc nhiều" : "một"} phương án</legend>${opts.map((o) =>
-        html`<label class="q-opt" key=${o.key}><input type=${q.multi ? "checkbox" : "radio"} name="keys" value=${o.key} /><span class="q-opt-k">${o.key}</span><span class="q-opt-body"><span class="q-opt-l">${o.label}</span>${
+        html`<label class="q-opt" key=${o.key}><input type=${q.multi ? "checkbox" : "radio"} name="keys" value=${o.key} defaultChecked=${(dr.keys || []).includes(o.key)} /><span class="q-opt-k">${o.key}</span><span class="q-opt-body"><span class="q-opt-l">${o.label}</span>${
           o.description ? html`<span class="q-opt-d">${o.description}</span>` : null}</span></label>`)}</fieldset>` : null}
-      ${q.allow_free_text ? html`<div class="q-free"><label>${opts.length ? "Câu trả lời khác hoặc ghi chú thêm (tuỳ chọn)" : "Câu trả lời của bạn"}<textarea data-voice name="text" rows="2" maxlength="4000" required=${!opts.length}
-        placeholder=${opts.length ? "Câu trả lời khác…" : "Nhập câu trả lời…"}></textarea></label></div>` : null}
-      <div class="xcard-actions"><button class="btn primary" type="submit"><${Icon} n="send" /><span>Gửi câu trả lời</span></button></div>
+      ${q.allow_free_text ? html`<div class="q-free"><label>${opts.length ? "Câu trả lời khác hoặc ghi chú thêm (tuỳ chọn)" : "Câu trả lời của bạn"}<textarea id=${"q-text-" + q.id} name="text" rows="2" maxlength="4000" required=${!opts.length}
+        placeholder=${opts.length ? "Câu trả lời khác…" : "Nhập câu trả lời…"} defaultValue=${dr.text || ""}></textarea></label>
+        <span class="voice-row"><button type="button" class="btn ghost sm icon voice-mic" data-voice-for=${"q-text-" + q.id} hidden aria-pressed="false"
+          aria-label="Trả lời bằng giọng nói" title="Nói để nhập (tiếng Việt)"><${Icon} n="mic" /></button></span></div>` : null}
+      <div class="xcard-actions"><button class="btn primary" type="submit"><${Icon} n="send" /><span>${q.retryIdem ? "Gửi lại" : "Gửi câu trả lời"}</span></button></div>
     </form>
     <div class="xcard-actions q-cancel"><span class="spacer"></span><${Act} name="question_cancel" label="Huỷ câu hỏi" fields=${{ id: q.id }} cls="btn ghost sm" next=${back}
       confirm="Huỷ câu hỏi này? Agent sẽ không nhận được câu trả lời (task vẫn bị chặn tới khi bạn gỡ)." /></div>` : null}
   </article>`;
 }
 
-function Approval({ a }) {
-  return html`<article class="xcard approval human" id=${"ap-" + a.id}>
-    <div class="xcard-head"><span class="xcard-ic"><${Icon} n="shield" /></span>
-      <div class="xcard-title"><div class="t">Chờ bạn duyệt <span class="pill danger">phá huỷ</span></div>
-        <div class="m"><code>${a.tool}</code><span>·</span><${Time} ts=${a.created_at} /></div></div></div>
-    <pre class="cmd-full" tabindex="0">${a.text}</pre>
-    ${a.reason ? html`<p class="xcard-why">${a.reason}</p>` : null}
-    <div class="xcard-actions"><a class="btn primary" href=${a.href || "/approvals"}>Mở trang Duyệt</a></div>
+const AP_DONE = { allowed: ["Đã cho phép", "ok", "check"], approved: ["Đã cho phép", "ok", "check"], denied: ["Đã từ chối", "danger", "x"],
+                  expired: ["Hết hạn", "muted", "clock"], cancelled: ["Đã huỷ", "muted", "x"] };
+
+/** Thẻ thao tác phá huỷ chờ duyệt: Cho phép MỘT lần / Từ chối ngay tại đây (xác nhận nội tuyến → /api/manager/act + idem, lạc quan,
+ *  hoàn tác khi lỗi). "Luôn cho phép" / theo luật / bước 2 của thao tác nặng → trang Duyệt (nêu rõ luật). */
+function Approval({ a, p, cv }) {
+  const done = a.done ? AP_DONE[a.done] || [a.done, "muted", "check"] : null;
+  const set = (patch) => ui.store.patchAp(p, a.id, (x) => ({ ...x, ...patch }));
+  return html`<article class=${"xcard approval human" + (cv ? " cv" : "") + (done ? " done" : "") + (a.busy ? " busy" : "")} id=${"ap-" + a.id} aria-busy=${a.busy ? "true" : undefined}>
+    <div class="xcard-head"><span class="xcard-ic"><${Icon} n=${done ? done[2] : "shield"} /></span>
+      <div class="xcard-title"><div class="t">${done ? "Thao tác phá huỷ" : "Chờ bạn duyệt"} <span class=${"pill " + (done ? done[1] : "danger")}>${a.busy ? "đang gửi…" : done ? done[0] : "phá huỷ"}</span></div>
+        <div class="m"><code>${a.tool}</code>${a.agent_id ? html`<span>·</span><a href=${"/agents/" + encodeURIComponent(a.agent_id)}>${a.agent_id}</a>` : null}${
+          a.run_id ? html`<span>·</span><a href=${"/runs/" + encodeURIComponent(a.run_id)}>lượt chạy</a>` : null}<span>·</span><${Time} ts=${a.created_at} /></div></div></div>
+    ${done ? null : html`<pre class="cmd-full" tabindex="0">${a.text}</pre>${a.reason ? html`<p class="xcard-why">${a.reason}</p>` : null}`}
+    ${a.err ? html`<p class="flash error q-err" role="alert">${a.err}${a.need2 ? html` <a href=${a.href || "/approvals"}>Mở trang Duyệt</a>` : null}</p>` : null}
+    ${done ? null : a.ask === "approve" ? html`<div class="xcard-confirm"><p>Cho phép agent thực hiện thao tác phá huỷ này <b>MỘT lần</b>?</p>
+        <div class="xcard-actions"><button type="button" class="btn primary" onClick=${() => ui.decide(p, a, "approve")}>Xác nhận cho phép</button>
+          <button type="button" class="btn ghost" onClick=${() => set({ ask: "" })}>Thôi</button></div></div>`
+      : a.ask === "deny" ? html`<form class="xcard-confirm" onSubmit=${(e) => { e.preventDefault(); ui.decide(p, a, "deny", e.currentTarget.elements.note.value); }}>
+        <label>Ghi chú cho agent (tuỳ chọn)<input name="note" maxlength="500" autocomplete="off" /></label>
+        <div class="xcard-actions"><button type="submit" class="btn danger">Xác nhận từ chối</button>
+          <button type="button" class="btn ghost" onClick=${() => set({ ask: "" })}>Thôi</button></div></form>`
+      : html`<div class="xcard-actions">
+        <button type="button" class="btn primary" disabled=${a.busy} onClick=${() => set({ ask: "approve", err: "" })}><${Icon} n="check" /><span>${a.retryIdem ? "Gửi lại: cho phép" : "Cho phép một lần"}</span></button>
+        <button type="button" class="btn danger ghost" disabled=${a.busy} onClick=${() => set({ ask: "deny", err: "" })}><${Icon} n="x" /><span>Từ chối</span></button>
+        <span class="spacer"></span><a class="btn ghost sm" href=${a.href || "/approvals"} title="Luôn cho phép, cho phép theo luật, xem đầy đủ">Trang Duyệt</a></div>`}
   </article>`;
 }
 
-function Item({ it, p }) {
+function Item({ it, p, run, last }) {
   const agent = (ui.store.manager.value || {}).agent_id;
+  // content-visibility CHỈ cho mục cũ của ảnh chụp đầu (store `p.cv`) — cố định theo mục: đổi qua lại visible ↔ auto khi mục ở ngoài màn
+  // hình làm nó mất cỡ đã nhớ → scrollHeight nhảy (CLS); mục mới tới sau luôn vẽ đầy đủ.
+  const cv = !!(p.cv && it.id && p.cv.has(it.id)), C = cv ? " cv" : "";
   switch (it.kind) {
     case "day": return html`<div class="mm-day" role="separator" data-day=${it.key}><span>${it.text}</span></div>`;
     case "user":
-      return html`<div class=${"mm user" + (it.optimistic ? " sending" : "")} data-run=${it.run_id || undefined}>
+      return html`<div class=${"mm user" + C + (it.optimistic ? " sending" : "")} data-run=${it.run_id || undefined}>
         <div class="mm-text">${it.text}</div>
         <div class="mm-foot">${it.optimistic ? html`<span class="muted small">đang gửi…</span>` : html`<${Time} ts=${it.ts} />`}
           <${CopyBtn} text=${it.text} label="Sao chép tin" />
           <button type="button" class="mm-btn" title="Sửa — đưa tin này vào ô nhập" aria-label="Sửa tin" onClick=${() => ui.fill(p, it.text, false)}><${Icon} n="edit" c="sm" /></button></div></div>`;
     case "manager": {
       const files = it.files || [], fa = it.agent || agent;
-      return html`<div class=${"mm mgr" + (it.notify ? " notify" : "")} data-run=${it.run_id || undefined}>
+      return html`<div class=${"mm mgr" + C + (it.notify ? " notify" : "") + (last ? " last" : "")} data-run=${it.run_id || undefined}>
         <div class="mm-who"><span class="mm-mark" aria-hidden="true"><${Icon} n="logo" /></span>${it.notify
           ? html`<${Icon} n="alert" c="sm" />Điều phối viên báo` : it.tick ? "Điều phối viên · nhịp" : "Điều phối viên"}</div>
         <div class="ti msg tx-msg mm-md"><div class="md" dangerouslySetInnerHTML=${{ __html: it.html || "" }}></div>
@@ -289,13 +325,14 @@ function Item({ it, p }) {
     }
     case "actions": {
       const n = (it.items || []).length, last = n ? it.items[n - 1].summary || "" : "";
-      return html`<details class=${"mm-acts" + (it.ok === false ? " err" : "")} data-run=${it.run_id || undefined}>
+      return html`<details class=${"mm-acts" + C + (it.ok === false ? " err" : "") + (run && run === it.run_id ? " running" : "")} data-run=${it.run_id || undefined}>
         <summary><span class="mm-acts-ic"><${Icon} n=${it.ok === false ? "alert" : "check"} c="sm" /><span class="tx-spin" aria-hidden="true"></span></span>
           <span class="mm-acts-n">Đã làm <span class="n">${n}</span> việc</span><span class="mm-acts-last">${last.split("\n")[0].slice(0, 60)}</span><${Icon} n="chev-right" c="chev" /></summary>
         <div class="mm-acts-list">${(it.items || []).map((a, i) => html`<${ActionRow} key=${a.audit_id || i} a=${a} />`)}</div></details>`;
     }
     case "action": return html`<${ActionRow} a=${it} />`;
-    case "question": return html`<${Question} q=${it.q} back=${paneUrl(p.conv.value, p.scope)} />`;
+    case "question": return html`<${Question} q=${it.q} p=${p} cv=${cv} back=${paneUrl(p.conv.value, p.scope)} />`;
+    case "approval": return html`<${Approval} a=${it.a} p=${p} cv=${cv} />`;
     case "note":
       return html`<div class=${"mm-note " + (it.tone || "")} data-run=${it.run_id || undefined}>${it.text}${it.run_id
         ? html` · <a href=${"/runs/" + encodeURIComponent(it.run_id)}>xem lượt chạy</a>` : null}</div>`;
@@ -311,15 +348,82 @@ function Todo({ d }) {
       r.status === "in_progress" ? html` <span class="tx-todo-now">đang làm</span>` : null}</li>`)}${d.more ? html`<li class="td more">… còn ${d.more} mục</li>` : null}</ul></details>`;
 }
 
+/** Chữ đang chạy: streaming-markdown nhận PHẦN MỚI mỗi lần store đổ bộ đệm (một lần mỗi khung hình). */
+function LiveMd({ text }) {
+  const ref = useRef(null), md = useRef(null);
+  useLayoutEffect(() => { if (!md.current) md.current = liveMd(ref.current); md.current.write(text); }, [text]);
+  return html`<div class="md" ref=${ref}></div>`;
+}
+
 function Pending({ pd }) {
+  const more = (pd.tools || 0) > 1 ? " (+" + (pd.tools - 1) + ")" : "";
   return html`<div class=${"mm mgr pending" + (pd.text ? " has-text" : "")} aria-busy="true" data-pending=${pd.run || ""}>
-    <div class="mm-who"><span class="mm-mark thinking" aria-hidden="true"><${Icon} n="logo" /></span>Điều phối viên<span class="mm-state"> · <span class="spin">${pd.waiting ? "đang gửi…" : "đang nghĩ…"}</span></span>${
+    <div class="mm-who"><span class="mm-mark thinking" aria-hidden="true"><${Icon} n="logo" /></span>Điều phối viên<span class="mm-state"> · <span class="spin">${pd.stopping ? "đang dừng…" : pd.waiting ? "đang gửi…" : pd.text ? "đang trả lời…" : "đang nghĩ…"}</span></span>${
       pd.run ? html` · <a href=${"/runs/" + encodeURIComponent(pd.run)}>xem lượt chạy</a>` : null}</div>
     ${pd.think ? html`<details class="mm-think"><summary>Suy nghĩ…</summary><pre>${pd.think}</pre></details>` : null}
     <${Todo} d=${pd.todo} />
-    <div class="ti msg tx-msg mm-md mm-live"><div class="md"></div><div class="mm-tail">${pd.text}</div></div>
-    <div class="mm-tool" hidden=${!pd.tool}><span class="tx-spin" aria-hidden="true"></span><span class="mm-tool-t">${pd.tool ? "Đang dùng " + pd.tool + "…" : ""}</span></div>
+    <div class="ti msg tx-msg mm-md mm-live"><${LiveMd} key=${pd.run || "w"} text=${pd.text} /></div>
+    <div class="mm-tool"><span class="tx-spin" aria-hidden="true" hidden=${!pd.tool}></span><span class="mm-tool-t">${pd.tool ? "Đang dùng " + pd.tool + more + "…" : ""}</span></div>
   </div>`;
+}
+
+/** Dính đáy → ghim NGAY sau khi Preact đổi DOM (trước khi vẽ). ResizeObserver chạy sau lượt layout đầu của khung hình → nếu chỉ dựa vào
+ *  nó, Chrome đã tính mục bị đẩy khỏi màn hình là một lần dịch chuyển (CLS) dù ngay sau đó được ghim lại. */
+function pinNow(p) {
+  const el = p.el;
+  if (el && p.scroll && p.scroll.stick && el.clientHeight) el.scrollTop = el.scrollHeight;
+}
+
+function PendingSlot({ p }) {
+  const pd = p.pending.value;
+  useLayoutEffect(() => pinNow(p));
+  return pd ? html`<${Pending} pd=${pd} />` : null;
+}
+
+/** Một mục — chỉ vẽ lại khi CHÍNH nó đổi (chữ đang chạy không làm vẽ lại cả dòng thời gian 2000 mục). */
+class Row extends Component {
+  shouldComponentUpdate(n) { const o = this.props; return n.it !== o.it || n.run !== o.run || n.last !== o.last; }
+  render({ it, p, run, last }) { return html`<${Item} it=${it} p=${p} run=${run} last=${last} />`; }
+}
+
+const apItems = new WeakMap();  // approval → mục dòng thời gian (cùng object → Row không vẽ lại)
+function apItem(a) {
+  let it = apItems.get(a);
+  if (!it) apItems.set(a, (it = { kind: "approval", id: "ap-" + a.id, ts: a.created_at, a }));
+  return it;
+}
+
+const MORE_STEP = 200;
+
+/** Mục cũ chưa vẽ (`p.hide`): mốc ở đầu dòng thời gian — tới gần (IntersectionObserver, cách 1500 px) thì vẽ thêm MORE_STEP mục; neo cuộn
+ *  (overflow-anchor) giữ nguyên phần đang xem khi chèn phía trên. Nút cho bàn phím / trình đọc màn hình. */
+function More({ p, n }) {
+  const ref = useRef(null);
+  const more = () => { p.hide.value = Math.max(0, p.hide.value - MORE_STEP); };
+  useEffect(() => {
+    const el = ref.current, root = el && el.closest(".mgr-log");
+    if (!el || !root || typeof IntersectionObserver !== "function") return undefined;
+    const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting) && root.clientHeight) more(); }, { root, rootMargin: "1500px 0px 0px 0px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [n]);
+  return html`<div class="coord-more" ref=${ref}><button type="button" class="btn ghost sm" onClick=${more}>Hiện ${Math.min(n, MORE_STEP)} mục trước (còn ${n})</button></div>`;
+}
+
+function Flow({ p }) {
+  const items = p.items.value, run = p.runId.value, hide = p.hide.value;
+  useLayoutEffect(() => pinNow(p));
+  const list = mergeTimeline(items, p.actions.value.filter((a) => a.kind === "approval").map(apItem));
+  let last = -1;
+  for (let i = list.length - 1; i >= 0; i--) if (list[i].kind === "manager" && !list[i].notify) { last = i; break; }
+  const from = Math.min(hide, list.length);
+  const rows = [];
+  if (from > 0) rows.push(html`<${More} key="more" p=${p} n=${from} />`);
+  for (let i = from; i < list.length; i++) {
+    const it = list[i];
+    rows.push(html`<${Row} key=${it.id || "i" + i} it=${it} p=${p} run=${it.kind === "actions" ? run : null} last=${i === last} />`);
+  }
+  return rows;
 }
 
 function Empty({ p }) {
@@ -330,31 +434,79 @@ function Empty({ p }) {
       : "Nói mục tiêu bằng lời — điều phối viên tự tạo agent/team, giao việc, theo dõi và báo lại. Mỗi epic nên mở một luồng (＋ Luồng) để việc không lẫn vào nhau."}</span></div>`;
 }
 
-/** Một khung = một vùng cuộn `.mgr-log`; khung ẩn vẫn ở trong DOM (giữ chỗ cuộn, nháp, đính kèm ở store). */
+/** Cuộn về đáy (bấm "Tin mới nhất" / vừa gửi): dính lại. */
+export function jumpBottom(p, smooth) {
+  p.scroll = { stick: true, top: p.scroll ? p.scroll.top : 0, unseen: false };
+  p.jump.value = false;
+  const el = p.el;
+  if (!el) return;
+  if (smooth && el.scrollTo) { el.scrollTo({ top: el.scrollHeight, behavior: "smooth" }); return; }
+  el.scrollTop = el.scrollHeight;
+}
+
+/** Một khung = một vùng cuộn `.mgr-log`; khung ẩn vẫn ở trong DOM (giữ chỗ cuộn, nháp, đính kèm ở store). Cuộn dính đáy: `scroll.js`;
+ *  ResizeObserver trên khối nội dung → chữ chạy / ảnh / mục mới làm khối lớn thêm thì ghim đáy (nếu đang dính) hoặc bật nút "Tin mới nhất". */
 function Pane({ p, on }) {
-  const ref = useRef(null);
-  const items = p.items.value, pd = p.pending.value, loaded = p.loaded.value, err = p.error.value;
-  if (!p.scroll) p.scroll = { top: 0, stick: true };
-  // ghi nhớ vị trí cuộn của từng khung (display:none làm Chrome mất scrollTop → tự lưu khi cuộn, khôi phục khi hiện lại)
+  const ref = useRef(null), flow = useRef(null);
+  const loaded = p.loaded.value, err = p.error.value, empty = p.empty.value;
+  if (!p.scroll) p.scroll = initScroll();
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return undefined;
-    const onScroll = () => { if (el.clientHeight) { p.scroll.top = el.scrollTop; p.scroll.stick = el.scrollHeight - el.scrollTop - el.clientHeight < 120; } };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
+    const el = ref.current, fl = flow.current;
+    if (!el || !fl) return undefined;
+    p.el = el;
+    const put = (s) => { p.scroll = s; const j = !!(s.unseen && !s.stick); if (p.jump.value !== j) p.jump.value = j; };
+    // "người đang cuộn": lăn chuột / vuốt / phím cuộn trong 400 ms qua, hoặc đang giữ chuột trên khung (kéo thanh cuộn)
+    let userAt = 0, down = false;
+    const now = () => performance.now();
+    const onSc = () => put(onScroll(p.scroll, { top: el.scrollTop, height: el.scrollHeight, client: el.clientHeight }, down || now() - userAt < 400));
+    const onWheel = (e) => { userAt = now(); if (e.deltaY < 0) put(onUserUp(p.scroll)); };
+    let ty = 0;
+    const onTs = (e) => { userAt = now(); ty = e.touches[0].clientY; };
+    const onTm = (e) => { userAt = now(); if (e.touches[0].clientY > ty + 4) put(onUserUp(p.scroll)); };
+    const onPd = () => { down = true; userAt = now(); };
+    const onPu = () => { if (down) { down = false; userAt = now(); } };
+    const onKey = (e) => {
+      if (!/^(PageUp|PageDown|ArrowUp|ArrowDown|Home|End| )$/.test(e.key) || !el.clientHeight) return;
+      const t = e.target;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      userAt = now();
+    };
+    let lastH = fl.offsetHeight;
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(() => {
+      if (!el.clientHeight) return;  // khung ẩn
+      const hh = fl.offsetHeight, r = onGrow(p.scroll, hh > lastH + 1);
+      lastH = hh;
+      put(r.s);
+      if (r.pin) el.scrollTop = el.scrollHeight;
+    }) : null;
+    if (ro) { ro.observe(fl); ro.observe(el); }
+    const opt = { passive: true };
+    el.addEventListener("scroll", onSc, opt);
+    el.addEventListener("wheel", onWheel, opt);
+    el.addEventListener("touchstart", onTs, opt);
+    el.addEventListener("touchmove", onTm, opt);
+    el.addEventListener("pointerdown", onPd, opt);
+    window.addEventListener("pointerup", onPu, opt);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      if (ro) ro.disconnect();
+      el.removeEventListener("scroll", onSc); el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("touchstart", onTs); el.removeEventListener("touchmove", onTm);
+      el.removeEventListener("pointerdown", onPd); window.removeEventListener("pointerup", onPu);
+      document.removeEventListener("keydown", onKey, true);
+      if (p.el === el) p.el = null;
+    };
   }, []);
+  // hiện lại khung (Chrome mất scrollTop khi display:none): dính → đáy, không → đúng chỗ cũ
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || !on) return;
     el.scrollTop = p.scroll.stick ? el.scrollHeight : p.scroll.top;
-  }, [on, items, pd, loaded]);
-  const empty = loaded && !items.length && !pd && !p.actions.value.length;
+  }, [on, loaded]);
   return html`<div class=${"mgr-log" + (empty ? " is-empty" : "")} ref=${ref} hidden=${!on} data-pane=${p.id} aria-label="Dòng trò chuyện">
     ${!loaded ? html`<div class="coord-loading" role="status">${err ? html`<span class="danger-t">${err}</span>` : html`<span class="tx-spin" aria-hidden="true"></span>Đang tải…`}</div>` : null}
     ${empty ? html`<${Empty} p=${p} />` : null}
-    ${items.map((it, i) => html`<${Item} key=${it.id || "i" + i} it=${it} p=${p} />`)}
-    ${p.actions.value.filter((a) => a.kind === "approval").map((a) => html`<${Approval} key=${"ap-" + a.id} a=${a} />`)}
-    ${pd ? html`<${Pending} pd=${pd} />` : null}
+    <div class="coord-flow" ref=${flow}><${Flow} p=${p} /><${PendingSlot} p=${p} /></div>
   </div>`;
 }
 
@@ -419,10 +571,11 @@ function Side({ p }) {
 // ------------------------------------------------------------------ gốc
 export function App() {
   const s = ui.store, p = s.active.value, panes = s.panes.value;
-  const empty = !!p && p.loaded.value && !p.items.value.length && !p.pending.value;
+  const empty = !!p && p.empty.value;
   return html`
     <section class=${"mgr-chat" + (empty ? " is-empty" : "")}>
       <${Header} p=${p} />
+      <${Estop} />
       <${TabBar} />
       <div class="coord-panes">${panes.map((x) => html`<${Pane} key=${x.id} p=${x} on=${x === p} />`)}</div>
       <p class="sr-only" id="mgr-status-live" role="status"></p>

@@ -799,7 +799,21 @@ async def api_status(request: Request) -> Response:
         st = await mgr_state(request)
     except (RpcError, DaemonUnavailable) as e:
         return JSONResponse({"error": str(e)}, status_code=503)
-    return JSONResponse({"manager": manager_json(st)}, headers={"Cache-Control": "no-store"})
+    return JSONResponse({"manager": manager_json(st), "hub": await hub_flags(request)}, headers={"Cache-Control": "no-store"})
+
+
+async def hub_flags(request: Request) -> dict[str, bool]:
+    """ESTOP hub / quản trị cho dải cảnh báo của island — cùng nguồn (đã cache theo phiên) với huy hiệu menu `base.html`."""
+    from .app import nav_badge, session_of
+
+    sess = session_of(request)
+    if sess is None:
+        return {"estop": False, "admin_estop": False}
+    try:
+        b = await nav_badge(request, sess)
+    except (RpcError, DaemonUnavailable, OSError):
+        return {"estop": False, "admin_estop": False}
+    return {"estop": bool(b.get("estop")), "admin_estop": bool(b.get("admin_estop"))}
 
 
 def manager_json(m: dict[str, Any]) -> dict[str, Any]:

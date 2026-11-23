@@ -8,7 +8,7 @@ import { h } from "preact";
 import { useRef, useLayoutEffect } from "preact/hooks";
 import htm from "htm";
 import { LOBBY, addFiles, isImg, humanSize, MAX_TEXT } from "./util.js";
-import { ui, Icon } from "./views.js";
+import { ui, Icon, jumpBottom } from "./views.js";
 
 const html = htm.bind(h);
 const coarse = typeof matchMedia === "function" ? matchMedia("(pointer: coarse)") : null;
@@ -57,10 +57,10 @@ const SUGGEST_WS = [
 
 export function Composer({ p }) {
   const ta = useRef(null), form = useRef(null), fin = useRef(null);
-  const draft = p.draft.value, files = p.files.value, pd = p.pending.value, err = p.sendErr.value;
+  const draft = p.draft.value, files = p.files.value, err = p.sendErr.value;
   const tabs = ui.store.tabs.value;
   const wsTab = p.scope !== LOBBY ? [...tabs.active, ...tabs.closed].find((t) => t.ws === p.scope) : null;
-  const busy = !!(pd && pd.run);
+  const busy = p.busy.value;  // computed: KHÔNG vẽ lại ô nhập mỗi khung hình khi chữ đang chạy
   const canStop = busy && !draft.trim() && !files.length;
   useLayoutEffect(() => { grow(ta.current); }, [p, draft]);
 
@@ -114,6 +114,8 @@ export function Composer({ p }) {
   }
   const sugg = wsTab ? SUGGEST_WS : SUGGEST_LOBBY;
   return html`<div class="composer-wrap">
+    <button type="button" class="mgr-jump" id="mgr-jump" hidden=${!p.jump.value} title="Về tin mới nhất" aria-label="Về tin mới nhất"
+      onClick=${() => jumpBottom(p, true)}><${Icon} n="chev-down" c="sm" /><span>Tin mới nhất</span></button>
     <form method="post" action="/manager/send" class="mgr-form" id="mgr-form" enctype="multipart/form-data" ref=${form}
           onSubmit=${submit} onDragOver=${onDrag} onDrop=${onDrop}>
       <input type="hidden" name="voice" value="" />
