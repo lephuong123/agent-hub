@@ -28,7 +28,8 @@ Chạm file dùng chung (chỉ thêm): `web/app.py` (route, `overview` lấy `mg
   hội thoại hoặc `conversation_id`; Telegram định tuyến theo `channel` (`telegram:<id>`; `web`/`heartbeat` bỏ qua), `kind=notify` không có
   channel → mọi chat nhận thông báo; `ok=false` → tiêu đề "KHÔNG trả lời được" (vẫn trong khung agent vì có thể chứa lỗi do agent sinh).
 - `manager.action{tool, target "kind:id", summary, audit_id, ok, error}` → thẻ trong dòng thời gian (của run thuộc hội thoại) + cột
-  "Hành động gần đây" (mọi run, kể cả nhịp). Lấy lại từ DB bằng `events.query{agent_id, limit 3000}` (lọc type).
+  "Hành động gần đây" (run của luồng đang xem, kể cả nhịp; Sảnh = run không gắn luồng). Lấy lại từ DB bằng
+  `events.query{agent_id, types:["manager.action"], order:"desc", workstream, limit 50}`.
 - `manager.tick*` → htmx làm mới khung trạng thái.
 
 ## 3. An toàn — test chứng minh

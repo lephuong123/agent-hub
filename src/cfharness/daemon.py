@@ -103,7 +103,12 @@ class Daemon:
             "config.get": self._config_get,
             "config.set": self._config_set,
             "events.query": lambda p: [
-                e.to_wire() for e in self.hub.store.query_events(run_id=p.get("run_id"), agent_id=p.get("agent_id"), limit=int(p.get("limit", 10_000)))
+                e.to_wire() for e in self.hub.store.query_events(
+                    run_id=p.get("run_id"), agent_id=p.get("agent_id"), limit=int(p.get("limit", 10_000)),
+                    types=[str(t) for t in p["types"]] if isinstance(p.get("types"), list) else None,
+                    newest_first=p.get("order") == "desc",
+                    manager_workstream=None if p.get("workstream") is None else str(p.get("workstream")),
+                )
             ],
         }
         # M1 luồng B: approval.*, guard.*, notify.*, run.continue|resume, agent.purge (guard/rpc.py)
@@ -226,10 +231,11 @@ class Daemon:
     # ------------------------------------------------------------------ handlers
     def _agent_list(self, p: dict[str, Any]) -> list[dict[str, Any]]:
         rows = self.hub.agents.list(include_archived=bool(p.get("archived")))
+        costs = self.hub.store.cost_today_by_agent()  # một truy vấn GROUP BY thay vì N lần cost_today
         for r in rows:
             live = self.hub.aggregator.agents.get(r["id"])
             r["last_tool"] = live.last_tool if live else None
-            r["cost_today_usd"] = round(self.hub.store.cost_today(r["id"]), 8)
+            r["cost_today_usd"] = round(costs.get(r["id"], 0.0), 8)
         ov = self.hub.guard.sandbox_overrides()  # SEC: nhãn cảnh báo ngoại lệ sandbox cho TUI/web
         trusts = self.hub.guard.trust_all()
         for r in rows:
