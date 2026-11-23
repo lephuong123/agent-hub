@@ -802,7 +802,7 @@ class Daemon:
             for w in list(self._rr_conns):  # client đang giữ kết nối (AsyncHubClient) thấy EOF ngay
                 try:
                     w.close()
-                except Exception:  # best-effort  # pragma: no cover
+                except Exception:  # best-effort: kết nối đã đóng phía client  # pragma: no cover
                     pass
             self._rr_conns.clear()
             self._flush_reads(all_=True)  # A4: ghi nốt phần gộp lượt đọc nhạy cảm

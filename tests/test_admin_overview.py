@@ -285,6 +285,8 @@ async def test_web_page_renders_and_menu_only_for_admin(hub_home, tmp_path, as_a
         page = (await env.client.get("/admin/overview")).text
         assert "Tổng quan máy" in page and f"<code>{ME}</code>" in page and "Sai chủ file" in page
         assert "<script>alert" not in page and "$1.5000" in page
+        from cfharness.web.app import invalidate_nav_badge
+        invalidate_nav_badge(env.app.state.web)  # số menu cache 2 s theo phiên (nav_badge)
         html = (await env.client.get("/costs")).text
         assert 'href="/admin/overview"' in html
     finally:

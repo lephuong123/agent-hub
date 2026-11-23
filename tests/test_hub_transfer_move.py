@@ -421,15 +421,18 @@ async def test_web_banner_when_frozen(hub_home):
 
     from cfharness.hub_freeze import freeze, unfreeze
     from cfharness.runtime import FakeRuntime
+    from cfharness.web.app import invalidate_nav_badge
 
     env = await _start(hub_home, FakeRuntime(ISOLATED))
     try:
         await env.login()
         assert 'id="migrated-banner"' not in (await env.client.get("/costs")).text
         freeze(env.hub, {"export_id": "may-a-20261115-101010", "sha256": "0" * 64, "profile": "full"})
+        invalidate_nav_badge(env.app.state.web)  # banner đi cùng cache số menu 2 s theo phiên (nav_badge)
         html = (await env.client.get("/costs")).text
         assert 'id="migrated-banner"' in html and "may-a-20261115-101010" in html and "cfharness hub unfreeze" in html
         unfreeze(env.hub)
+        invalidate_nav_badge(env.app.state.web)
         assert 'id="migrated-banner"' not in (await env.client.get("/costs")).text
     finally:
         await _stop(env)
