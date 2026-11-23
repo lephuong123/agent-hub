@@ -142,6 +142,7 @@ class WebState:
     dir_limiter: Any = field(default_factory=lambda: _desktop.directory_limiter())
     dir_window: Any = field(default_factory=lambda: _desktop.SuccessWindow())
     perf: _perf_pages.WebPerf = field(default_factory=_perf_pages.WebPerf)  # đo hiệu năng (perf.py, web/perf_pages.py) — chỉ RAM
+    badge_gen: int = 0  # thế hệ cache số trên menu (`nav_badge`): POST của người tăng → mọi phiên hỏi lại daemon
 
     @property
     def public_hosts(self) -> set[str]:
@@ -252,10 +253,17 @@ class GuardMiddleware:
             await resp(scope, receive, send_headers)
             return
         tok = WEB_CLIENT.set(web_client_meta(self.state, scope, headers, host, sid if sess is not None else None, sess))
+        # thao tác của người (POST…) có thể đổi số duyệt/câu hỏi/ESTOP → bỏ cache số trên menu, trước VÀ sau khi xử lý (trang GET chạy
+        # song song lúc POST đang xử lý không giữ số cũ). Beacon hiệu năng không đổi gì.
+        mutating = scope.get("method") not in ("GET", "HEAD", "OPTIONS") and path != _perf_pages.BEACON_PATH
+        if mutating:
+            invalidate_nav_badge(self.state)
         try:
             await self.app(scope, receive, send_headers)
         finally:
             WEB_CLIENT.reset(tok)
+            if mutating:
+                invalidate_nav_badge(self.state)
 
 
 # L3 (plan-logging.md A2): metadata client của yêu cầu đang xử lý → `params._client` của mọi RPC (AsyncHubClient cred="web"). CHỈ băm
@@ -374,6 +382,17 @@ async def rpc(request: Request, method: str, params: dict[str, Any] | None = Non
     return res
 
 
+async def gather_ordered(*aws: Awaitable[Any]) -> list[Any]:
+    """Chạy các lời gọi ĐỘC LẬP đồng thời (asyncio.gather) nhưng giữ ngữ nghĩa lỗi của bản tuần tự: chờ TẤT CẢ xong rồi ném lỗi của
+    lời gọi đầu tiên (theo thứ tự đối số) bị lỗi — không phải lỗi nào tới trước. Mỗi task chép contextvar của request → `perf.CURRENT`
+    (cùng một `ReqTiming`) và `WEB_CLIENT` vẫn đúng; `rpc;dur` trong Server-Timing khi đó là TỔNG thời gian các RPC (có thể > `app`)."""
+    res = await asyncio.gather(*aws, return_exceptions=True)
+    for r in res:
+        if isinstance(r, BaseException):
+            raise r
+    return list(res)
+
+
 def err_text(e: Exception) -> str:
     if isinstance(e, RpcError):
         msg = e.message
@@ -391,26 +410,59 @@ def err_text(e: Exception) -> str:
     return str(e)
 
 
+NAV_BADGE_TTL_S = 2.0  # chuyển tab liên tục không hỏi lại daemon; số đếm/ESTOP trễ tối đa 2 s (POST của người → làm mới ngay)
+NAV_BADGE_KEY = "_nav_badge"
+
+
+async def _nav_badge_core(request: Request) -> dict[str, Any]:
+    """approval.list + estop.get + question.list + hub.frozen — 4 lời gọi độc lập, chạy đồng thời. Lỗi (RpcError/daemon dừng/OSError)
+    của một trong ba cái đầu → `{"down": True}` như trước; `hub.frozen` thiếu (daemon cũ) → None."""
+
+    async def _frozen() -> Any:
+        try:  # chuyển nhà (hub_freeze.py): banner "đã chuyển sang máy khác" — daemon cũ chưa có method thì bỏ qua
+            return ((await rpc(request, "hub.frozen")) or {}).get("migrated_to")
+        except RpcError:
+            return None
+
+    try:
+        pend, es, qs, migrated = await gather_ordered(rpc(request, "approval.list", {"limit": 500}), rpc(request, "estop.get"),
+                                                      questions(request, "open"), _frozen())
+    except (RpcError, DaemonUnavailable, OSError):
+        return {"down": True}
+    return {"approvals": len(pend or []), "waiting_human": sum(1 for a in pend or [] if a.get("status") == "waiting_human"),
+            "estop": bool((es or {}).get("on")), "admin_estop": bool((es or {}).get("admin")), "questions": len(qs),
+            "migrated_to": migrated}
+
+
+async def nav_badge(request: Request, sess: Session) -> dict[str, Any]:
+    """Số trên menu cho mọi trang. Cache NAV_BADGE_TTL_S theo PHIÊN (`Session.extra`, chỉ RAM — phiên khác không dùng chung) và theo
+    `WebState.badge_gen` (mọi POST của người tăng → bỏ cache, xem GuardMiddleware). Không cache trạng thái "daemon dừng" (lên lại là
+    thấy ngay). Mục admin/hộp việc chỉ hỏi khi daemon chạy (chúng tự cache 60 s / 30 s)."""
+    st = ws(request)
+    now = time.monotonic()
+    hit = sess.extra.get(NAV_BADGE_KEY)
+    if hit and hit[1] == st.badge_gen and now - hit[0] < NAV_BADGE_TTL_S:
+        return dict(hit[2])
+    gen = st.badge_gen
+    badge = await _nav_badge_core(request)
+    if badge.get("down"):
+        sess.extra.pop(NAV_BADGE_KEY, None)
+        return badge
+    adm, inbox = await gather_ordered(_admin_pages.nav_badges(request), _inbox_pages.badge(request))
+    badge.update(adm)
+    badge.update(inbox)
+    sess.extra[NAV_BADGE_KEY] = (now, gen, dict(badge))
+    return badge
+
+
+def invalidate_nav_badge(state: "WebState") -> None:
+    state.badge_gen += 1
+
+
 async def render(request: Request, name: str, ctx: dict[str, Any] | None = None, status: int = 200) -> Response:
     st = ws(request)
     sess = session_of(request)
-    badge: dict[str, Any] = {}
-    if sess is not None:
-        try:
-            pend = await rpc(request, "approval.list", {"limit": 500})
-            es = await rpc(request, "estop.get")
-            badge = {"approvals": len(pend or []), "waiting_human": sum(1 for a in pend or [] if a.get("status") == "waiting_human"),
-                     "estop": bool((es or {}).get("on")), "admin_estop": bool((es or {}).get("admin")),
-                     "questions": len(await questions(request, "open"))}
-            try:  # chuyển nhà (hub_freeze.py): banner "đã chuyển sang máy khác" — daemon cũ chưa có method thì bỏ qua
-                badge["migrated_to"] = ((await rpc(request, "hub.frozen")) or {}).get("migrated_to")
-            except RpcError:
-                badge["migrated_to"] = None
-        except (RpcError, DaemonUnavailable, OSError):
-            badge = {"down": True}
-        if not badge.get("down"):
-            badge.update(await _admin_pages.nav_badges(request))
-            badge.update(await _inbox_pages.badge(request))
+    badge: dict[str, Any] = await nav_badge(request, sess) if sess is not None else {}
     base = {"csrf": sess.csrf if sess else "", "flashes": sess.pop_flashes() if sess else [], "badge": badge, "nav": "", "htmx": HTMX,
             "path": request.url.path}
     return st.templates.TemplateResponse(request, name, {**base, **(ctx or {})}, status_code=status)
