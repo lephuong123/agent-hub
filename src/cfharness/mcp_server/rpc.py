@@ -53,6 +53,7 @@ MUTATING = frozenset(
         "team.create", "team.update", "team.member_set", "team.member_rm", "team.archive", "team.restore", "team.estop",
         "task.create", "task.comment", "task.block", "task.unblock", "task.retry", "task.archive", "task.reassign", "task.link",
         "run.revert", "agent.clone", "agent.export", "agent.import", "mcp.team_run",
+        "workspace.unlock",  # workspace-parallel A (B3): người gỡ khoá repo
         # M4-A (learning/rpc.py)
         "learn.signal_add", "learn.refine", "learn.review_cancel", "learn.propose", "learn.retry", "learn.rollback", "learn.policy_set", "knowledge.pin",
         # M5-A

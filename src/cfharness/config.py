@@ -93,8 +93,15 @@ DEFAULTS: dict[str, Any] = {
         "python": None,
         # gọi `git` để biết thay đổi chưa commit / nhánh đã push (FR-SG-01 nhóm Git)
         "git_probe": True,
-        # khoá ghi theo thư mục dir: (bản tối thiểu M1; FR-RT-12 đầy đủ ở M3)
+        # khoá ghi theo repo (FR-RT-12): `repo` (true, mặc định) = một session ghi mỗi repo; `files` = nhiều session cùng repo, khoá
+        # theo FILE (lease trong guard.check, Bash đổi trạng thái chung cần độc quyền — guard/leases.py); `off` (false) = không khoá
         "repo_lock": True,
+        # chế độ files: dấu độc quyền cả repo của một lệnh Bash (git checkout/pull, npm install…) tự hết hạn sau ngần này giây nếu
+        # PostToolUse không về (hook quan sát fail-open)
+        "lease_exclusive_ttl_s": 600,
+        # run `waiting_human` giữ khoá repo tối đa ngần này giây (4 giờ) rồi nhả; resume sau đó xin lại khoá + kiểm file bị sửa
+        # (`resume_conflicts`). null = giữ tới khi có người quyết (như cũ)
+        "lock_waiting_ttl_s": 14400,
         # lớp tĩnh --disallowedTools cho mẫu luôn-phá-huỷ (CLI tự chặn nếu hook không chạy)
         "static_disallowed_tools": [
             "Bash(git push --force:*)",
@@ -563,6 +570,9 @@ DEFAULTS: dict[str, Any] = {
     # MỌI connector tài khoản `claude /login` của user OS đã Connect (Google Drive, Gmail…) — agent ghi bằng tài khoản thật. BẬT mặc
     # định từ v0.2.26 (chủ repo chốt 2026-11-20); chỉ có tác dụng khi user OS có phiên /login. Tắt: `config set connectors.auto false`
     "connectors": {"auto": True},
+    # Khối system prompt do hub chèn (prompt.py). `workspace_rules`: rule chung về workspace/git (worktree hub cấp vs checkout chính) cho
+    # MỌI run có workspace ghi — SOUL là bản sao theo máy nên rule chung phải nằm trong code (docs/dev-notes/workspace-parallel.md §C)
+    "prompt": {"workspace_rules": True},
     # M5-B — FR-OB-07: OpenTelemetry (opt-in, tắt mặc định). Chỉ metadata; không input/output tool MCP, không secret.
     "telemetry": {
         "otel": {
@@ -774,6 +784,17 @@ DEFAULTS: dict[str, Any] = {
         "checkpoint": True,  # FR-RT-12: checkpoint + diff cho run ghi vào workspace dir
         "max_file_bytes": 5_000_000,  # file lớn hơn: chỉ lưu hash (không revert được)
         "max_files": 20_000,
+        # Luồng B (docs/dev-notes/workspace-parallel.md): phụ thuộc node của worktree hub tạo — link (package.json + lockfile giống hệt repo
+        # chính → liên kết node_modules của repo chính), install (agent tự `npm ci`), none (không làm gì)
+        "deps": "link",
+        # Luồng D (docs/dev-notes/workspace-parallel.md §D): tự cô lập task con của task gốc tách việc vào worktree riêng (nhánh
+        # `cfh/<gốc>/<task>` tách từ nhánh tích hợp `cfh/<gốc>/integration`) rồi ghép lại khi xong. never = như cũ (task cùng repo
+        # chờ khoá); auto = khi lead yêu cầu (`isolate`) hoặc repo đang có task mở khác cùng khoá; always = mọi task con ghi trên repo git.
+        # Team ghi đè bằng `policies.isolate`, task bằng `workspace.isolate` (false = không cô lập task đó).
+        "isolate": "auto",
+        # fast_forward: task gốc xong → fast-forward nhánh base ở checkout chính tới nhánh tích hợp, CHỈ khi checkout chính sạch và
+        # đang ở base. Mặc định false: hub để nguyên nhánh tích hợp (không push, không đụng nhánh của người) và báo trong kết quả.
+        "integrate": {"fast_forward": False},
     },
     "bus": {
         "ring_events": 2000,  # FR-OB-01 [ĐỀ XUẤT]
@@ -1077,6 +1098,15 @@ def validate_setting(key: str, value: Any) -> None:
         from .fileview import validate_setting as _validate_files
 
         _validate_files(key, value)
+    if key in ("guard", "guard.repo_lock"):  # workspace-parallel E: repo | files | off (true/false cũ vẫn nhận)
+        from .guard.locks import validate_repo_lock
+
+        if key == "guard.repo_lock":
+            validate_repo_lock(value)
+        elif isinstance(value, dict) and "repo_lock" in value:
+            validate_repo_lock(value["repo_lock"])
+    if key == "guard.lease_exclusive_ttl_s" and (isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0):
+        raise ValueError("guard.lease_exclusive_ttl_s phải là số giây > 0")
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")
@@ -1093,6 +1123,12 @@ def validate_setting(key: str, value: Any) -> None:
         from .confine import validate_setting as _validate_confine
 
         _validate_confine(key, value)
+    if key == "workspace.deps" and value not in ("link", "install", "none"):
+        raise ValueError("workspace.deps chỉ nhận 'link', 'install' hoặc 'none'")
+    if key == "workspace.isolate" and value not in ("never", "auto", "always"):
+        raise ValueError("workspace.isolate chỉ nhận 'never', 'auto' hoặc 'always'")
+    if key == "workspace.integrate.fast_forward" and not isinstance(value, bool):
+        raise ValueError("workspace.integrate.fast_forward phải là true/false")
     if key == "guard.trust_new_agents" and value not in ("off", "full"):
         raise ValueError("guard.trust_new_agents chỉ nhận 'off' hoặc 'full'")
     if key == "notify.reminder_max_count":

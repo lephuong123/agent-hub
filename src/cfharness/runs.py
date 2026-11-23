@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any
 from .aiotasks import spawn
 from .agents import load_mcp_registry
 from .cost_guard import COST_BASIS_ESTIMATED, estimated_run_cost, flag_once, manager_budget_scope
-from .errors import Blocked, HubError, NotFound
+from .errors import Blocked, Conflict, HubError, NotFound
 from .events import TERMINAL_RUN_EVENTS, HubEvent, make_event
 from .logs import run_logger, set_run_context
 from .trace import ENV_REQ_ID, REQ_CTX, current_req_id, new_req_id, set_ctx as set_trace_ctx, valid_req_id
@@ -81,7 +81,8 @@ class ActiveRun:
     deadline: float | None = None  # loop.time() hết max_runtime_s
     clock_paused_at: float | None = None
     holds: int = 0
-    lock_key: str | None = None
+    lock_key: str | None = None  # khoá chính (cwd của run)
+    lock_keys: list[str] = field(default_factory=list)  # MỌI khoá run giữ: khoá cwd + mỗi extra_write_roots (B4)
     static_deny: list[str] = field(default_factory=list)
     # M3
     task_id: str | None = None
@@ -449,14 +450,14 @@ class RunManager:
             if agent["status"] == "paused" or (not is_review and agent_limit and self.running_count(agent["id"], exclude_kind="review") >= int(agent_limit)):
                 skipped.append(rid)
                 continue
-            lock_key = self._lock_key(run, agent)
+            lock_key, lock_keys = self.lock_keys(run, agent)
             # H-21: GIỮ khoá repo ĐỒNG BỘ ngay trong tick, trước create_task — task/run khác trong cùng tick (dispatcher)
             # thấy khoá ngay, không spawn rồi chết `workspace_locked` (run waiting_human vẫn giữ khoá theo session)
-            if not self.locks.try_acquire(lock_key, run["session_id"], rid):
+            if not self.locks.try_acquire_many(lock_keys, run["session_id"], rid):
                 skipped.append(rid)
                 continue
             ar = ActiveRun(rid, agent["id"], task_id=run.get("task_id"), team_id=run.get("team_id"), kind=run.get("kind") or "adhoc")
-            ar.lock_key = lock_key
+            ar.lock_key, ar.lock_keys = lock_key, lock_keys
             self.active[rid] = ar
             ar.task = asyncio.get_event_loop().create_task(self._run(ar, run, agent), name=f"run:{ar.run_id}")
             ar.task.add_done_callback(lambda _t, ar=ar, sid=run["session_id"]: self._release_unstarted(ar, sid))
@@ -802,6 +803,7 @@ class RunManager:
             json_schema=opts.get("json_schema") or agent.get("result_schema"),  # M3 FR-RT-14
             agents_json=agent.get("subagents") or None,  # M3 FR-RT-13
             worktree=opts.get("worktree") if wkind == "worktree" else None,
+            cwd_main_checkout=wkind == "worktree" and _main_checkout(cwd),
             no_session_persistence=bool(opts.get("no_session_persistence")),  # M4-B: run eval
             isolation_overrides=(conn or {}).get("isolation_overrides"),
             allowed_mcp_prefixes=(conn or {}).get("allowed_mcp_prefixes"),
@@ -916,42 +918,59 @@ class RunManager:
         if ar.entered:
             return
         try:
-            self.locks.release(ar.lock_key, session_id)
+            self.locks.release_many(ar.lock_keys or [ar.lock_key], session_id, reason="not_started")
         except Exception:  # pragma: no cover - store đã đóng khi tắt
             pass
         self.active.pop(ar.run_id, None)
 
-    def lock_pending(self, key: str | None, session_id: str | None) -> bool:
-        """Có run ĐANG XẾP HÀNG (chưa khởi chạy) sẽ lấy khoá `key` cho session khác không — dispatcher không submit thêm
-        run ghi cùng repo (H-21: task thứ hai chờ `workspace_locked` mà không có run nào)."""
-        if key is None:
-            return False
+    def lock_pending(self, key: str | list[str] | None, session_id: str | None) -> bool:
+        """Có run ĐANG XẾP HÀNG (chưa khởi chạy) sẽ lấy khoá xung đột với `key` (một khoá hoặc danh sách) cho session khác không —
+        dispatcher không submit thêm run ghi cùng repo (H-21: task thứ hai chờ `workspace_locked` mà không có run nào)."""
+        keys = [k for k in ([key] if isinstance(key, str) or key is None else key) if k]
+        if not keys or self.locks.default_mode() == "shared":
+            return False  # luồng E (`guard.repo_lock: files`): run giữ khoá CHIA SẺ — run xếp hàng không chặn nhau
         for rid in self.queue:
             r = self.store.get_run(rid)
             if r is None or r["status"] != "queued" or r.get("session_id") == session_id:
                 continue
             ag = self.store.get_agent(r["agent_id"])
-            if ag is not None and self._lock_key(r, ag) == key:
+            if ag is None:
+                continue
+            if any(self.locks.conflicts(k, q) for q in self.lock_keys(r, ag)[1] for k in keys):
                 return True
         return False
 
     def _lock_key(self, run: dict[str, Any], agent: dict[str, Any]) -> str | None:
-        if not self.hub.config.get("guard.repo_lock"):
-            return None
-        if (run.get("run_opts") or {}).get("read_only") or _agent_read_only(agent):
-            return None  # FR-RT-12: run chỉ đọc không bị khoá
-        lane = (run.get("run_opts") or {}).get("filehub_lane")
+        return self.lock_keys(run, agent)[0]
+
+    def lock_keys(self, run: dict[str, Any], agent: dict[str, Any] | None) -> tuple[str | None, list[str]]:
+        """(khoá chính = khoá cwd, MỌI khoá) của run — HÀM DUY NHẤT tính khoá (B1), dùng ở `tick`/`_run`, `lock_pending`,
+        `TaskDispatcher._lock_block` (task → `workspace.task_lock_target`) và `TaskService._same_lock_tasks`. Khoá theo
+        `WorkspaceLocks.keys_for`: cwd (kind `worktree` → thư mục worktree của `claude --worktree`, không khoá repo chính) + mỗi
+        `extra_write_roots` (B4). `agent` None = không biết agent (chỉ xét workspace của run)."""
+        from .guard.locks import repo_lock_mode
+
+        if repo_lock_mode(self.hub.config) == "off":
+            return None, []
+        opts = run.get("run_opts") or {}
+        if opts.get("read_only") or (agent is not None and _agent_read_only(agent)):
+            return None, []  # FR-RT-12: run chỉ đọc không bị khoá
+        lane = opts.get("filehub_lane")
         if isinstance(lane, dict) and lane.get("server") and lane.get("root"):  # cổng cfharness: khoá = GỐC thư mục chung trên server
             from .filehub.lane.service import lock_key
 
-            return lock_key(str(lane["server"]), str(lane["root"]))
-        if run.get("cwd"):
-            if _in_agent_workspaces(Path(run["cwd"]), Path(agent["home_path"])):
-                return None  # M7: scratch cố định của agent (hội thoại manager) — không phải repo người
-            return self.locks.key_for(run["cwd"], "dir")
-        if agent.get("workspace_default"):
-            return self.locks.key_for(agent["workspace_default"], "dir")
-        return None
+            k = lock_key(str(lane["server"]), str(lane["root"]))
+            return k, [k]
+        extra = [str(x) for x in (opts.get("extra_write_roots") or []) if x]
+        cwd, kind = run.get("cwd"), ("worktree" if opts.get("workspace_kind") == "worktree" else "dir")
+        if cwd:
+            if agent is not None and _in_agent_workspaces(Path(cwd), Path(agent["home_path"])):
+                cwd = None  # M7: scratch cố định của agent (hội thoại manager) — không phải repo người
+        elif agent is not None and agent.get("workspace_default"):
+            cwd, kind = agent["workspace_default"], "dir"
+        primary = self.locks.keys_for(cwd, kind, worktree=opts.get("worktree")) if cwd else []
+        keys = self.locks.keys_for(cwd, kind, worktree=opts.get("worktree"), extra_write_roots=extra)
+        return (primary[0] if primary else None), keys
 
     async def _check_cli_version(self, runtime: AgentRuntime, agent_id: str, run_id: str) -> str | None:
         v = await asyncio.to_thread(runtime.version)
@@ -1003,9 +1022,10 @@ class RunManager:
         lane_run = False
         ar.entered = True
         try:
-            ar.lock_key = ar.lock_key or self._lock_key(run, agent)  # đã đặt chỗ trong tick (H-21); cùng session → kế thừa
-            if not self.locks.try_acquire(ar.lock_key, run["session_id"], run_id):
-                raise HubError(f"thư mục {ar.lock_key} đang bị khoá bởi run khác (workspace_locked)")
+            if not ar.lock_keys:  # đã đặt chỗ trong tick (H-21); cùng session → kế thừa
+                ar.lock_key, ar.lock_keys = self.lock_keys(run, agent)
+            if not self.locks.try_acquire_many(ar.lock_keys, run["session_id"], run_id):
+                raise HubError(f"thư mục {', '.join(ar.lock_keys)} đang bị khoá bởi run khác (workspace_locked)")
             runtime = self.runtime()
             ar.runtime = runtime
             if agent.get("mcp_servers"):
@@ -1114,7 +1134,7 @@ class RunManager:
                     pass
             final = self.store.get_run(run_id) or {}
             if final.get("status") != "waiting_human":
-                self.locks.release(ar.lock_key, run.get("session_id"))
+                self.locks.release_many(ar.lock_keys or [ar.lock_key], run.get("session_id"))
             ar.done.set()
             w = self.waiters.pop(run_id, None)
             if w:
@@ -1146,15 +1166,22 @@ class RunManager:
 
     async def _checkpoint(self, ar: ActiveRun, run: dict[str, Any], spec: RunSpec) -> None:
         """FR-RT-12: checkpoint trước run ghi vào repo thật (workspace dir, không chỉ đọc). Không commit/stash."""
-        if spec.workspace_kind != "dir" or not self.hub.config.get("workspace.checkpoint") or ar.lock_key is None:
+        if spec.workspace_kind not in ("dir", "worktree") or not self.hub.config.get("workspace.checkpoint") or ar.lock_key is None:
             return
         if (run.get("run_opts") or {}).get("filehub_lane"):
             return  # cổng cfharness: diff dựng từ nhật ký thao tác đã đẩy (filehub/lane/workdir.ops), không chụp/walk cây
         from .workspace import take_checkpoint
 
+        target: str | Path = spec.cwd
+        if spec.workspace_kind == "worktree":
+            # B2: kind `worktree` (claude --worktree): checkpoint/diff trên THƯ MỤC WORKTREE (= khoá chính) khi đã tồn tại (resume/
+            # retry); lượt đầu CLI mới tạo worktree lúc chạy → chưa có gì để chụp (không checkpoint repo chính)
+            if not Path(ar.lock_key).is_dir():
+                return
+            target = ar.lock_key
         wc = self.hub.config.get("workspace")
         try:
-            cp = await asyncio.to_thread(take_checkpoint, spec.cwd, self.checkpoint_dir(ar.run_id), max_file_bytes=int(wc["max_file_bytes"]), max_files=int(wc["max_files"]))
+            cp = await asyncio.to_thread(take_checkpoint, target, self.checkpoint_dir(ar.run_id), max_file_bytes=int(wc["max_file_bytes"]), max_files=int(wc["max_files"]))
         except Exception as e:  # checkpoint lỗi không chặn run, nhưng ghi lại (không revert được)
             run_logger(log, ar.run_id, ar.agent_id).warning("checkpoint run %s lỗi: %r", ar.run_id, e, exc_info=True)
             self.store.update_run(ar.run_id, {"checkpoint": {"kind": "error", "error": repr(e)[:300]}, "workspace_key": ar.lock_key})
@@ -1175,7 +1202,9 @@ class RunManager:
 
         ar.diff_done = True
         try:
-            diff = await asyncio.to_thread(compute_diff, ar.checkpoint, self.checkpoint_dir(ar.run_id), max_file_bytes=int(self.hub.config.get("workspace.max_file_bytes")))
+            paths = self._lease_scope(ar)
+            diff = await asyncio.to_thread(compute_diff, ar.checkpoint, self.checkpoint_dir(ar.run_id), max_file_bytes=int(self.hub.config.get("workspace.max_file_bytes")),
+                                           paths=paths)
         except Exception as e:
             run_logger(log, ar.run_id, ar.agent_id).warning("diff run %s lỗi: %r", ar.run_id, e, exc_info=True)
             self.store.update_run(ar.run_id, {"diff": {"kind": "error", "error": repr(e)[:300]}})
@@ -1184,6 +1213,18 @@ class RunManager:
         ev = make_event("workspace.diff", ar.agent_id, {"kind": diff["kind"], "stat": diff.get("stat"), "files": [f"{f['status']}:{f['path']}" for f in diff.get("files", [])[:50]], "revertible": diff.get("revertible"), "commits_made": diff.get("commits_made")}, run_id=ar.run_id)
         ev.task_id, ev.team_id = ar.task_id, ar.team_id
         self.hub.publish(ev)
+
+    def _lease_scope(self, ar: ActiveRun) -> list[str] | None:
+        """B7 (luồng E): chế độ `guard.repo_lock: files` → diff của run chỉ gồm file session của run đã lease trong repo của checkpoint
+        (nhiều session cùng ghi checkout). None = chế độ repo (mọi thay đổi là của run)."""
+        from .guard.locks import norm_key
+
+        if self.locks.mode() != "files" or self.locks.leases is None or ar.checkpoint is None or ar.checkpoint.get("kind") != "git":
+            return None
+        run = self.store.get_run(ar.run_id) or {}
+        root = ar.checkpoint.get("root")
+        key = next((k for k in self.locks.list_shared() if root and norm_key(k) == norm_key(str(root))), None) or ar.lock_key or root
+        return self.locks.leases.paths_for(run.get("session_id"), str(key)) if key else []
 
     def _on_timeout(self, ar: ActiveRun) -> None:
         ar.timed_out = True
@@ -1711,6 +1752,22 @@ class RunManager:
             + "\n".join(lines)
             + "\nThen continue the original task from where you stopped and finish with a short summary."
         )
+        lost = self._lost_locks(run)
+        if lost:
+            # B3: khoá đã bị gỡ trong lúc chờ (quá guard.lock_waiting_ttl_s / gỡ tay) — session khác có thể đã sửa repo: file của
+            # run bị sửa tiếp → không resume (như recovery); còn lại resume bình thường, run mới xin lại khoá trong tick
+            from .workspace import resume_conflicts
+
+            changed = resume_conflicts(run)
+            if changed:
+                err = (f"không resume sau khi duyệt: khoá {', '.join(lost)} đã bị gỡ trong lúc chờ và {len(changed)} file của run đã bị "
+                       f"sửa tiếp ({', '.join(changed[:5])})")
+                self.store.update_run(run_id, {"status": "failed", "outcome": "failed", "error": err, "ended_at": run.get("ended_at") or now_iso()})
+                self.locks.release_session(run.get("session_id"))
+                self.hub.publish(make_event("error", run["agent_id"], {"code": "workspace_changed", "message": err, "files": changed[:20]}, run_id=run_id))
+                self.hub.publish(make_event("run.failed", run["agent_id"], {"outcome": "failed", "error": err}, run_id=run_id, session_id=run.get("session_id")))
+                self._set_agent_after(run["agent_id"], run_id, "failed")
+                return None
         ticket = next((a["id"] for a in decided if a["status"] == "allowed"), None)
         # Người vừa quyết → lượt chạy tiếp không bị trần NGÀY chặn (không thì quyết định của người thành vô ích). Chỉ khi
         # MỌI quyết định là của người: điều phối viên (`manager:*`) / hub tự quyết không được miễn.
@@ -1742,6 +1799,67 @@ class RunManager:
             self.hub.approvals._update(a["id"], {"resume_run_id": new["id"]})
         self.hub.publish(make_event("run.resumed", run["agent_id"], {"from_run_id": run_id, "run_id": new["id"], "reason": "approval", "ticket": ticket}, run_id=run_id, session_id=run["session_id"]))
         return new
+
+    def unlock(self, *, path: str | None = None, key: str | None = None, force: bool = False) -> dict[str, Any]:
+        """B3: NGƯỜI gỡ khoá repo (RPC `workspace.unlock`, HUMAN_ONLY). `key` = khoá như `workspace.locks` liệt kê; `path` = thư
+        mục (tính khoá như run `dir`, hoặc khớp trực tiếp một khoá đang giữ). Session giữ khoá còn run ĐANG CHẠY (`queued|running`)
+        → từ chối trừ khi `force` (run đó vẫn chạy và có thể ghi tiếp — người tự chịu). Run `waiting_human` giữ khoá: gỡ được, lúc
+        resume run xin lại khoá + kiểm file bị sửa (`resume_conflicts`)."""
+        from .auth import require_human
+        from .guard.locks import norm_key
+
+        require_human("gỡ khoá workspace")
+        if not key and not path:
+            raise HubError("cần path hoặc key", code=-32602)
+        held = dict(self.locks.list())
+        for k, hs in self.locks.list_shared().items():  # luồng E: khoá chia sẻ — gỡ = gỡ mọi người giữ (+ lease của họ)
+            if k not in held and hs:
+                sid0, h0 = next(iter(hs.items()))
+                held[k] = {**h0, "session_id": sid0, "sessions": list(hs)}
+        cand: list[str] = []
+        if key:
+            cand.append(str(key))
+        if path:
+            cand.append(str(path))
+            try:
+                k = self.locks.key_for(str(path), "dir")
+            except Exception:  # best-effort: không tính được khoá (filehub lỗi…) → chỉ khớp đúng đường dẫn đã cho
+                k = None
+            if k:
+                cand.append(k)
+        idx = {norm_key(k): k for k in held}
+        hit = next((idx[norm_key(c)] for c in cand if norm_key(c) in idx), None)
+        if hit is None:
+            raise NotFound(f"không có khoá nào cho {key or path} (xem `cfharness workspace locks`)")
+        h = held[hit]
+        sids = [x for x in (h.get("sessions") or [h.get("session_id")]) if x]
+        busy = self.store.conn.execute(
+            f"SELECT id, status FROM runs WHERE session_id IN ({','.join('?' * len(sids))}) AND status IN ('queued','running') "
+            "ORDER BY queued_at DESC LIMIT 1", tuple(sids)
+        ).fetchone() if sids else None
+        if busy is not None and not force:
+            raise Conflict(f"khoá {hit} đang được run {busy[0]} ({busy[1]}) giữ — dừng run trước (`cfharness stop {busy[0]}`) "
+                           "hoặc thêm --force (run vẫn chạy và có thể ghi tiếp)", data={"key": hit, "run_id": busy[0], "status": busy[1]})
+        old = self.locks.force_release(hit, reason="manual_force" if busy is not None else "manual")
+        self.tick()
+        try:
+            self.hub.dispatcher.kick()
+        except Exception:  # pragma: no cover - hub không có dispatcher (test tối thiểu)
+            pass
+        return {"key": hit, "released": old, "forced": busy is not None, "running_run_id": busy[0] if busy is not None else None}
+
+    def _lost_locks(self, run: dict[str, Any]) -> list[str]:
+        """Khoá của run `waiting_human` mà session của nó không còn giữ (đã bị gỡ do TTL/gỡ tay)."""
+        ag = self.store.get_agent(run["agent_id"])
+        if ag is None:
+            return []
+        held = self.locks.list()
+        sid = run.get("session_id")
+        from .guard.locks import norm_key
+
+        mine = {norm_key(k) for k, h in held.items() if h.get("session_id") == sid}
+        mine |= {norm_key(k) for k, hs in self.locks.list_shared().items() if sid in hs}  # luồng E: khoá chia sẻ
+        return [k for k in self.lock_keys(run, ag)[1] if norm_key(k) not in mine]
 
     def _day_exhausted(self, agent_id: str, team_id: str | None) -> bool:
         """Có scope ngày (ngoài `admin`) đã hết hoặc đang bị giữ chỗ hết → lượt vừa tạo thực sự dùng miễn trừ (để ghi audit)."""
@@ -1843,6 +1961,15 @@ def _poppler_path_extra(hub: Any) -> list[str]:
     except Exception:  # best-effort: không bao giờ làm hỏng spawn vì phần phụ này
         log.debug("không đọc được tools.poppler_path", exc_info=True)
         return []
+
+
+def _main_checkout(cwd: Path) -> bool:
+    from .workspace import is_main_checkout
+
+    try:
+        return is_main_checkout(cwd)
+    except Exception:  # pragma: no cover - không xác định được → coi như checkout chính (an toàn: không bypass)
+        return True
 
 
 def _agent_read_only(agent: dict[str, Any]) -> bool:

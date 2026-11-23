@@ -1,6 +1,7 @@
 """Lắp khối system prompt của agent (FR-RT-10).
 
-Thứ tự ổn định (để giữ prompt cache): (1) quy ước hub (+ khối đọc PDF khi máy không có pdftoppm — `pdf_support.py`, + khối trình duyệt Claude in Chrome theo `tool_policy.browser`) → (2) SOUL → (3) charter team (hardening H-15: run có `team_id`;
+Thứ tự ổn định (để giữ prompt cache): (1) quy ước hub (+ khối đọc PDF khi máy không có pdftoppm — `pdf_support.py`, + khối trình duyệt Claude in Chrome theo `tool_policy.browser`,
++ thư mục chung, + "Workspace rules" theo ngữ cảnh workspace của run — `workspace_rules_block`, thắng rule worktree cũ trong SOUL) → (2) SOUL → (3) charter team (hardening H-15: run có `team_id`;
 trước đây nằm trong tin nhắn user) → (3b) `RESPONSE_STYLE` (cách trình bày câu trả lời kiểu Claude chat; đặt SAU SOUL để thắng các SOUL cũ
 còn bảo nêu task id, TRƯỚC khối tri thức để phần đầu ổn định) → (3c) danh sách lệnh CLI (CHỈ điều phối viên, `manager/cli_ref.py`) → (4) memory global/team/agent → (5) chỉ mục skill + (6) hướng dẫn đọc skill qua
 `skill_view` (M4, `knowledge/prompt_blocks.py`). Charter ổn định theo (agent, team) → hash ổn định giữa các run cùng team.
@@ -86,9 +87,62 @@ def shared_folder_block(folders: list[Any]) -> str:
             "- Never create, edit or delete `.tangthu*` files (old sync metadata).")
 
 
+WORKSPACE_RULES_HEADER = """# Workspace rules
+These rules come from cfharness and take precedence over any conflicting instruction in your Persona (SOUL) below
+(for example "never use git worktrees" or "always work in the main checkout")."""
+
+
+def workspace_rules_block(ctx: dict[str, Any] | None) -> str:
+    """Khối "Workspace rules" (tiếng Anh) theo ngữ cảnh workspace của run (docs/dev-notes/workspace-parallel.md §C) — THUẦN.
+
+    `ctx` (do `learning.runtime.workspace_context` dựng; None/rỗng → ""):
+    - `worktree`: metadata worktree hub cấp (`workspace.worktree` của task: branch, base, repo, deps{mode, needs_install}) hoặc
+      `{}` khi run dùng `claude --worktree` (kind `worktree` cũ, không có metadata) → ngữ cảnh (a) cô lập;
+    - `checkout`: `"cwd"` khi cwd là checkout git dùng chung, `"extra"` khi chỉ các `extra_write_roots` là repo git → ngữ cảnh (b);
+      `locked`: hub giữ khoá repo độc quyền (`guard.repo_lock: repo`); `file_leases`: chế độ `files` (lease theo file, luồng E).
+    Không chứa đường dẫn/id run → ngữ cảnh (b) ổn định giữa các run (giữ prompt cache); (a) đổi theo nhánh của task."""
+    if not ctx:
+        return ""
+    lines: list[str] = []
+    wt = ctx.get("worktree")
+    if isinstance(wt, dict):
+        branch, base = wt.get("branch"), wt.get("base")
+        if branch:
+            lines.append(f"- Your working directory is a git worktree cfharness created for this task: branch `{branch}`"
+                         + (f", based on `{base}`" if base else "") + ". It is isolated from other agents' work.")
+            lines.append(f"- Commit your work on `{branch}`. Do not checkout or switch to another branch, and do not create more worktrees.")
+        else:
+            lines.append("- Your working directory is a git worktree created for this task, isolated from other agents' work. Commit on its "
+                         "current branch; do not checkout or switch to another branch, and do not create more worktrees.")
+        deps = wt.get("deps") if isinstance(wt.get("deps"), dict) else {}
+        if deps.get("needs_install"):
+            lines.append("- Dependencies are not installed in this worktree: run `npm ci` before building or testing.")
+        elif deps.get("mode") == "link":
+            lines.append("- `node_modules` here is a link to the main checkout's folder: never delete, move or reinstall it.")
+    if ctx.get("checkout"):
+        where = "Your working directory is" if ctx["checkout"] == "cwd" else "The extra write folders granted to this task may be"
+        lines.append(f"- {where} a git checkout that other agents and people also use"
+                     + (" (cfharness holds the repo lock for this run, so others wait — keep the run focused)." if ctx.get("locked") and ctx["checkout"] == "cwd" else "."))
+        lines.append("- Do not create git worktrees of that checkout yourself (`git worktree add`) unless the task explicitly tells you to. "
+                     "If work needs its own branch or must run in parallel, ask the lead, or create a task with `worktree` "
+                     "{repo, branch, base} and cfharness creates the worktree.")
+        if ctx.get("file_leases") and ctx["checkout"] == "cwd":
+            lines.append("- Other agents may edit other files in this checkout at the same time: cfharness gives each file to one agent "
+                         "at a time. If an edit is denied because another agent holds the file, work on another file or ask the lead to "
+                         "isolate the task in a worktree; if it says the file changed, read it again before editing. Commands that change "
+                         "the whole checkout (checkout/switch/pull/stash/reset, installs) are denied while others work in it. Commit only "
+                         "your files: `git commit -m <msg> -- <your files>`.")
+        lines.append("- Stage only the files you changed, by path: never `git add -A`, `git add .` or `git commit -a`, which sweep up "
+                     "other people's uncommitted changes.")
+        lines.append("- Do not checkout, switch, reset, rebase or stash that checkout's branch unless the task explicitly says so.")
+    if not lines:
+        return ""
+    return WORKSPACE_RULES_HEADER + "\n" + "\n".join(lines)
+
+
 def build_system_prompt(agent_id: str, soul: str, knowledge_blocks: list[str] | None = None, charter: str | None = None,
                         browser: str | None = None, cli_ref: str | None = None, shared_folders: list[Any] | None = None,
-                        pdf_note: str | None = None) -> str:
+                        pdf_note: str | None = None, workspace_rules: str | None = None) -> str:
     parts = [HUB_CONVENTIONS.format(agent_id=agent_id).strip()]
     if pdf_note and pdf_note.strip():  # máy hub không có pdftoppm (pdf_support.system_note) — ổn định theo máy → không phá prompt cache
         parts.append(pdf_note.strip())
@@ -101,6 +155,8 @@ def build_system_prompt(agent_id: str, soul: str, knowledge_blocks: list[str] | 
     sf = shared_folder_block(shared_folders or [])
     if sf:
         parts.append(sf)
+    if workspace_rules and workspace_rules.strip():  # §C workspace-parallel: SAU các khối hub, TRƯỚC SOUL (nói rõ là thắng SOUL cũ)
+        parts.append(workspace_rules.strip())
     if soul and soul.strip():
         parts.append("# Persona (SOUL)\n" + soul.strip())
     if charter and charter.strip():
