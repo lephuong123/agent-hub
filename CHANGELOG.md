@@ -11,6 +11,7 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 ## Chưa phát hành
 
 - Điều phối: đổi tab luồng/hội thoại nhanh hơn — server chỉ vẽ phần lưới (không vẽ lại thanh bên, bớt lời gọi daemon trùng), chỉ làm mờ khi chờ quá 400 ms; hàng tab cập nhật tại chỗ (không nháy, giữ focus); khung "đang trả lời" của lượt dài hiện đúng tool/checklist mới nhất; "đã đọc" ghi bằng POST riêng khi hội thoại đang hiện; bản nháp chạy chữ gửi tối đa 2 lần/giây; tệp tĩnh có phiên bản được cache hẳn và trang/JS nén gzip. RPC `events.query` nhận thêm `since`/`epoch`.
+- Điều phối (chuẩn bị giao diện mới): thêm hợp đồng dữ liệu v2 — ảnh chụp JSON `/api/manager/snapshot`, MỘT luồng sự kiện mỗi trang `/sse/manager/v2` (nối lại không mất/không trùng tin, tự báo tải lại khi hở quá xa, trạng thái mọi luồng đẩy tới ngay thay cho hỏi lại 20 s), `/api/manager/watch`, và trả lời câu hỏi / duyệt có khoá chống gửi trùng (`/api/manager/act/…`). Trang hiện tại không đổi. Hub demo: tin có `[demo]` cho câu trả lời chạy chữ ~100 token/s kèm tool, thẻ hành động, thao tác chờ duyệt và câu hỏi.
 
 ---
 

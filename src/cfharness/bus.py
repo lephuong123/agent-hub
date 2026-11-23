@@ -36,12 +36,15 @@ class Subscription:
         run_id: str | None,
         level: str,
         maxsize: int,
+        detail_agent_id: str | None = None,
     ) -> None:
         self.id = uuid.uuid4().hex[:8]
         self.bus = bus
         self.agent_id = agent_id
         self.run_id = run_id
         self.max_rank = LEVEL_RANK.get(level, 0)
+        # trang Điều phối (luồng v2): event của MỘT agent (điều phối viên) lấy tới mức `detail` (chữ chạy), agent khác chỉ theo `level`
+        self.detail_agent_id = detail_agent_id
         self.queue: asyncio.Queue[HubEvent | None] = asyncio.Queue(maxsize=maxsize)
         self.closed_reason: str | None = None
         self.truncated = False
@@ -51,7 +54,10 @@ class Subscription:
             return False
         if self.run_id is not None and ev.run_id != self.run_id:
             return False
-        return LEVEL_RANK.get(ev.level, 0) <= self.max_rank
+        rank = LEVEL_RANK.get(ev.level, 0)
+        if self.detail_agent_id is not None and ev.agent_id == self.detail_agent_id:
+            return rank <= max(self.max_rank, LEVEL_RANK["detail"])
+        return rank <= self.max_rank
 
     def offer(self, ev: HubEvent) -> None:
         if self.closed_reason:
@@ -179,13 +185,16 @@ class EventBus:
         level: str = "summary",
         maxsize: int | None = None,
         backfill: Callable[[int], list[HubEvent]] | None = None,
+        detail_agent_id: str | None = None,
     ) -> Subscription:
         """Đăng ký nhận event. Có `since_seq` → nạp sẵn phần replay rồi nối live (không hở, không trùng:
         bus chạy đơn luồng asyncio, không có `await` giữa replay và đăng ký).
 
         Nếu ring không đủ (truncated) và có `backfill(since_seq)` (đọc DB) thì dùng backfill thay ring.
+        `detail_agent_id`: event của agent này nhận tới mức `detail` dù `level` thấp hơn (luồng v2 trang Điều phối).
         """
-        sub = Subscription(self, agent_id=agent_id, run_id=run_id, level=level, maxsize=maxsize or self.subscriber_queue)
+        sub = Subscription(self, agent_id=agent_id, run_id=run_id, level=level, maxsize=maxsize or self.subscriber_queue,
+                           detail_agent_id=detail_agent_id)
         if since_seq is not None:
             if agent_id is not None:
                 evs, truncated = self.replay(agent_id, since_seq)

@@ -728,6 +728,7 @@ class Daemon:
             since_seq=since,
             level=p.get("level", "summary"),
             backfill=self.hub.backfill(run_id=run_id, agent_id=agent_id),
+            detail_agent_id=None if agent_id or run_id or not p.get("detail_agent_id") else str(p["detail_agent_id"]),
         )
         until_end = bool(p.get("until_run_end")) and run_id is not None
         t0 = time.perf_counter()

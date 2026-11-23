@@ -3,7 +3,8 @@
     uv run python -m cfharness.web.demo --home /tmp/ahub-demo --port 8799
 
 Dựng sẵn: agent từ template + MCP giả, team + task (DAG), vài run đã xong, một run đang chạy (giữ), một thao tác phá huỷ
-đang chờ người duyệt (waiting_human). In link đăng nhập một lần ra stdout (dòng `LOGIN <url>`), ghi `HUB_HOME/auth/web.json`.
+đang chờ người duyệt (waiting_human). Gửi cho điều phối viên một tin có `[demo]` → câu trả lời chạy chữ ~100 token/s, tool, thẻ hành
+động, thao tác chờ duyệt, câu hỏi (`web/demo_stream.py`) — để thử luồng v2 `/sse/manager/v2` trên trình duyệt. In link đăng nhập một lần ra stdout (dòng `LOGIN <url>`), ghi `HUB_HOME/auth/web.json`.
 """
 
 from __future__ import annotations
@@ -17,15 +18,27 @@ FIXTURE = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "claude-h
 
 
 class DemoRuntime:
-    """FakeRuntime: run có prompt chứa '[hold]' được giữ (đang chạy) tới khi dừng; còn lại phát lại fixture."""
+    """FakeRuntime: run có prompt chứa '[hold]' được giữ (đang chạy) tới khi dừng; '[demo]' → kịch bản chạy chữ của `demo_stream`
+    (thẻ hành động, thao tác chờ duyệt, câu hỏi — side effect qua `rt.hub`, gắn sau khi dựng daemon); còn lại phát lại fixture."""
 
     def __new__(cls, fixture: Path, delay: float):  # type: ignore[misc]
         from ..runtime import FakeRuntime
+        from . import demo_stream
 
         class _RT(FakeRuntime):
+            hub = None
+
             async def start(self, spec):  # type: ignore[override]
-                self.hold = "[hold]" in (getattr(spec, "prompt", "") or "")
-                return await super().start(spec)
+                prompt = getattr(spec, "prompt", "") or ""
+                self.hold = "[hold]" in prompt
+                h = await super().start(spec)
+                h.internal["demo"] = demo_stream.TAG in prompt
+                return h
+
+            async def events(self, handle):  # type: ignore[override]
+                src = demo_stream.events(self, handle, fixture) if handle.internal.get("demo") else super().events(handle)
+                async for ev in src:
+                    yield ev
 
         return _RT(fixture if fixture.exists() else None, line_delay_s=delay)
 
@@ -203,7 +216,9 @@ async def main_async(a: argparse.Namespace) -> None:
 
     paths = HubPaths.resolve()
     paths.ensure()
-    d = Daemon(paths, runtime=DemoRuntime(FIXTURE, a.delay))
+    rt = DemoRuntime(FIXTURE, a.delay)
+    d = Daemon(paths, runtime=rt)
+    rt.hub = d.hub  # kịch bản "[demo]" (demo_stream) mở thẻ duyệt / câu hỏi
     task = asyncio.create_task(d.serve())
     while not paths.socket.exists():
         await asyncio.sleep(0.05)

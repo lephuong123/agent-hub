@@ -133,10 +133,15 @@ async def _web_convs(request: Request) -> list[dict[str, Any]]:
 async def _workstreams(request: Request) -> dict[str, Any]:
     """Dữ liệu thanh bên luồng việc: luồng đang mở (+ số tin chưa đọc gộp mọi kênh), số luồng đã đóng, hội thoại SẢNH (web).
     Daemon cũ chưa có `workstream.*` → rỗng (trang vẫn chạy như trước)."""
+    return await workstreams_data(lambda m, p: rpc(request, m, p))
+
+
+async def workstreams_data(call: Any) -> dict[str, Any]:
+    """Như `_workstreams` nhưng nhận hàm gọi RPC `call(method, params)` — dùng chung cho trang và luồng v2 (`manager_feed`, không có request)."""
     try:  # ba lời gọi độc lập → đồng thời
-        active, closed, convs = (r or [] for r in await gather_ordered(rpc(request, "workstream.list", {"status": "active"}),
-                                                                        rpc(request, "workstream.list", {"status": "closed", "limit": 50}),
-                                                                        rpc(request, "manager.conversations", {"limit": WS_CONV_LIMIT})))
+        active, closed, convs = (r or [] for r in await gather_ordered(call("workstream.list", {"status": "active"}),
+                                                                        call("workstream.list", {"status": "closed", "limit": 50}),
+                                                                        call("manager.conversations", {"limit": WS_CONV_LIMIT})))
     except RpcError:
         return {"enabled": False, "active": [], "closed": [], "lobby": []}
     unread: dict[str, int] = {}
@@ -344,6 +349,11 @@ async def _page(request: Request, ctx: dict[str, Any]) -> Response:
 
 
 async def manager_page(request: Request) -> Response:
+    return await _page(request, await page_ctx(request))
+
+
+async def page_ctx(request: Request) -> dict[str, Any]:
+    """Dữ liệu trang Điều phối (`?c=&w=&new=&run=`) — dùng chung cho trang HTML và `GET /api/manager/snapshot` (manager_feed)."""
     q = request.query_params
     # lời gọi không phụ thuộc nhau chạy đồng thời (perf): trạng thái điều phối viên, hub.status, hội thoại web, thanh bên luồng việc
     # (hai cái sau chỉ dùng khi đã có điều phối viên; RpcError của chúng đã được nuốt bên trong như trước)
@@ -364,7 +374,7 @@ async def manager_page(request: Request) -> Response:
 
         agents, ctx["templates"] = await gather_ordered(rpc(request, "agent.list", {}), _templates())
         ctx["agents"] = [a for a in agents or [] if not a.get("archived_at")]
-        return await _page(request, ctx)
+        return ctx
     ws_id = str(q.get("w") or "").strip() or None
     if q.get("c") and not ws_id:  # hội thoại thuộc luồng → hiện trong ngữ cảnh luồng
         ws_id = (wsd.get("convs", {}).get(q.get("c")) or {}).get("workstream_id")
@@ -451,8 +461,8 @@ async def manager_page(request: Request) -> Response:
                 "wsd": wsd, "wsx": wsx, "ws_convs": ws_convs, "cur_conv": cur_conv,
                 "ws_web_convs": [c | {"unread": 0 if c["id"] == cid else int(((wsd.get("convs") or {}).get(c["id"]) or {}).get("unread") or 0)}
                                  for c in ws_convs if c.get("channel") == CHANNEL],
-                "cur_title": (cur_conv or {}).get("title")})
-    return await _page(request, ctx)
+                "cur_title": (cur_conv or {}).get("title"), "ws_id": ws_id, "conv_qs": conv_qs, "msgs": msgs})
+    return ctx
 
 
 async def partial_tabs(request: Request) -> Response:
@@ -801,7 +811,10 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
 def routes() -> list[Any]:
     from starlette.routing import Route
 
+    from . import manager_feed
+
     return [
+        *manager_feed.routes(),  # hợp đồng v2 (GĐ1): /api/manager/snapshot|watch|act, /sse/manager/v2
         Route("/manager", manager_page),
         Route("/manager/send", manager_send, methods=["POST"]),
         Route("/manager/stop", manager_stop, methods=["POST"]),

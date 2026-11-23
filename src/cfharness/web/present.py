@@ -1119,7 +1119,7 @@ def mgr_message(m: dict[str, Any]) -> dict[str, Any] | None:
         return None
     text = str(text or "")
     cut = kind == "manager" and (bool(m.get("truncated")) or len(text) >= MGR_TEXT_MAX)
-    return {"kind": kind, "text": text, "ts": m.get("ts") or m.get("created_at"), "run_id": m.get("run_id"),
+    return {"kind": kind, "text": text, "ts": m.get("ts") or m.get("created_at"), "run_id": m.get("run_id"), "id": m.get("id"),
             "notify": role == "notify" or bool(m.get("notify")), "tick": role == "tick",
             "cut": cut_note("Tin", len(text), m.get("run_id")) if cut else ""}
 
