@@ -124,14 +124,7 @@ class Daemon:
             "estop.get": lambda p: self.hub.runs.estop,
             "config.get": self._config_get,
             "config.set": self._config_set,
-            "events.query": lambda p: [
-                e.to_wire() for e in self.hub.store.query_events(
-                    run_id=p.get("run_id"), agent_id=p.get("agent_id"), limit=int(p.get("limit", 10_000)),
-                    types=[str(t) for t in p["types"]] if isinstance(p.get("types"), list) else None,
-                    newest_first=p.get("order") == "desc",
-                    manager_workstream=None if p.get("workstream") is None else str(p.get("workstream")),
-                )
-            ],
+            "events.query": self._events_query,
         }
         # M1 luồng B: approval.*, guard.*, notify.*, run.continue|resume, agent.purge (guard/rpc.py)
         from .guard.rpc import register_rpc as _register_b
@@ -334,6 +327,22 @@ class Daemon:
         if p.get("events"):
             run["events"] = [e.to_wire() for e in self.hub.store.query_events(run_id=run["id"])]
         return run
+
+    def _events_query(self, p: dict[str, Any]) -> list[dict[str, Any]]:
+        """`events.query {run_id?, agent_id?, types?, order?, limit?, since?|since_seq?, epoch?, workstream?}`.
+        `order="desc"` → N event GẦN NHẤT (mới → cũ; client tự đảo nếu cần cũ → mới). `since`/`since_seq` = chỉ event có seq lớn hơn
+        (đi cùng `epoch` — seq đếm lại sau mỗi lần daemon khởi động). `types` = chỉ các loại event này (lọc ở SQL)."""
+        since = p.get("since_seq", p.get("since"))
+        return [
+            e.to_wire() for e in self.hub.store.query_events(
+                run_id=p.get("run_id"), agent_id=p.get("agent_id"), limit=int(p.get("limit", 10_000)),
+                types=[str(t) for t in p["types"]] if isinstance(p.get("types"), list) else None,
+                newest_first=p.get("order") == "desc",
+                since_seq=None if since is None else int(since),
+                epoch=str(p["epoch"]) if p.get("epoch") else None,
+                manager_workstream=None if p.get("workstream") is None else str(p.get("workstream")),
+            )
+        ]
 
     async def _run_wait(self, p: dict[str, Any]) -> dict[str, Any]:
         run = self.hub.store.find_run(_req(p, "id"))
@@ -719,6 +728,7 @@ class Daemon:
             since_seq=since,
             level=p.get("level", "summary"),
             backfill=self.hub.backfill(run_id=run_id, agent_id=agent_id),
+            detail_agent_id=None if agent_id or run_id or not p.get("detail_agent_id") else str(p["detail_agent_id"]),
         )
         until_end = bool(p.get("until_run_end")) and run_id is not None
         t0 = time.perf_counter()

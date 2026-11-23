@@ -253,6 +253,7 @@
     "learning.signal": "summary",
     "manager.action": "summary",
     "manager.designated": "summary",
+    "manager.message": "summary",
     "manager.reply": "summary",
     "manager.tick": "summary",
     "mcp.changed": "summary",

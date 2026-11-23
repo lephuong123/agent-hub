@@ -228,11 +228,13 @@ async def test_security_headers_and_no_cors(env):
     assert not re.search(r"<script(?![^>]*\bsrc=)[^>]*>", html)
     assert "cdn" not in html.lower() and "unpkg" not in html.lower()
     assert re.search(r'src="/static/htmx-2\.0\.4\.min\.js\?v=[0-9a-f]+"', html)
-    # tài nguyên tĩnh mang phiên bản theo mtime + luôn hỏi lại server → bản cập nhật (app.js…) có hiệu lực ngay, không kẹt cache
+    # tài nguyên tĩnh mang phiên bản theo mtime (đổi tệp = đổi URL → bản cập nhật có hiệu lực ngay) → cache vĩnh viễn; không phiên bản → hỏi lại
     m = re.search(r'src="(/static/app\.js\?v=[0-9a-f]+)"', html)
     assert m and re.search(r'href="/static/app\.css\?v=[0-9a-f]+"', html)
     r = await env.client.get(m.group(1))
-    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache" and r.headers.get("etag")
+    assert r.status_code == 200 and "immutable" in r.headers["cache-control"] and r.headers.get("etag")
+    r = await env.client.get("/static/app.js")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
 
 
 async def test_human_token_never_in_html_or_logs(held, caplog):

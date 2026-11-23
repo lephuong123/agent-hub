@@ -1,0 +1,2 @@
+# Thư viện vendored: giữ nguyên từng byte (sha256 trong static/vendor/README.md) — không đổi xuống dòng khi checkout
+src/cfharness/web/static/vendor/** -text

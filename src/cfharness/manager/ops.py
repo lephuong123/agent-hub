@@ -788,14 +788,14 @@ class ManagerOps:
         # của run/task, không luồng thì ở Sảnh (`guessed` — Slack gửi DM, không chen vào thread của việc khác)
         conv, guessed = self._target_conv(a.get("task_id"), heartbeat_ok=True)
         cid = conv["id"] if conv else None
-        if cid:
-            self.svc._add_msg(cid, "notify", text, self.run["id"])
+        mid = self.svc._add_msg(cid, "notify", text, self.run["id"]) if cid else None
         # cất vào hội thoại nhịp (Sảnh chưa có cuộc nào của người) → kênh chat coi như chưa có hội thoại: gửi mọi chat như trước
         chan = conv["channel"] if conv and conv["channel"] != "heartbeat" else None
         kind = str(a.get("kind") or "info")
         audit_id = self.hub.audit.record("manager.notify", self.mid, self.run["id"], {"text": text[:1000], "kind": kind, "conversation_id": cid},
                                          actor=self.actor, channel="manager", target=cid, summary="manager.notify")
         self.hub.publish(make_event("manager.reply", self.mid, {"conversation_id": cid, "run_id": self.run["id"], "text": text[:TEXT_MAX],
+                                                               **({"message_id": mid} if mid else {}),
                                                                **({"truncated": True} if len(text) > TEXT_MAX else {}),
                                                                "channel": chan, "kind": "notify", "notify_kind": kind, "ok": True,
                                                                "conversation_guessed": bool(conv) and guessed},

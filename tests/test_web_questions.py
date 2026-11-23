@@ -41,6 +41,10 @@ def test_templates_have_no_inline_style_script_or_handlers():
     bad = []
     for f in sorted(TEMPLATES.glob("*.html")):
         s = f.read_text(encoding="utf-8")
+        # khối dữ liệu JSON không chạy; import map của island Điều phối được phép bằng băm sha256 trong CSP riêng (web/coord.py)
+        s = re.sub(r'<script type="application/json"[^>]*>', "", s)
+        if f.name == "manager_next.html":
+            s = s.replace('<script type="importmap">', "", 1)
         for pat, why in ((r"\sstyle\s*=", "style="), (r"<script(?![^>]*\ssrc=)[^>]*>", "<script> inline"), (r"\son[a-z]+\s*=", "on*= handler"),
                          (r"javascript:", "javascript: URL"), (r"https?://(?!127\.0\.0\.1|cfharness\.localhost)[a-z]", "URL ngoài (CDN)")):
             for m in re.finditer(pat, s, re.I):

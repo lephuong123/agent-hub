@@ -20,6 +20,8 @@ from cfharness.web import present as P
 from test_web import ISOLATED, _start, _stop, audit_rows, until  # noqa: F401  (dùng lại hạ tầng test web)
 from cfharness.runtime import FakeRuntime
 
+pytestmark = pytest.mark.usefixtures("old_manager_ui")  # trang Điều phối CŨ (?ui=old) — island có test riêng (test_coord_*)
+
 XSS = '<script>alert("x")</script><img src=x onerror=alert(1)>[bấm](javascript:alert(2)) <a href="http://evil">duyệt</a>'
 
 
@@ -397,9 +399,9 @@ def test_draft_throttled_sanitized_and_capped():
     out = conv(ev("message.delta", "<script>x</script> ![i](http://h/a.png)", 1))
     assert [m["t"] for m in out] == ["delta", "draft"] and all(m["seq"] == 1 for m in out)
     assert "<script" not in out[1]["html"] and "<img" not in out[1]["html"] and "&lt;script&gt;" in out[1]["html"]
-    clock[0] += 0.05
-    assert [m["t"] for m in conv(ev("message.delta", " thêm", 2))] == ["delta"]  # chưa đủ 150 ms → chỉ delta
-    clock[0] += 0.2
+    clock[0] += 0.3
+    assert [m["t"] for m in conv(ev("message.delta", " thêm", 2))] == ["delta"]  # chưa đủ DRAFT_EVERY_S (0,5 s) → chỉ delta
+    clock[0] += 0.25
     assert [m["t"] for m in conv(ev("message.delta", " nữa", 3))] == ["delta", "draft"]
     clock[0] += 0.01
     out = conv(ev("message.complete", "", 4))

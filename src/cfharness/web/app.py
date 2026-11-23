@@ -14,6 +14,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import mimetypes
 import re
 import time
 from dataclasses import dataclass, field
@@ -28,6 +29,7 @@ from starlette.exceptions import HTTPException
 from starlette.requests import Request, cookie_parser
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
@@ -186,6 +188,30 @@ class WebState:
         return out
 
 
+# ES module `.mjs` (static/vendor — island Điều phối): Windows thường đăng ký `.mjs` là text/plain → trình duyệt từ chối module (MIME chặt +
+# nosniff). Ghi đè bảng MIME của tiến trình trước khi StaticFiles đoán kiểu.
+mimetypes.add_type("text/javascript", ".mjs")
+STATIC_IMMUTABLE = b"public, max-age=31536000, immutable"  # tệp tĩnh có phiên bản trong URL (`static_url`)
+GZIP_MIN = 1024  # byte — response nhỏ hơn không nén (SSE `text/event-stream` không bao giờ nén: GZipMiddleware tự loại trừ)
+
+
+class GzipMiddleware:
+    """Nén gzip response (HTML/JS/CSS/JSON) — trừ luồng SSE (`/sse/`, mọi bản starlette: bản cũ chưa tự loại `text/event-stream`) và
+    tải gói hub (đã nén, rất lớn). ASGI thuần, đặt TRONG Guard (header bảo mật/Cache-Control vẫn được gắn)."""
+
+    SKIP = ("/sse/", "/hub-transfer")
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+        self.gz = GZipMiddleware(app, minimum_size=GZIP_MIN)
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope["type"] == "http" and not str(scope.get("path") or "").startswith(self.SKIP):
+            await self.gz(scope, receive, send)
+        else:
+            await self.app(scope, receive, send)
+
+
 class GuardMiddleware:
     """ASGI thuần (không đệm response → SSE chạy được): kiểm Host, gắn phiên, chặn khi chưa đăng nhập, thêm header bảo mật."""
 
@@ -195,7 +221,8 @@ class GuardMiddleware:
               "/.well-known/cfharness-directory")
     # JSON do trang gọi bằng fetch (polling): chưa đăng nhập → 401 (không chuyển hướng), không gia hạn phiên — như /sse/, /partials/
     # `/app/` = API cho app desktop (web/desktop.py: /app/badge) — 401 dạng JSON
-    API = ("/office/state", "/office/approval/", "/office/question/", "/office/chat", "/office/do/", "/app/")  # tiền tố
+    # `/api/manager/` = hợp đồng v2 trang Điều phối (manager_feed.py) — island đọc JSON, hết phiên → 401 rồi tự tải lại trang
+    API = ("/office/state", "/office/approval/", "/office/question/", "/office/chat", "/office/do/", "/app/", "/api/manager/")  # tiền tố
 
     def __init__(self, app: Any, state: WebState) -> None:
         self.app = app
@@ -209,6 +236,7 @@ class GuardMiddleware:
         path = scope.get("path") or "/"
         host = headers.get("host", "").lower()
         hsts = self.state.is_public(host)  # web public chỉ https (tunnel TLS) → trình duyệt luôn dùng https cho host này
+        versioned = path.startswith("/static/") and b"v=" in (scope.get("query_string") or b"")
 
         async def send_headers(msg: dict) -> None:
             if msg["type"] == "http.response.start":
@@ -218,8 +246,12 @@ class GuardMiddleware:
                 if hsts and b"strict-transport-security" not in names:
                     h.append((b"strict-transport-security", b"max-age=31536000"))
                 if b"cache-control" not in names:
-                    # tĩnh: luôn hỏi lại server (ETag → 304) để bản cập nhật có hiệu lực ngay; còn lại: không lưu
-                    h.append((b"cache-control", b"no-cache" if path.startswith("/static/") else b"no-store"))
+                    # tĩnh có `?v=<mtime>` (static_url): đổi tệp là đổi URL → cache vĩnh viễn, không hỏi lại. Tĩnh không phiên bản: luôn
+                    # hỏi lại server (ETag → 304) để bản cập nhật có hiệu lực ngay. Còn lại: không lưu.
+                    if path.startswith("/static/"):
+                        h.append((b"cache-control", STATIC_IMMUTABLE if versioned else b"no-cache"))
+                    else:
+                        h.append((b"cache-control", b"no-store"))
                 msg = {**msg, "headers": h}
             await send(msg)
 
@@ -2277,6 +2309,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
     ]
     app = Starlette(routes=routes, exception_handlers={HTTPException: http_error, RpcError: rpc_error, DaemonUnavailable: rpc_error})
     app.state.web = state
+    app.add_middleware(GzipMiddleware)  # TRONG cùng: HTML/JS/CSS/JSON nén khi trình duyệt nhận gzip
     app.add_middleware(GuardMiddleware, state=state)
     app.add_middleware(_perf_pages.PerfMiddleware, state=state)  # NGOÀI cùng: đo cả Guard; Server-Timing (web/perf_pages.py)
     return app

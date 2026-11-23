@@ -22,6 +22,8 @@ from test_web import ISOLATED, _start, _stop  # noqa: F401
 from test_web_manager import designate, mgr_rpc
 from cfharness.runtime import FakeRuntime
 
+pytestmark = pytest.mark.usefixtures("old_manager_ui")  # trang Điều phối CŨ (?ui=old) — island có test riêng (test_coord_*)
+
 
 def _plan(s: Store, sql: str, args: tuple = ()) -> str:
     return " | ".join(str(r[3]) for r in s.conn.execute("EXPLAIN QUERY PLAN " + sql, args))

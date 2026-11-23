@@ -214,7 +214,8 @@ EVENT_LEVELS: dict[str, str] = {
     "curation.rolled_back": "summary",  # người hoàn tác cả lượt curation
     # M7 MGR-CORE — điều phối viên (manager/): hành động ghi, trả lời hội thoại, nhịp, chỉ định
     "manager.action": "summary",  # mọi thao tác ghi của manager (tool, target, summary, audit_id, ok, error?)
-    "manager.reply": "summary",  # trả lời/ thông báo của manager tới kênh người (conversation_id, run_id, text, kind)
+    "manager.reply": "summary",  # trả lời/ thông báo của manager tới kênh người (conversation_id, run_id, text, kind, message_id?)
+    "manager.message": "summary",  # tin NGƯỜI vừa lưu vào hội thoại điều phối viên (conversation_id, run_id, message_id, role=user, text, channel)
     "manager.tick": "summary",  # nhịp heartbeat: started|skipped (reason, events)
     "manager.designated": "summary",  # người chỉ định/huỷ chỉ định manager (agent_id, previous)
     "workstream.updated": "summary",  # luồng việc (manager/workstreams.py): created|updated|state|closed|reopened|deleted|conversation (workstream_id, key, title, by)
