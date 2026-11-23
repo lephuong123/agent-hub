@@ -17,6 +17,44 @@
     for (var i = 0; i < ok.length; i++) ok[i].remove();
   }, 7000);
 
+  // ------------------------------------------------------------ polling htmx chỉ khi tab đang hiện
+  // Mỗi lượt `hx-trigger="every Ns"` là một RPC tới daemon (vd tui.snapshot 170–370 ms trên hub lớn) mà daemon phục vụ trên MỘT
+  // vòng sự kiện → tab nền làm chậm mọi người. Không dùng bộ lọc `every 3s [document.visibilityState=='visible']`: base.html
+  // đặt allowEval:false (CSP script-src 'self') nên htmx từ chối biểu thức lọc và vẫn hỏi. Ở đây: lượt poll lúc tab ẩn bị huỷ
+  // (htmx vẫn hẹn lượt sau) và phần tử bị đánh dấu "cũ"; tab hiện lại → mỗi phần tử cũ tải lại ĐÚNG MỘT lần.
+  // Lượt poll của htmx 2 gọi handler không kèm event (triggeringEvent rỗng) với elt = chính phần tử có hx-trigger "every …";
+  // click/submit/`mgr-tick from:body` có event, htmx.ajax() không nguồn có elt = body → không bao giờ bị chặn.
+  var POLL_RE = /(^|,)\s*every\s/;
+  var pollStale = typeof Set === "function" ? new Set() : null;
+  var pollLast = typeof WeakMap === "function" ? new WeakMap() : null;
+  function isPoll(d) {
+    var elt = d && d.elt, c = d && d.requestConfig;
+    if (!elt || !c || c.triggeringEvent || !elt.getAttribute) return false;
+    return POLL_RE.test(elt.getAttribute("hx-trigger") || "");
+  }
+  if (pollStale && pollLast) {
+    document.body.addEventListener("htmx:beforeRequest", function (e) {
+      if (!isPoll(e.detail)) return;
+      var elt = e.detail.elt;
+      if (document.hidden) { e.preventDefault(); pollStale.add(elt); return; }
+      // vừa tải lại khi quay về tab → bỏ lượt poll định kỳ rơi ngay sau đó (không gửi đôi)
+      var t = pollLast.get(elt);
+      if (t && Date.now() - t < 1500) e.preventDefault();
+    });
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden || !window.htmx || !pollStale.size) return;
+      var els = Array.from(pollStale);
+      pollStale.clear();
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i], url = el.getAttribute("hx-get");
+        if (!el.isConnected || !url || !POLL_RE.test(el.getAttribute("hx-trigger") || "")) continue;
+        pollLast.set(el, Date.now());
+        // source = chính phần tử → htmx tự áp hx-target/hx-swap của nó, như một lượt poll; có event → không bị coi là poll
+        window.htmx.ajax("GET", url, { source: el, event: new CustomEvent("cfh:poll-resume") }).catch(function () {});
+      }
+    });
+  }
+
   // ------------------------------------------------------------ thời gian tương đối
   function relText(d) {
     var s = Math.round((Date.now() - d.getTime()) / 1000);
@@ -561,7 +599,9 @@
       }, function () {}).then(function () { busy = false; if (again) schedule(400); });
     }
     function schedule(ms) { if (!timer) timer = setTimeout(refresh, ms); }
-    function startPoll() { if (!poll) poll = setInterval(function () { if (!live) schedule(0); }, 15000); }
+    // hỏi lại dự phòng chỉ khi tab đang hiện; quay về tab lúc SSE vẫn chết → tải lại một lần ngay
+    function startPoll() { if (!poll) poll = setInterval(function () { if (!live && !document.hidden) schedule(0); }, 15000); }
+    document.addEventListener("visibilitychange", function () { if (poll && !live && !document.hidden) schedule(0); });
     function connect() {
       es = new EventSource(sseUrl);
       es.onopen = function () {
