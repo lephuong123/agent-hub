@@ -13,7 +13,7 @@
   function pathOf(u) {
     try { return new URL(u, location.href).pathname; } catch (_) { return "/"; }
   }
-  function add(m, r, d) {
+  function add(m, d, r) {  // thứ tự (metric, ms, đường dẫn) — khớp mọi chỗ gọi
     if (typeof d !== "number" || !isFinite(d) || d < 0) return;
     if (q.length >= MAX_Q) q.shift();
     q.push({ m: m, r: r || location.pathname, d: Math.round(d * 10) / 10 });
@@ -63,9 +63,29 @@
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     var a = e.target.closest && e.target.closest("a[href]");
     if (!a || a.target === "_blank") return;
-    if (a.matches(".ws-tab, [data-ws]")) markSwitch("ws", a.href);
+    if (a.matches(".ws-tab, [data-ws]")) {
+      // trang Điều phối đổi luồng KHÔNG tải lại trang (app.js mgrGo: fetch + thay #mgr-grid) → đo tới lúc #mgr-grid mới gắn vào
+      if (document.getElementById("mgr-grid") && window.fetch && window.DOMParser && window.MutationObserver) wsSoft(a.href);
+      else markSwitch("ws", a.href);
+    }
     else if (a.closest("nav.nav, nav.tabbar")) markSwitch("tab", a.href);
   }, true);
+  var wsObs = null, wsTimer = 0;
+  function wsSoft(href) {
+    var grid = document.getElementById("mgr-grid"), host = grid && grid.parentNode;
+    if (!host) return;
+    if (wsObs) wsObs.disconnect();
+    clearTimeout(wsTimer);
+    var t0 = now(), r = pathOf(href);
+    wsObs = new MutationObserver(function () {
+      var g = document.getElementById("mgr-grid");
+      if (!g || g === grid) return;  // vẫn là khung cũ
+      wsObs.disconnect(); wsObs = null; clearTimeout(wsTimer);
+      add("switch.ws", now() - t0, r);
+    });
+    wsObs.observe(host, { childList: true });
+    wsTimer = setTimeout(function () { if (wsObs) { wsObs.disconnect(); wsObs = null; } }, SW_MAX_AGE);  // lỗi / huỷ → bỏ mẫu
+  }
   document.addEventListener("submit", function (e) {
     var f = e.target;  // form "Chuyển sang luồng" (GET /manager?workstream=…)
     if (f instanceof HTMLFormElement && f.querySelector('select[name="workstream"]') && (f.method || "get").toLowerCase() === "get") {
