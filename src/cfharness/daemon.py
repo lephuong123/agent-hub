@@ -93,6 +93,9 @@ class Daemon:
 
         self.perf = DaemonPerf()  # thời gian mỗi RPC + ảnh chụp web (`perf.stats`/`perf.report`, perf.py)
         self.server: asyncio.base_events.Server | None = None
+        # kết nối hỏi–đáp đang mở (client có thể giữ lại dùng tiếp — tui/client.py AsyncHubClient): đóng hết khi daemon dừng để client
+        # thấy EOF, không gửi tiếp vào daemon đã dừng. Kết nối `events.subscribe` không nằm đây (tự kết thúc theo luồng của nó).
+        self._rr_conns: set[asyncio.StreamWriter] = set()
         self.stopping = asyncio.Event()
         self.exit_code = 0  # ≠ 0 khi dừng để launchd chạy lại (cập nhật dưới LaunchAgent/LaunchDaemon — `SUPERVISED_RESTART_CODE`)
         self.methods: dict[str, Handler] = {
@@ -663,6 +666,7 @@ class Daemon:
             log.warning("từ chối kết nối từ pid %s (không xác định được / khác user)", peer)
             writer.close()
             return
+        self._rr_conns.add(writer)
         try:
             while not reader.at_eof():
                 line = await reader.readline()
@@ -675,6 +679,7 @@ class Daemon:
                     await writer.drain()
                     continue
                 if isinstance(req, dict) and req.get("method") == "events.subscribe":
+                    self._rr_conns.discard(writer)
                     raw_trace = None
                     if isinstance(req.get("params"), dict):
                         req["params"].pop(_auth.AUTH_PARAM, None)
@@ -689,6 +694,7 @@ class Daemon:
         except (ConnectionResetError, BrokenPipeError):
             pass
         finally:
+            self._rr_conns.discard(writer)
             try:
                 writer.close()
             except Exception:  # best-effort: đóng kết nối đã hỏng  # pragma: no cover
@@ -793,6 +799,12 @@ class Daemon:
             watch.cancel()
             lag.cancel()
             self.server.close()
+            for w in list(self._rr_conns):  # client đang giữ kết nối (AsyncHubClient) thấy EOF ngay
+                try:
+                    w.close()
+                except Exception:  # best-effort  # pragma: no cover
+                    pass
+            self._rr_conns.clear()
             self._flush_reads(all_=True)  # A4: ghi nốt phần gộp lượt đọc nhạy cảm
             await self.hub.stop()
             JOBS.close_all()

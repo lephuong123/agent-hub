@@ -31,7 +31,7 @@ Khoá chỉ là metadata: route template (`/runs/{id}`, không bao giờ id thô
 
 - Web: **Hệ thống → Hiệu năng** (`/perf?w=15`) — 3 bảng sắp theo p95: Trình duyệt, Web (BE), RPC daemon. JSON: `/perf.json?w=15` (cần phiên web).
 - Từng request: devtools → Network → chọn request → **Timing** — header `Server-Timing`: `app` (tới lúc gửi header), `rpc` (tổng, số lần),
-  `tpl` (render), `rpc-<method>` (top 6).
+  `tpl` (render), `rpc-<method>` (top 6). RPC chạy đồng thời (`gather_ordered`) → `rpc` là TỔNG thời gian từng RPC, có thể lớn hơn `app`.
 - Request chậm: `/logs?logger=cfharness.web.perf` hoặc `cfharness logs --proc web --level warning` — dòng `http.slow` có `route`, `status`,
   `duration_ms`, `rpc_n`, `rpc_ms`, `render_ms`. RPC chậm phía daemon: `rpc.slow` trong `hub.log` (đã có từ L2).
 - Terminal / agent của người: `cfharness perf [--window 15] [-n 15] [--json]` → RPC `perf.stats` (daemon RPC + ảnh chụp FE/BE mà web đẩy

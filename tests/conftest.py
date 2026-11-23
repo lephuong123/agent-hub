@@ -223,6 +223,16 @@ def _no_connectors_auto(monkeypatch):
     monkeypatch.setenv("CFHARNESS_CONNECTORS_AUTO", "off")
 
 
+@pytest.fixture(autouse=True)
+def _fresh_ancestor_cache():
+    """auth.cached_ancestors: cache chuỗi tổ tiên (pid + thời điểm khởi động) là RAM toàn tiến trình — mỗi test bắt đầu rỗng."""
+    from cfharness import auth as _auth
+
+    _auth._ANCESTOR_CACHE.clear()
+    yield
+    _auth._ANCESTOR_CACHE.clear()
+
+
 @pytest.fixture
 def hub_home(tmp_path, monkeypatch) -> HubPaths:
     home = tmp_path / "hub"
