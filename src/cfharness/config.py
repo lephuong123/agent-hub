@@ -278,6 +278,9 @@ DEFAULTS: dict[str, Any] = {
         "slow_ms": 1500,  # request web chậm hơn → WARNING `http.slow` trong web.jsonl (0 = tắt)
         "window_min": 15,  # cửa sổ mặc định của bảng "chậm nhất" (tối đa 60 phút — dữ liệu chỉ ở RAM)
         "loop_lag_warn_ms": 250,  # event loop daemon bị chặn lâu hơn → WARNING `loop.lag` trong hub.log (0 = tắt; số đo vẫn lên /perf)
+        # event loop daemon đứng LÂU hơn (giây) → thread watchdog dump stack mọi thread vào logs/faults.log NGAY LÚC đang đứng
+        # (loop_watchdog.py; Windows không có SIGUSR1/`daemon dump-stacks`). 0 = tắt
+        "loop_stall_dump_s": 15,
     },
     "recovery": {
         "auto_resume": True,  # Q-09: daemon restart → dừng-và-resume tự động (trừ waiting_human)
@@ -888,6 +891,10 @@ DEFAULTS: dict[str, Any] = {
             # trần (giây) chờ quyết định cho một `control_request can_use_tool` của CLI (vd SandboxNetworkAccess) — quá → deny.
             # Guard tự giữ ≤ approval.timeout_s; đây chỉ là chốt an toàn để CLI không bao giờ treo vô hạn.
             "control_request_timeout_s": 1800,
+            # sau `result` (stdin đã đóng) mà CLI vẫn không thoát và im lặng quá ngần này giây → hub dừng tiến trình, giữ kết quả
+            # theo `result` (không ghi timed_out). Gặp thật: lệnh Bash bị CLI chuyển sang chạy nền (git fetch treo vì mất mạng)
+            # giữ CLI sống tới hạn max_runtime_s dù đã trả lời xong. 0/null = tắt (chờ như cũ).
+            "exit_grace_s": 60,
             # hardening H-10 (FR-RT-02/15): cờ được phép theo phiên bản CLI. Phiên bản CÓ trong bảng → build_argv ném ArgvError
             # với cờ không có trong danh sách (gồm extra_args). Phiên bản lạ → không kiểm (cảnh báo vàng `cli.version_warning`).
             # Danh sách 2.1.302 lấy từ `claude --help` (bỏ cố ý --dangerously-skip-permissions / --allow-dangerously-skip-permissions).
@@ -1031,7 +1038,7 @@ class HubConfig:
 
 def validate_setting(key: str, value: Any) -> None:
     """Kiểm tối thiểu các khoá quan trọng; khoá lạ vẫn cho ghi (mở rộng sau)."""
-    if key in ("perf.slow_ms", "perf.window_min", "perf.loop_lag_warn_ms"):  # đo hiệu năng (perf.py)
+    if key in ("perf.slow_ms", "perf.window_min", "perf.loop_lag_warn_ms", "perf.loop_stall_dump_s"):  # đo hiệu năng (perf.py)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
             raise ValueError(f"{key} phải là số ≥ 0")
         if key == "perf.window_min" and not 1 <= value <= 60:
