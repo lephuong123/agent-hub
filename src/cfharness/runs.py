@@ -918,7 +918,11 @@ class RunManager:
         if (run.get("run_opts") or {}).get("read_only") or _agent_read_only(agent):
             return None  # FR-RT-12: run chỉ đọc không bị khoá
         lane = (run.get("run_opts") or {}).get("filehub_lane")
-        if isinstance(lane, dict) and lane.get("server") and lane.get("root"):  # cổng cfharness: khoá = GỐC thư mục chung trên server
+        if isinstance(lane, dict) and lane.get("server") and lane.get("root"):
+            # cổng cfharness: mỗi run có cây làm việc RIÊNG + ghi bằng If-Match (409 → bản xung đột, không ghi đè) → các run trên cùng thư
+            # mục chung chạy SONG SONG. `filehub.lane.serialize_runs` (người đặt) = quay lại khoá theo GỐC thư mục chung (tuần tự).
+            if not self.hub.config.get("filehub.lane.serialize_runs"):
+                return None
             from .filehub.lane.service import lock_key
 
             return lock_key(str(lane["server"]), str(lane["root"]))

@@ -29,7 +29,12 @@ classifier `filehub_metadata` = cấm), khoá `HUB_HOME/secrets/FILEHUB_LANE_<C�
 - `FilehubService.lane_target(ref)` → `{folder, server, root, sub, kind, key}`; khớp tên cfharness → bí danh cũ (`folders[].aliases` sau `rename`).
   `RunManager.submit`/task/dispatcher/`WorkspaceLocks`/`validate_workspace`/quyền điều phối viên đều đi qua đây; không khớp → `resolve_ref`
   ném lỗi có giải thích (thư mục qua cổng → `data.lane`; thư mục đồng bộ cũ → `data.needs_migration` + `LEGACY_TEXT`; tên sai → liệt kê tên có thật).
-- Khoá = gốc thư mục chung trên server (`filehub-lane:<cổng>:<root>`); run chỉ đọc không lấy khoá. Diff/hoàn tác: `plan-filehub-lane.md` §10.
+- Run trên cùng thư mục chung chạy SONG SONG (2026-11-21): mỗi run một cây, ghi bằng If-Match (409 → bản xung đột), nên không lấy khoá workspace.
+  Mọi run dùng CHUNG khoá cổng → khung `self: true` không đủ để khử tiếng vọng: `LaneClient` nhớ Idempotency-Key → run (`writer_run`),
+  `LaneService._writer_tree` → chỉ cây đã ghi bỏ khung; cây khác áp như thay đổi của người (`on_change(peer=True)`, steer "another cfharness
+  agent run …", `filehub.human_changed{by: cfharness}`). Không biết ai ghi (daemon khởi động lại) → coi là tiếng vọng như cũ.
+  `filehub.lane.serialize_runs: true` = khoá theo gốc (`filehub-lane:<cổng>:<root>`) như trước. Gỡ/đổi tên thư mục: kiểm run chưa xong trên gốc
+  qua DB (`FilehubService._lane_holder`). Diff/hoàn tác: `plan-filehub-lane.md` §10.
 - Mọi run được ĐỌC thư mục qua cổng (`fs_*` chỉ đọc, `filehub.lane.read_all_runs`); khối prompt `# Shared folder (Không gian số)` (tiếng Anh).
 
 ## Nâng cấp từ đồng bộ 2 chiều cũ (H5)

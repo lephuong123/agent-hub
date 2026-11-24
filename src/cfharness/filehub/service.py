@@ -424,10 +424,24 @@ class FilehubService:
     def _lane_holder(self, f: dict[str, Any]) -> dict[str, Any] | None:
         if folder_mode(f, self.hub.config) != "lane" or not f.get("root_id"):
             return None
-        from .lane.service import lock_key
+        # run lane chạy song song (không còn khoá theo gốc mặc định) → hỏi thẳng DB: run chưa xong nào làm việc trên gốc này
+        import json as _json
 
-        srv = self.lane.folder_server(f)
-        return self.hub.runs.locks.holder(lock_key(srv, str(f["root_id"]))) if srv else None
+        srv, root = self.lane.folder_server(f), str(f["root_id"])
+        if not srv:
+            return None
+        rows = self.hub.store.conn.execute(
+            "SELECT id, run_opts FROM runs WHERE status IN ('queued','running','waiting_human') AND run_opts LIKE ? ORDER BY rowid",
+            (f"%{root}%",)).fetchall()
+        for rid, ro in rows:
+            try:
+                o = _json.loads(ro) if isinstance(ro, str) else (ro or {})
+            except ValueError:
+                continue
+            lane = (o or {}).get("filehub_lane") or {}
+            if str(lane.get("root") or "") == root and str(lane.get("server") or "") == srv:
+                return {"run_id": rid}
+        return None
 
     def remove(self, name: str) -> dict[str, Any]:
         """Gỡ thư mục chung khỏi cấu hình hub (cổng lẫn đồng bộ cũ). Không xoá tệp nào — trên máy lẫn trên Không gian số."""

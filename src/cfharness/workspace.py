@@ -302,7 +302,9 @@ class WorkspaceLocks(RepoLocks):
                 lt = self.hub.filehub.lane_target(str(cwd))
             except HubError:
                 return None
-            return str(lt["key"]) if lt is not None and workspace_kind == "dir" else None  # khoá = gốc thư mục chung trên server
+            if lt is None or workspace_kind != "dir" or not self.hub.config.get("filehub.lane.serialize_runs"):
+                return None  # cổng cfharness: run song song (cây riêng + If-Match); chỉ khoá theo gốc khi người bật serialize_runs
+            return str(lt["key"])
         return WorkspaceLocks.key_for(cwd, workspace_kind)
 
 
