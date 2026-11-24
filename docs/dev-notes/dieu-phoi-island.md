@@ -317,3 +317,19 @@ Mã mới: `static/coord/scroll.js` (cuộn dính đáy — THUẦN), `static/co
 - **Ngân sách JS (chốt):** 45 KB gzip bản PHỤC VỤ (vendor + coord đã `jsmin`), KHÔNG bước build — người dùng quyết 2026-11-24. Đo lúc chốt:
   vendor 11.1 + coord 31.1 = 42.2 KB. Test `test_served_island_js_gzip_budget` chặn ở 45 000 B; chặn cỡ nguồn (`test_coord_island`, 58.5 KB)
   giữ nguyên — nguồn đo 58.0 KB, chưa cần nâng.
+
+## Luồng việc ngay trong chat (ux-chat-flow mục 1, 2, 4, 9, 10)
+- **`GET /api/manager/flow?work=t_…,r_…`** (`web/flow.py`, trong `GuardMiddleware.API` qua tiền tố `/api/manager/`, no-store): `need` (khay "Cần
+  bạn": approval `open|waiting_human` + câu hỏi `open` của MỌI agent, cùng dạng `Action` của ảnh chụp; `count` = `present.need_count` = huy hiệu
+  menu; `with_manager` chỉ là số), `team` (agent không rảnh trừ điều phối viên, trạng thái qua `present.agent_state`), `work` (thẻ việc: đích
+  task/run của `act.item` — `target.kind/id` mới có trong `action_json`, chỉ khi có `href` nội bộ; run của điều phối viên → `skip`), `idle`,
+  `running`, `queued`, `cost_today`. Chỉ RPC đọc; `work` ≤ 12 id khớp `^[tr]_[A-Za-z0-9_-]+$`.
+- Island (phần cuối `views.js`): khay dùng CÙNG `Approval`/`Question` với "khung giả" `{items, actions}` → `ui.decide/answer` →
+  `/api/manager/act/*` (plan_action, xác nhận, idem, bước 2 → trang Duyệt) — không có đường duyệt mới. Mục đã hiện trong hội thoại đang mở
+  không lặp ở khay. Làm mới: sau `ws.status`/`tick` (fx `status`), sau mỗi lần duyệt/trả lời, nhịp 5 s (có việc chạy) / 20 s; tab ẩn thì thôi.
+- Thẻ việc: Xem = `a[data-xpanel]` → panel trượt của files.js nạp `/runs/<id>?panel=1` (`_run_panel.html`, ảnh chụp diễn biến, không SSE);
+  Nhắn thêm = form `/do/steer`; Dừng = `/do/stop` (hộp xác nhận app.js).
+- Tìm kiếm: `session.search` trả thêm `ref` cho tin của hội thoại điều phối (`mm:<id>`) → link `/manager?c=…#m<id>`; island đọc hash lúc khởi
+  động, vẽ tới tin (kể cả tin cũ chưa vẽ), cuộn tới và tô (`.mm.hl`). Lượt chạy `kind=manager` → hội thoại qua `run_opts.manager_conversation`.
+- Ngân sách JS phục vụ sau thay đổi: ~44.7 KB / 45 KB (gộp vào `views.js` thay vì tệp riêng để tiết kiệm ~0.9 KB gzip theo tệp). Cỡ nguồn chặn
+  ở 62.5 KB. Test: `tests/test_web_flow_in_chat.py`.

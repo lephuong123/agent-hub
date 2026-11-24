@@ -142,8 +142,9 @@ def side_effects(hub: Any, run_id: str) -> dict[str, Any]:
     opts = run.get("run_opts") if isinstance(run.get("run_opts"), dict) else {}
     conv = opts.get("manager_conversation")
     aid = run.get("agent_id")
+    vh = next(iter(hub.store.list_runs(agent_id="van-hanh", limit=1)), None)  # đích run → thẻ việc sống trong hội thoại (web/flow.py)
     for tool, target, summary in (("task_list", "agent:lap-trinh", "Đã xem 3 task đang mở của lap-trinh"),
-                                  ("run_list", "agent:van-hanh", "Đã kiểm tra run của van-hanh (đang chờ duyệt)")):
+                                  ("run_list", "run:" + vh["id"] if vh else "agent:van-hanh", "Đã kiểm tra run của van-hanh (đang chờ duyệt)")):
         hub.publish(make_event("manager.action", aid, {"tool": tool, "target": target, "summary": summary, "audit_id": 0, "conversation_id": conv},
                                run_id=run_id))
     fp = "fp-demo-" + secrets.token_hex(4)

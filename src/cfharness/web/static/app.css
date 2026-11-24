@@ -987,6 +987,13 @@ html.mgr-info-closed .mgr-side { display: none; }
 .hit-snip mark, .udiff mark { background: var(--accent-soft); color: var(--accent-text); border-radius: 3px; padding: 0 .1em; font-weight: 600; }
 .hit-link { display: inline-flex; align-items: center; gap: 2px; }
 .hit-link .ic { width: 14px; height: 14px; }
+.hit-groups { list-style: none; margin: 0; padding: 0; }
+.hit-group { border-top: 1px solid var(--line); padding-top: 4px; }
+.hit-group:first-child { border-top: 0; }
+.hit-ghead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 12px 20px 0; font-weight: 550; }
+.hit-ghead > .ic { color: var(--muted); }
+.hit-group .hit { border-top: 0; padding-top: 8px; padding-left: 44px; }
+@media (max-width: 760px) { .hit-group .hit { padding-left: 20px; } }
 .pager { padding: 10px 20px 14px; }
 .sched-prompt { margin-top: 4px; } .sched-prompt .pre { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .sched-tbl td.actions { white-space: normal; }

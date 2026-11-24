@@ -8,7 +8,7 @@ import { h } from "preact";
 import { useRef, useLayoutEffect } from "preact/hooks";
 import htm from "htm";
 import { LOBBY, addFiles, isImg, humanSize, MAX_TEXT } from "./util.js";
-import { ui, Icon, jumpBottom } from "./views.js";
+import { ui, Icon, jumpBottom, flow } from "./views.js";
 
 const html = htm.bind(h);
 const coarse = typeof matchMedia === "function" ? matchMedia("(pointer: coarse)") : null;
@@ -112,7 +112,9 @@ export function Composer({ p }) {
     if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
     e.preventDefault(); e.currentTarget.classList.remove("drop"); add(e.dataTransfer.files);
   }
-  const sugg = wsTab ? SUGGEST_WS : SUGGEST_LOBBY;
+  // có việc chờ bạn → gợi ý "Có gì cần tôi?" lên đầu, tô nổi
+  const need = ((flow.value || {}).need || {}).count || 0;
+  const sugg = (wsTab ? SUGGEST_WS : SUGGEST_LOBBY).slice().sort((a, b) => need ? (b[0] === "inbox") - (a[0] === "inbox") : 0);
   return html`<div class="composer-wrap">
     <button type="button" class="mgr-jump" id="mgr-jump" hidden=${!p.jump.value} title="Về tin mới nhất" aria-label="Về tin mới nhất"
       onClick=${() => jumpBottom(p, true)}><${Icon} n="chev-down" c="sm" /><span>Tin mới nhất</span></button>
@@ -139,8 +141,8 @@ export function Composer({ p }) {
       </div>
     </form>
     <div class="mgr-suggest" id="mgr-suggest">${sugg.map(([ic, label, fill]) =>
-      html`<button type="button" key=${label} onClick=${() => ui.fill(p, fill, false)}><${Icon} n=${ic} c="sm" />${label}</button>`)}</div>
+      html`<button type="button" key=${label} class=${need && ic === "inbox" ? "hot" : undefined} onClick=${() => ui.fill(p, fill, false)}><${Icon} n=${ic} c="sm" />${label}</button>`)}</div>
     <p class="mgr-err flash error" id="mgr-err" role="alert" hidden=${!err}>${err}</p>
-    <p class="chat-disclaimer">Điều phối viên là một agent và có thể nhầm. Thao tác phá huỷ luôn chờ bạn duyệt.</p>
+    <p class="chat-disclaimer">Điều phối viên có thể nhầm · thao tác phá huỷ luôn chờ bạn duyệt.</p>
   </div>`;
 }

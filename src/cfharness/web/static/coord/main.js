@@ -13,9 +13,10 @@ import { createStore } from "./store.js";
 import { createFeed } from "./sse.js";
 import { getJSON, postForm, setCsrf, snapshotUrl } from "./api.js";
 import { LOBBY, parseNav, paneUrl, rafBatch, newIdem } from "./util.js";
-import { html, ui, App, ConvList, jumpBottom } from "./views.js";
+import { html, ui, App, ConvList, jumpBottom, startFlow, flowSoon } from "./views.js";
 
 try { performance.mark("coord:start"); } catch (_) {}  // đo khởi động island (DevTools → Performance / performance.measure)
+const HASH = location.hash;  // #m<id> từ kết quả tìm kiếm — đọc trước khi replaceState bỏ nó khỏi URL
 const root = document.getElementById("coord");
 const bootEl = document.getElementById("coord-boot");
 const boot = JSON.parse(bootEl.textContent);
@@ -92,7 +93,7 @@ function announce(t) {
 function runFx(fx) {
   for (const f of fx || []) {
     if (f.fx === "flush") flushSoon();
-    else if (f.fx === "status") statusSoon();
+    else if (f.fx === "status") { statusSoon(); flowSoon(600); }
     else if (f.fx === "resync") resync(f.reason);
     else if (f.fx === "refresh") refresh(f.pane);
     else if (f.fx === "event") emit(f.name, f.detail);
@@ -330,7 +331,26 @@ document.addEventListener("visibilitychange", () => {
   const p = store.active.value;
   if (p && p.conv.value && p.loaded.value) markRead(p.conv.value);
   statusSoon(0);
+  flowSoon(0);
 });
+
+/** Mở từ kết quả tìm kiếm (`/manager?c=…#m<id>`): vẽ tới tin đó (kể cả tin cũ chưa vẽ), cuộn tới giữa màn hình và tô sáng một lúc. */
+function highlight(p, n) {
+  const id = (HASH.match(/^#(m\d+)$/) || [])[1];
+  if (!id || !p || n > 20) return;
+  const el = p.el && p.el.querySelector('[data-id="' + id + '"]');
+  if (!el) {
+    const i = p.items.value.findIndex((x) => x.id === id);
+    if (i < 0) return;
+    if (p.hide.value > i) p.hide.value = Math.max(0, i - 3);
+    requestAnimationFrame(() => highlight(p, (n || 0) + 1));
+    return;
+  }
+  p.scroll = { ...p.scroll, stick: false };
+  el.scrollIntoView({ block: "center" });
+  el.classList.add("hl");
+  setTimeout(() => el.classList.remove("hl"), 4000);
+}
 
 // ------------------------------------------------------------------ khởi động
 const first = store.applySnapshot(boot.snap, null);
@@ -350,6 +370,8 @@ requestAnimationFrame(() => setTimeout(() => {
   if (side) { side.textContent = ""; render(html`<${ConvList} />`, side); }
 }, 0));
 if (first.conv.value) markRead(first.conv.value);
+requestAnimationFrame(() => highlight(first, 0));
+startFlow();
 
 feed = createFeed({
   EventSource: window.EventSource, tab: TAB, since: boot.snap.cursor || "",

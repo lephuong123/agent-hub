@@ -17,6 +17,7 @@ Module này không đọc/ghi `hub.db`; chỉ gọi RPC như phần còn lại c
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -24,7 +25,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
 
 from ..rpc import METHOD_NOT_FOUND, DaemonUnavailable, RpcError
-from .app import carry, err_text, flash_redirect, post_guard, render, rpc, session_of, ws
+from .app import carry, err_text, flash_redirect, gather_ordered, post_guard, render, rpc, session_of, ws
 
 # ============================================================================ lịch chạy
 KINDS = (("agent", "Một agent"), ("manager", "Điều phối viên"), ("task", "Task cho team / agent"))
@@ -250,12 +251,44 @@ def snippet_parts(s: str) -> list[tuple[bool, str]]:
     return out
 
 
-def hit_link(h: dict[str, Any]) -> str | None:
+def hit_link(h: dict[str, Any], conv: str | None = None) -> str | None:
+    """Kết quả thuộc hội thoại điều phối (tin của hội thoại, hoặc lượt chạy của điều phối viên — `conv`) → mở ĐÚNG hội thoại `/manager?c=…`,
+    kèm `#m<id>` (island tô sáng tin) khi biết tin nào; kết quả thuộc lượt chạy thường → trang lượt chạy."""
+    from urllib.parse import quote
+
+    c = h.get("conversation_id") or conv
+    if c:
+        ref = str(h.get("ref") or "")
+        return f"/manager?c={quote(str(c), safe='')}" + (f"#m{ref[3:]}" if ref.startswith("mm:") and ref[3:].isdigit() else "")
     if h.get("run_id"):
         return f"/runs/{h['run_id']}"
-    if h.get("conversation_id"):
-        return f"/manager?c={h['conversation_id']}"
     return None
+
+
+def _run_conv(run: dict[str, Any]) -> str | None:
+    opts = run.get("run_opts")
+    if isinstance(opts, str):
+        try:
+            opts = json.loads(opts)
+        except ValueError:
+            opts = None
+    return (opts or {}).get("manager_conversation") if isinstance(opts, dict) else None
+
+
+def group_hits(hits: list[dict[str, Any]], conv_of: dict[str, str], conv_titles: dict[str, str]) -> list[dict[str, Any]]:
+    """Gom kết quả (đã xếp hạng) theo hội thoại / lượt chạy, giữ thứ tự của kết quả tốt nhất mỗi nhóm (như tìm kiếm của claude.ai)."""
+    groups: dict[str, dict[str, Any]] = {}
+    for h in hits:
+        c = h.get("conversation_id") or conv_of.get(str(h.get("run_id") or ""))
+        h["_conv"] = c
+        key = f"c:{c}" if c else f"r:{h.get('run_id') or h.get('id')}"
+        g = groups.get(key)
+        if g is None:
+            g = groups[key] = {"conv": c, "run_id": None if c else h.get("run_id"), "agent_id": h.get("agent_id"), "hits": [],
+                               "title": (conv_titles.get(c) or "Hội thoại với điều phối viên") if c else None,
+                               "link": f"/manager?c={c}" if c else (f"/runs/{h['run_id']}" if h.get("run_id") else None)}
+        g["hits"].append(h)
+    return list(groups.values())
 
 
 async def search_page(request: Request) -> Response:
@@ -282,8 +315,20 @@ async def search_page(request: Request) -> Response:
             res = await rpc(request, "session.search", params)
         except RpcError as e:
             error = err_text(e) if e.code != METHOD_NOT_FOUND else "Daemon đang chạy bản cũ chưa có tìm kiếm hội thoại — khởi động lại daemon."
-        for h in (res or {}).get("hits") or []:
-            h["_parts"], h["_link"], h["_role"] = snippet_parts(h.get("snippet") or ""), hit_link(h), ROLE_LABEL.get(h.get("role") or "", h.get("role") or "")
+        hits = (res or {}).get("hits") or []
+        # lượt chạy của điều phối viên (kind manager) → hội thoại của nó (run_opts.manager_conversation): mở hội thoại, không mở trang run
+        mruns = sorted({str(h["run_id"]) for h in hits if h.get("run_id") and not h.get("conversation_id") and h.get("kind") == "manager"})
+        got = await gather_ordered(*(_opt(request, "run.get", {"id": r}, {}) for r in mruns)) if mruns else []
+        conv_of = {r: c for r, run in zip(mruns, got) if isinstance(run, dict) and (c := _run_conv(run))}
+        titles: dict[str, str] = {}
+        if any(h.get("conversation_id") for h in hits) or conv_of:
+            titles = {str(c.get("id")): str(c.get("title") or "") for c in await _opt(request, "manager.conversations", {"limit": 500}, []) or []
+                      if isinstance(c, dict) and c.get("title")}
+        for h in hits:
+            c = conv_of.get(str(h.get("run_id") or ""))
+            h["_parts"], h["_link"], h["_role"] = snippet_parts(h.get("snippet") or ""), hit_link(h, c), ROLE_LABEL.get(h.get("role") or "", h.get("role") or "")
+        if res is not None:
+            res["groups"] = group_hits(hits, conv_of, titles)
     base = {k: v for k, v in q.items() if k != "offset" and v}
     return await render(request, "search.html", {"nav": "search", "query": query, "res": res, "error": error, "agents": agents, "q": dict(q),
                                                  "since_opts": SINCE, "role_opts": ROLES, "base": base, "offset": offset})

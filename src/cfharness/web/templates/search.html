@@ -18,16 +18,25 @@
   <div class="card-head search-head"><h2>{{ m.icon('search') }} {% if res.hits %}Kết quả {{ offset + 1 }}–{{ offset + res.hits|length }}{% else %}Không có kết quả{% endif %}</h2>
     {% if res.backfill_pending %}<span class="pill warn" title="Dữ liệu cũ đang được chỉ mục nền — kết quả có thể thiếu">{{ m.icon('clock') }}đang chỉ mục dữ liệu cũ</span>{% endif %}</div>
   {% if not res.hits %}{{ m.empty("Thử từ khoá khác, bỏ bớt bộ lọc, hoặc mở rộng thời gian.", "search") }}{% else %}
-  <ol class="hits" start="{{ offset + 1 }}">
-    {% for h in res.hits %}<li class="hit">
-      <div class="hit-meta">
-        {% if h.agent_id %}<a href="/agents/{{ h.agent_id }}">{{ h.agent_id }}</a>{% else %}<span>hub</span>{% endif %}
-        <span class="pill muted">{{ h._role }}{% if h.tool %} · <code>{{ h.tool|tool }}</code>{% endif %}</span>
-        {% if h.kind and h.kind not in ('adhoc', 'manager_chat') %}<span class="muted small">{{ h.kind }}</span>{% endif %}
-        <span class="muted small">{{ m.rel(h.ts) }}</span>
-      </div>
-      <p class="hit-snip">{% for is_hit, t in h._parts %}{% if is_hit %}<mark>{{ t }}</mark>{% else %}{{ t }}{% endif %}{% endfor %}</p>
-      {% if h._link %}<a class="hit-link small" href="{{ h._link }}">{{ 'Mở lượt chạy ' ~ h.run_id if h.run_id else 'Mở hội thoại điều phối' }}{{ m.icon('chev-right') }}</a>{% endif %}
+  {#- nhóm theo hội thoại / lượt chạy (extra_pages.group_hits): kết quả thuộc hội thoại điều phối mở ĐÚNG hội thoại (`#m<id>` tô sáng tin),
+      kết quả của lượt chạy thường mở trang lượt chạy -#}
+  <ol class="hit-groups">
+    {% for g in res.groups %}<li class="hit-group">
+      <div class="hit-ghead">{{ m.icon('chat' if g.conv else 'run') }}
+        {% if g.link %}<a href="{{ g.link }}">{{ ('Hội thoại: ' ~ g.title) if g.conv else ('Lượt chạy của ' ~ (g.agent_id or 'hub')) }}</a>{% else %}<span>{{ g.agent_id or 'hub' }}</span>{% endif %}
+        <span class="muted small">{{ g.hits|length }} kết quả</span></div>
+      <ol class="hits">
+      {% for h in g.hits %}<li class="hit">
+        <div class="hit-meta">
+          {% if h.agent_id and not g.conv %}<a href="/agents/{{ h.agent_id }}">{{ h.agent_id }}</a>{% endif %}
+          <span class="pill muted">{{ h._role }}{% if h.tool %} · <code>{{ h.tool|tool }}</code>{% endif %}</span>
+          {% if h.kind and h.kind not in ('adhoc', 'manager_chat', 'manager') %}<span class="muted small">{{ h.kind }}</span>{% endif %}
+          <span class="muted small">{{ m.rel(h.ts) }}</span>
+        </div>
+        <p class="hit-snip">{% for is_hit, t in h._parts %}{% if is_hit %}<mark>{{ t }}</mark>{% else %}{{ t }}{% endif %}{% endfor %}</p>
+        {% if h._link %}<a class="hit-link small" href="{{ h._link }}">{{ ('Mở tin này trong hội thoại' if '#m' in h._link else 'Mở hội thoại') if h._conv else 'Mở lượt chạy' }}{{ m.icon('chev-right') }}</a>{% endif %}
+      </li>{% endfor %}
+      </ol>
     </li>{% endfor %}
   </ol>
   <div class="row between pager">
@@ -37,6 +46,6 @@
   {% endif %}
 </section>
 {% elif not query %}
-<section class="card">{{ m.empty("Ví dụ: tên file (\"config.yaml\"), mã lỗi, \"cấu hình sandbox\", tên khách hàng… Kết quả dẫn tới đúng lượt chạy.", "search", title="Gõ từ khoá để bắt đầu") }}</section>
+<section class="card">{{ m.empty("Ví dụ: tên file (\"config.yaml\"), mã lỗi, \"cấu hình sandbox\", tên khách hàng… Kết quả dẫn tới đúng hội thoại hoặc lượt chạy.", "search", title="Gõ từ khoá để bắt đầu") }}</section>
 {% endif %}
 {% endblock %}

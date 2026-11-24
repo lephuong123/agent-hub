@@ -11,6 +11,8 @@ import { LOBBY, fmtTs, relText, paneUrl, mergeTimeline } from "./util.js";
 import { initScroll, onScroll, onUserUp, onGrow } from "./scroll.js";
 import { liveMd } from "./md.js";
 import { Composer } from "./composer.js";
+import { signal } from "@preact/signals";
+import { getJSON } from "./api.js";
 
 export const html = htm.bind(h);
 
@@ -26,7 +28,7 @@ export function Time({ ts }) {
   return html`<time datetime=${ts} data-rel title=${fmtTs(ts)}>${relText(ts)}</time>`;
 }
 
-function Hidden({ name, value }) { return html`<input type="hidden" name=${name} value=${value == null ? "" : value} />`; }
+export function Hidden({ name, value }) { return html`<input type="hidden" name=${name} value=${value == null ? "" : value} />`; }
 
 /** Nút thao tác /do/<name> (form POST thật — confirm + khoá phiên do app.js). */
 export function Act({ name, label, fields, cls, confirm, next, ic, title }) {
@@ -237,7 +239,7 @@ function ActionRow({ a }) {
 
 const Q_STATUS = { with_manager: ["Đang chờ điều phối viên", "info"], open: ["Chờ bạn trả lời", "ask"], answered: ["Đã trả lời", "ok"], cancelled: ["Đã huỷ", "muted"] };
 
-function Question({ q, back, p, cv }) {
+export function Question({ q, back, p, cv }) {
   const [label, tone] = q.busy ? ["Đang gửi…", "muted"] : Q_STATUS[q.status] || [q.status || "", "muted"];
   const pending = q.status === "open" || q.status === "with_manager";
   const a = q.answer || {}, keys = a.keys || [], labels = a.labels || [];
@@ -274,7 +276,7 @@ const AP_DONE = { allowed: ["Đã cho phép", "ok", "check"], approved: ["Đã c
 
 /** Thẻ thao tác phá huỷ chờ duyệt: Cho phép MỘT lần / Từ chối ngay tại đây (xác nhận nội tuyến → /api/manager/act + idem, lạc quan,
  *  hoàn tác khi lỗi). "Luôn cho phép" / theo luật / bước 2 của thao tác nặng → trang Duyệt (nêu rõ luật). */
-function Approval({ a, p, cv }) {
+export function Approval({ a, p, cv }) {
   const done = a.done ? AP_DONE[a.done] || [a.done, "muted", "check"] : null;
   const set = (patch) => ui.store.patchAp(p, a.id, (x) => ({ ...x, ...patch }));
   return html`<article class=${"xcard approval human" + (cv ? " cvx" : "") + (done ? " done" : "") + (a.busy ? " busy" : "")} id=${"ap-" + a.id} aria-busy=${a.busy ? "true" : undefined}>
@@ -307,14 +309,14 @@ function Item({ it, p, run, last, cont }) {
   switch (it.kind) {
     case "day": return html`<div class="mm-day" role="separator" data-day=${it.key}><span>${it.text}</span></div>`;
     case "user":
-      return html`<div class=${"mm user" + C + (it.optimistic ? " sending" : "")} data-run=${it.run_id || undefined}>
+      return html`<div class=${"mm user" + C + (it.optimistic ? " sending" : "")} data-run=${it.run_id || undefined} data-id=${it.id}>
         <div class="mm-text">${it.text}</div>
         <div class="mm-foot">${it.optimistic ? html`<span class="muted small">đang gửi…</span>` : html`<${Time} ts=${it.ts} />`}
           <${CopyBtn} text=${it.text} label="Sao chép tin" />
           <button type="button" class="mm-btn" title="Sửa — đưa tin này vào ô nhập" aria-label="Sửa tin" onClick=${() => ui.fill(p, it.text, false)}><${Icon} n="edit" c="sm" /></button></div></div>`;
     case "manager": {
       const files = it.files || [], fa = it.agent || agent;
-      return html`<div class=${"mm mgr" + C + (it.notify ? " notify" : "") + (last ? " last" : "") + (cont ? " cont" : "")} data-run=${it.run_id || undefined}>
+      return html`<div class=${"mm mgr" + C + (it.notify ? " notify" : "") + (last ? " last" : "") + (cont ? " cont" : "")} data-run=${it.run_id || undefined} data-id=${it.id}>
         <div class="mm-who"><span class="mm-mark" aria-hidden="true"><${Icon} n="logo" /></span>${it.notify
           ? html`<${Icon} n="alert" c="sm" />Điều phối viên báo` : it.tick ? "Điều phối viên · kiểm tra định kỳ" : "Điều phối viên"}</div>
         <div class="ti msg tx-msg mm-md"><div class="md" dangerouslySetInnerHTML=${{ __html: it.html || "" }}></div>
@@ -329,7 +331,7 @@ function Item({ it, p, run, last, cont }) {
       return html`<details class=${"mm-acts" + C + (it.ok === false ? " err" : "") + (run && run === it.run_id ? " running" : "")} data-run=${it.run_id || undefined}>
         <summary><span class="mm-acts-ic"><${Icon} n=${it.ok === false ? "alert" : "check"} c="sm" /><span class="tx-spin" aria-hidden="true"></span></span>
           <span class="mm-acts-n">Đã làm <span class="n">${n}</span> việc</span><span class="mm-acts-last">${last.split("\n")[0].slice(0, 60)}</span><${Icon} n="chev-right" c="chev" /></summary>
-        <div class="mm-acts-list">${(it.items || []).map((a, i) => html`<${ActionRow} key=${a.audit_id || i} a=${a} />`)}</div></details>`;
+        <div class="mm-acts-list">${(it.items || []).map((a, i) => html`<${ActionRow} key=${a.audit_id || i} a=${a} />`)}</div></details><${WorkCards} items=${it.items} />`;
     }
     case "action": return html`<${ActionRow} a=${it} />`;
     case "question": return html`<${Question} q=${it.q} p=${p} cv=${cv} back=${paneUrl(p.conv.value, p.scope)} />`;
@@ -585,7 +587,7 @@ function Empty({ p }) {
   const conv = p.conv.value;
   return html`<div class="empty mgr-hero coord-empty"><${Icon} n="logo" c="hero-mark" /><b>${ws && !conv ? ws.title : !conv ? "Hôm nay giao việc gì cho đội?" : "Chưa có tin nhắn"}</b>
     <span>${ws && !conv ? "Nhắn gì ở đây cũng thuộc luồng này. Điều phối viên nhớ luồng qua ghi chú ở panel bên phải."
-      : "Nói mục tiêu bằng lời — điều phối viên tự tạo agent/team, giao việc, theo dõi và báo lại. Mỗi epic nên mở một luồng (＋ Luồng) để việc không lẫn vào nhau."}</span></div>`;
+      : "Nói mục tiêu bằng lời — điều phối viên tự tạo agent/team, giao việc, theo dõi và báo lại. Mỗi epic nên mở một luồng (＋ Luồng) để việc không lẫn vào nhau."}</span>${conv ? null : html`<${HeroLine} />`}</div>`;
 }
 
 /** Cuộn về đáy (bấm "Tin mới nhất" / vừa gửi): dính lại. */
@@ -714,28 +716,31 @@ function WsSide({ ws }) {
     <section class="mgr-side-sec ws-side"><${WsForms} ws=${ws} /></section>`;
 }
 
+/** Panel phải = "Đội đang làm gì" (TeamSide): việc cần bạn, agent đang làm (Xem → diễn biến trong panel trượt), ghi chú/task của luồng;
+ *  "Hành động gần đây" và thao tác điều phối viên (kiểm tra ngay, huỷ chỉ định) thu gọn ở cuối. */
 function Side({ p }) {
   // khởi động: khung đang hiện vẽ trước, panel phải vẽ ở khung hình sau (tách long task lúc mở trang)
-  if (ui.late && !ui.late.value) return html`<aside class="mgr-side" id="mgr-side" aria-label="Thông tin điều phối viên"></aside>`;
+  if (ui.late && !ui.late.value) return html`<aside class="mgr-side" id="mgr-side" aria-label="Đội đang làm gì"></aside>`;
   const s = ui.store, m = s.manager.value || {}, side = s.side.value, ws = p && p.workstream.value;
   const back = p ? paneUrl(p.conv.value, p.scope) : "/manager";
-  return html`<aside class="mgr-side" id="mgr-side" aria-label="Thông tin điều phối viên">
-    <div class="mgr-side-head"><h2>Điều phối viên</h2><button type="button" class="btn ghost sm icon" id="mgr-info-close" title="Đóng" aria-label="Đóng"><${Icon} n="x" /></button></div>
-    <section class="mgr-side-sec">
-      <${Status} />
-      <div class="btn-row mgr-ctl">
-        <${Act} name="manager_tick" label="Kiểm tra ngay" cls="btn sm" ic="zap" next=${back} title="manager.tick — gom sự kiện đang chờ và cho điều phối viên xử lý ngay"
-          confirm="Cho điều phối viên kiểm tra định kỳ NGAY? Nó xem sự kiện đang chờ + việc còn mở và xử lý (một lượt chạy thật, tốn tiền)." />
-        <${Act} name="manager_unset" label="Huỷ chỉ định" fields=${{ current: m.agent_id || "" }} cls="btn sm danger" next="/manager"
-          confirm=${"Huỷ chỉ định điều phối viên " + (m.agent_id || "") + "? Agent vẫn còn, chỉ mất vai trò."} />
-      </div>
-    </section>
+  return html`<aside class="mgr-side" id="mgr-side" aria-label="Đội đang làm gì">
+    <div class="mgr-side-head"><h2>Đội đang làm gì</h2><button type="button" class="btn ghost sm icon" id="mgr-info-close" title="Đóng" aria-label="Đóng"><${Icon} n="x" /></button></div>
+    <${TeamSide} />
     ${ws ? html`<${WsSide} ws=${ws} />` : null}
-    <section class="mgr-side-sec"><h3>Hành động gần đây</h3>
+    <details class="mgr-side-sec side-fold"><summary><h3>Hành động gần đây của điều phối viên</h3><${Icon} n="chev-down" c="sm chev" /></summary>
       <ol class="feed" id="mgr-actions">${side.length ? side.map((a, i) => html`<li key=${i} class=${"fl " + (a.ok === false ? "danger" : "ok")} title=${a.summary}><span class="fl-dot" aria-hidden="true"></span>
         <span class="fl-main"><span class="fl-text">${a.summary}</span>${a.target && a.target.href ? html` · <a href=${a.target.href}>${a.target.label}</a>` : null}</span>
         <span class="fl-ts">${fmtTs(a.ts)}</span></li>`) : html`<li class="empty">Chưa có hành động nào.</li>`}</ol>
-    </section>
+    </details>
+    <details class="mgr-side-sec side-fold"><summary><h3>Điều phối viên</h3><span class=${"pill " + (m.status_tone || "muted")}>${m.status_label || ""}</span><${Icon} n="chev-down" c="sm chev" /></summary>
+      <${Status} />
+      <div class="btn-row mgr-ctl">
+        <${Act} name="manager_tick" label="Kiểm tra ngay" cls="btn sm" ic="zap" next=${back} title="Gom sự kiện đang chờ và cho điều phối viên xử lý ngay"
+          confirm="Cho điều phối viên kiểm tra định kỳ NGAY? Nó xem sự kiện đang chờ + việc còn mở và xử lý (một lượt chạy thật, tốn tiền)." />
+        <${Act} name="manager_unset" label="Huỷ chỉ định" fields=${{ current: m.agent_id || "" }} cls="btn sm ghost danger-t" next="/manager"
+          confirm=${"Huỷ chỉ định điều phối viên " + (m.agent_id || "") + "? Agent vẫn còn, chỉ mất vai trò."} />
+      </div>
+    </details>
   </aside>`;
 }
 
@@ -750,7 +755,137 @@ export function App() {
       <${TabBar} />
       <div class="coord-panes">${panes.map((x) => html`<${Pane} key=${x.id} p=${x} on=${x === p} />`)}</div>
       <p class="sr-only" id="mgr-status-live" role="status"></p>
+      <${Tray} />
       ${p ? html`<${Composer} p=${p} />` : null}
     </section>
     <${Side} p=${p} />`;
+}
+
+/* ------------------------------------------------------------------ luồng việc ngay trong chat (`web/flow.py`, `GET /api/manager/flow`):
+ * - Khay "Cần bạn" ghim trên ô nhập (mọi agent, mọi hội thoại; số = huy hiệu menu). Thẻ duyệt/câu hỏi là CÙNG component của dòng thời gian,
+ *   gắn vào một "khung giả" `tray` ({items, actions} như một khung) → duyệt/trả lời đi CÙNG đường `/api/manager/act/*` (plan_action, bước
+ *   xác nhận, idem, bước 2 → trang Duyệt). Không có đường duyệt mới.
+ * - Thẻ việc sống dưới khối "Đã làm N việc": đích task/run của thẻ hành động → trạng thái (present.display_state), agent, bước hiện tại;
+ *   Xem = diễn biến trong panel trượt (files.js `a[data-xpanel]`), Nhắn thêm (/do/steer), Dừng (/do/stop, hộp xác nhận của app.js).
+ * - "Đội đang làm gì" (panel phải) + dòng tình hình ở hội thoại mới.
+ * Làm mới: hỏi lại sau sự kiện SSE (ws.status/tick — main gọi `flowSoon`), sau mỗi lần duyệt/trả lời, và theo nhịp (5 s khi có việc đang
+ * chạy, 20 s khi rảnh; tab ẩn thì thôi). Chữ đều là dữ liệu: children của htm (textContent).
+ */
+
+export const flow = signal(null);
+export const trayOpen = signal(false);
+const tray = { items: signal([]), actions: signal([]) };
+const want = new Set();
+let T = 0;
+
+export function flowSoon(ms) { clearTimeout(T); T = setTimeout(load, ms == null ? 400 : ms); }
+
+/** Giữ bản đang thao tác dở (đang gửi / đang hỏi xác nhận / lỗi / nháp) khi ảnh chụp mới tới. */
+function keep(old, nw, k) {
+  const m = new Map(old.map((x) => [x.id, x]));
+  return nw.map((x) => { const o = m.get(x.id), s = o && (k ? o[k] : o); return s && (s.busy || s.ask || s.err || s.draft) ? o : x; });
+}
+
+async function load() {
+  clearTimeout(T);
+  if (document.hidden) return;  // main gọi lại khi tab hiện (visibilitychange → status)
+  let f = null;
+  try { f = await getJSON("/api/manager/flow" + (want.size ? "?work=" + Array.from(want).slice(-12).join(",") : "")); } catch (_) {}
+  if (f && f.need) {
+    const it = f.need.items || [];
+    tray.actions.value = keep(tray.actions.value, it.filter((x) => x.kind === "approval"));
+    tray.items.value = keep(tray.items.value, it.filter((x) => x.kind === "question").map(({ kind, ...q }) => ({ kind, id: "q-" + q.id, q })), "q");
+    flow.value = f;
+  }
+  const live = f && (f.team.length || Object.values(f.work || {}).some((w) => w.live));
+  T = setTimeout(load, live ? 5000 : 20000);
+}
+
+export function startFlow() {
+  for (const k of ["decide", "answer"]) { const fn = ui[k]; ui[k] = async (...a) => { await fn(...a); flowSoon(700); }; }
+  load();
+}
+
+// ------------------------------------------------------------------ khay "Cần bạn"
+export function Tray() {
+  const f = flow.value, n = f && f.need;
+  if (!n || (!n.count && !n.with_manager)) return null;
+  const p = ui.store.active.value;
+  // mục đã hiện ngay trong hội thoại đang mở thì không lặp ở khay
+  const inAp = new Set(p ? p.actions.value.map((x) => x.id) : []);
+  const inQ = new Set(p ? p.items.value.filter((x) => x.kind === "question").map((x) => x.q.id) : []);
+  const aps = tray.actions.value.filter((a) => !inAp.has(a.id)), qs = tray.items.value.filter((x) => !inQ.has(x.q.id));
+  const shown = n.count - aps.length - qs.length;
+  return html`<details class="ctray" open=${trayOpen.value} onToggle=${(e) => { trayOpen.value = e.currentTarget.open; }}>
+    <summary><${Icon} n="inbox" c="sm" /><b>${n.count ? n.count + " việc cần bạn" : "Không có việc chờ bạn"}</b>
+      ${n.approvals ? html`<span class="pill danger">${n.approvals} duyệt phá huỷ</span>` : null}${n.questions ? html`<span class="pill ask">${n.questions} câu hỏi</span>` : null}
+      ${n.with_manager ? html`<span class="ctray-wm">${n.with_manager} đang chờ điều phối viên</span>` : null}<${Icon} n="chev-down" c="sm chev" /></summary>
+    <div class="ctray-list">
+      ${aps.map((a) => html`<${Approval} key=${a.id} a=${a} p=${tray} />`)}
+      ${qs.map((x) => html`<${Question} key=${x.id} q=${x.q} p=${tray} back=${location.pathname + location.search} />`)}
+      ${shown > 0 ? html`<p class="muted small">${shown} việc đang hiện ngay trong hội thoại này.</p>` : null}
+      <a class="small" href="/inbox">Mở trang Cần bạn</a>
+    </div></details>`;
+}
+
+// ------------------------------------------------------------------ thẻ việc sống
+function Ava({ id }) { return html`<span class="avatar sm" aria-hidden="true">${(id || "?").slice(0, 1)}</span>`; }
+
+function Look({ w, label }) {
+  return w.run_id ? html`<a class="btn ghost sm" href=${"/runs/" + encodeURIComponent(w.run_id)} data-xpanel="" data-ptitle=${w.title}><${Icon} n="panel" c="sm" /><span>${label || "Xem"}</span></a>` : null;
+}
+
+function WorkCard({ t }) {
+  const w = ((flow.value || {}).work || {})[t.id] || { title: t.label, label: "đang tải…", tone: "muted", href: t.href };
+  if (w.skip) return null;
+  return html`<article class=${"wcard" + (w.live ? " live" : "") + (w.end ? " end" : "")} data-tone=${w.tone}>
+    <div class="wcard-head"><${Ava} id=${w.agent} /><div class="wcard-t"><a href=${w.href}>${w.title}</a>
+      <div class="wcard-m">${w.agent ? html`<span>${w.agent}</span>` : null}<span class=${"pill " + (w.tone || "muted")}>${w.label}</span>${w.step ? html`<span class="wcard-step">${w.step}</span>` : null}</div></div></div>
+    ${w.result ? html`<p class="wcard-res">${w.result}</p>` : null}
+    <div class="wcard-acts"><${Look} w=${w} />
+      ${w.live && w.run_id ? html`<details class="wcard-steer"><summary class="btn ghost sm"><${Icon} n="chat" c="sm" /><span>Nhắn thêm</span></summary>
+        <form method="post" action="/do/steer"><${Hidden} name="csrf" value=${ui.csrf} /><${Hidden} name="id" value=${w.run_id} /><${Hidden} name="next" value=${location.pathname + location.search} />
+          <textarea name="text" rows="2" maxlength="4000" required aria-label=${"Nhắn thêm cho " + (w.agent || "agent")}></textarea>
+          <button class="btn sm primary" type="submit">Gửi</button></form></details>
+        <${Act} name="stop" label="Dừng" fields=${{ id: w.run_id }} cls="btn ghost sm danger-t" ic="stop" confirm=${"Dừng việc “" + w.title + "”? Agent sẽ ngừng ngay."} />` : null}
+    </div></article>`;
+}
+
+export function WorkCards({ items }) {
+  const seen = new Set(), ts = [];
+  for (const a of items || []) {
+    const t = a.target || {};
+    if ((t.kind === "task" || t.kind === "run") && t.id && !seen.has(t.id)) { seen.add(t.id); ts.push(t); }
+  }
+  if (!ts.length) return null;
+  let add = false;
+  for (const t of ts) if (!want.has(t.id)) { want.add(t.id); add = true; }
+  if (add) flowSoon(50);
+  return html`<div class="wcards">${ts.map((t) => html`<${WorkCard} key=${t.id} t=${t} />`)}</div>`;
+}
+
+// ------------------------------------------------------------------ "Đội đang làm gì" + dòng tình hình
+export function TeamSide() {
+  const f = flow.value;
+  if (!f) return html`<section class="mgr-side-sec"><p class="muted small">Đang tải tình hình đội…</p></section>`;
+  const n = f.need || {};
+  return html`<section class="mgr-side-sec team-need">${n.count
+      ? html`<button type="button" class="btn sm need-btn" onClick=${() => { trayOpen.value = true; document.documentElement.classList.remove("mgr-info-open"); }}>
+          <${Icon} n="inbox" c="sm" /><span>${n.count} việc cần bạn</span></button>`
+      : html`<span class="muted small"><${Icon} n="check" c="sm" /> Không có việc nào chờ bạn</span>`}
+      ${n.with_manager ? html`<span class="muted small">${n.with_manager} câu hỏi đang chờ điều phối viên</span>` : null}</section>
+    <section class="mgr-side-sec"><h3>Đang làm (${f.team.length})</h3>${f.team.length ? html`<ul class="team-list">${f.team.map((a) => html`<li key=${a.id}>
+        <span class=${"avatar sm " + (a.avatar || "")} aria-hidden="true">${(a.name || "?").slice(0, 1)}</span>
+        <div class="team-b"><div class="team-n"><a href=${"/agents/" + encodeURIComponent(a.id)}>${a.name}</a><span class=${"pill " + a.tone}>${a.label}</span></div>
+          ${a.task ? html`<div class="team-t" title=${a.task}>${a.task}</div>` : null}${a.tool ? html`<div class="team-s">Đang dùng ${a.tool}</div>` : null}</div>
+        ${a.run_id ? html`<${Look} w=${{ run_id: a.run_id, title: a.name + " · " + (a.task || a.label) }} />` : null}</li>`)}</ul>`
+      : html`<p class="muted small">Cả đội đang rảnh — nhắn điều phối viên để giao việc.</p>`}
+      <p class="muted small team-foot">${f.idle} agent rảnh · hôm nay ${f.cost_today} · <a href="/agents">Đội ngũ</a></p></section>`;
+}
+
+export function HeroLine() {
+  const f = flow.value;
+  if (!f) return null;
+  const n = (f.need || {}).count || 0, busy = f.team.length;
+  return html`<p class="hero-line">${busy ? busy + " agent đang có việc" : "Cả đội đang rảnh"} · ${n ? html`<button type="button" class="linkish" onClick=${() => { trayOpen.value = true; }}>${n} việc cần bạn</button>` : "không có việc chờ bạn"}</p>`;
 }

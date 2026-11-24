@@ -1129,11 +1129,20 @@ async def runs_page(request: Request) -> Response:
     params: dict[str, Any] = {"limit": int(q.get("limit") or 100)}
     if q.get("agent"):
         params["agent"] = q["agent"]
-    if q.get("status"):
-        params["status"] = q["status"]
-    runs = await rpc(request, "run.list", params)
+    want = q.get("status") or ""
+    if want == "waiting_human":
+        # "Chờ duyệt" = trạng thái HIỂN THỊ (khớp pill): gồm cả run đang chạy/xếp hàng có thao tác phá huỷ chờ duyệt (present.display_state)
+        lists = await gather_ordered(*(rpc(request, "run.list", {**params, "status": s}) for s in P.LIVE_RUN))
+        by_id = {r["id"]: r for rs in lists for r in rs or []}
+        runs = sorted(by_id.values(), key=lambda r: str(r.get("queued_at") or ""), reverse=True)
+    else:
+        if want:
+            params["status"] = want
+        runs = await rpc(request, "run.list", params)
     agents = [a["id"] for a in await rpc(request, "agent.list", {})]
     idx = await need_idx(request) if any(P.is_live_run(r) for r in runs or []) else {}
+    if want == "waiting_human":
+        runs = [r for r in runs if P.run_state(r, idx) == "waiting_human"]
     return await render(request, "runs.html", {"nav": "runs", "runs": runs, "agents": agents, "q": dict(q), "statuses": P.RUN_STATUS,
                                                "titles": await task_titles(request, runs), "idx": idx})
 
@@ -1199,6 +1208,14 @@ async def run_page(request: Request) -> Response:
     epoch = status["epoch"]
     since = max([int(e.get("seq") or 0) for e in events if e.get("epoch") == epoch] or [0])
     ctx = await _run_ctx(request, run["id"])
+    if request.query_params.get("panel") == "1":
+        # panel trượt bên phải của trang Điều phối (static/files.js, nút "Xem" của thẻ việc / "Đội đang làm gì"): chỉ phần diễn biến gần
+        # nhất, không khung trang. Cùng bộ gộp + macro với trang run (chữ agent autoescape, chỉ md() đã cứng hoá là |safe).
+        tx = replay_tx(events)
+        P.mark_final(tx.items)
+        blocks, _, hidden = P.page_blocks(tx.blocks())
+        return ws(request).templates.TemplateResponse(request, "_run_panel.html", {**ctx, "items": blocks, "hidden": hidden},
+                                                      headers={"Cache-Control": "no-store"})
     children = [r for r in (await rpc(request, "run.list", {"agent": run["agent_id"], "limit": 50}) or []) if r.get("parent_run_id") == run["id"]]
     qs = await questions(request, "all", run_id=run["id"])
     tx = replay_tx(events)

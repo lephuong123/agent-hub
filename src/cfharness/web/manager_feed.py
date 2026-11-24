@@ -137,7 +137,9 @@ def action_json(a: dict[str, Any]) -> dict[str, Any]:
     return {"kind": "action", "summary": a.get("summary") or "", "tool": a.get("tool") or "", "ok": bool(a.get("ok", True)),
             "error": a.get("error"), "ts": a.get("ts"), "run_id": a.get("run_id"), "audit_id": a.get("audit_id"),
             "conversation_id": a.get("conversation_id"),
-            "target": {"href": tgt.get("href"), "label": tgt.get("label")} if isinstance(tgt, dict) else {"href": None, "label": str(tgt)}}
+            # kind/id: island dựng "thẻ việc sống" cho đích task/run (`web/flow.py`, `/api/manager/flow?work=`)
+            "target": {"href": tgt.get("href"), "label": tgt.get("label"), "kind": tgt.get("kind") if tgt.get("href") else None,
+                       "id": tgt.get("id") if tgt.get("href") else None} if isinstance(tgt, dict) else {"href": None, "label": str(tgt)}}
 
 
 QUESTION_KEYS = ("id", "agent_id", "run_id", "task_id", "conversation_id", "text", "options", "multi", "allow_free_text", "status", "routed_to",
@@ -939,4 +941,11 @@ def routes() -> list[Any]:
         Route("/api/manager/watch", api_watch, methods=["POST"]),
         Route("/api/manager/act/{name}", api_act, methods=["POST"]),
         Route("/sse/manager/v2", sse_v2),
+        *_flow_routes(),
     ]
+
+
+def _flow_routes() -> list[Any]:
+    from .flow import routes as _r  # /api/manager/flow — khay "Cần bạn", "Đội đang làm gì", thẻ việc sống
+
+    return _r()
