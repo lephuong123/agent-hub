@@ -23,8 +23,12 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - **Web nhẹ hơn**: tệp tĩnh có phiên bản được cache hẳn, trang/JS nén gzip; chấm "đang chạy" và nút mic nhấp nháy không còn vẽ lại cả khung hình. Thư viện JS (Preact, htm, signals, streaming-markdown, DOMPurify) đóng gói sẵn, ghim phiên bản, không tải từ CDN.
 - RPC `events.query` nhận thêm `since`/`epoch`; event hub mới `manager.message` (tin người gửi cho điều phối viên). Hub demo: tin có `[demo]` cho câu trả lời chạy chữ ~100 token/s kèm tool, thẻ duyệt và câu hỏi.
 
+### Run và daemon ổn định hơn (#201)
+- **Run đã trả lời xong không còn bị tính quá giờ vì task nền**: khi một lệnh Bash chạy lâu bị Claude CLI chuyển sang chạy nền (vd `git fetch` treo vì mất mạng), CLI không thoát sau `result`, nên run bị giữ tới hạn `max_runtime_s` (30 phút) rồi ghi `timed_out` dù điều phối viên đã trả lời. Nay CLI im lặng quá `runtime.claude.exit_grace_s` (mặc định 60 s) sau `result` thì hub dừng tiến trình (gồm cả task nền) và giữ kết quả theo `result`.
+- **Daemon bị treo thì để lại dấu vết**: thread watchdog mới phát hiện event loop của daemon không phản hồi quá `perf.loop_stall_dump_s` (mặc định 15 s; 0 = tắt) và ghi stack mọi thread vào `logs/faults.log` ngay lúc đang treo (tối đa 3 lần mỗi lần treo), kèm dòng `loop.stall` / `loop.stall_end` trong hub.log. Trên Windows trước đây không có cách nào lấy stack (`daemon dump-stacks` chỉ có trên macOS/Linux).
+
 ### Lưu ý khi cập nhật
-- Không có migration DB hay cấu hình phải sửa tay. Sau khi cập nhật, tải lại tab web đang mở để nhận giao diện mới.
+- Không có migration DB hay cấu hình phải sửa tay (hai setting mới `runtime.claude.exit_grace_s`, `perf.loop_stall_dump_s` có mặc định). Sau khi cập nhật, tải lại tab web đang mở để nhận giao diện mới.
 - Giao diện Điều phối cũ (`?ui=old`) sẽ bị gỡ ở bản phát hành sau.
 
 ---

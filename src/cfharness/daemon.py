@@ -24,8 +24,9 @@ from .config import HubConfig
 from .errors import BLOCKED, HubError, SYSTEM_ERROR
 from .events import TERMINAL_RUN_EVENTS
 from .hub import Hub
+from .loop_watchdog import DEFAULT_STALL_S, LoopWatchdog
 from .logs import (DEFAULT_BACKUP_COUNT, DEFAULT_MAX_AGE_DAYS, DEFAULT_MAX_BYTES, LEVELS, asyncio_exception_handler,
-                   install_crash_handlers, rotate_if_large, setup_logging)
+                   fault_file as _fault_file, install_crash_handlers, rotate_if_large, setup_logging)
 from .paths import HubPaths
 from .oscompat import IS_WINDOWS, JOBS, detached_kwargs, ensure_hidden_console, same_user
 from .rpc import INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, DaemonUnavailable, RpcClient, RpcError, encode
@@ -89,6 +90,7 @@ class Daemon:
         self._mutating: frozenset[str] = frozenset()
         self._slow_cache: tuple[float, float] = (float(DEFAULT_SLOW_RPC_MS), 0.0)
         self._lag_cache: tuple[float, float] = (float(DEFAULT_LOOP_LAG_WARN_MS), 0.0)
+        self._watchdog: LoopWatchdog | None = None  # thread dump stack khi loop đứng (serve() khởi động)
         from .perf import DaemonPerf
 
         self.perf = DaemonPerf()  # thời gian mỗi RPC + ảnh chụp web (`perf.stats`/`perf.report`, perf.py)
@@ -274,6 +276,13 @@ class Daemon:
         offloaded.offloaded = True  # type: ignore[attr-defined]
         return offloaded
 
+    def _loop_stall_s(self) -> float:
+        """`perf.loop_stall_dump_s` (mặc định 15; 0 = tắt watchdog dump stack). Gọi từ THREAD watchdog — chỉ đọc dict cấu hình."""
+        try:
+            return float(self.hub.config.get("perf.loop_stall_dump_s") or 0)
+        except (KeyError, TypeError, ValueError):
+            return DEFAULT_STALL_S
+
     def _loop_lag_warn_ms(self) -> float:
         """`perf.loop_lag_warn_ms` (mặc định 250; 0 = không cảnh báo) — đọc lại tối đa mỗi 5 s."""
         now = time.monotonic()
@@ -292,6 +301,8 @@ class Daemon:
         loop = asyncio.get_running_loop()
         while not self.stopping.is_set():
             t0 = loop.time()
+            if self._watchdog is not None:
+                self._watchdog.beat()
             await asyncio.sleep(interval)
             lag_ms = max(0.0, (loop.time() - t0 - interval) * 1000.0)
             self.perf.note_loop_lag(lag_ms)
@@ -801,6 +812,8 @@ class Daemon:
                 pass
         log.info("daemon sẵn sàng tại %s (epoch %s)", sock, self.hub.bus.epoch)
         watch = asyncio.create_task(self._watch_listener())
+        self._watchdog = LoopWatchdog(_fault_file, stall_s=self._loop_stall_s)
+        self._watchdog.start()  # thread riêng: loop đứng quá perf.loop_stall_dump_s → dump stack vào faults.log
         lag = asyncio.create_task(self._loop_lag())
         try:
             await self.stopping.wait()
@@ -808,6 +821,7 @@ class Daemon:
             log.info("daemon đang dừng")
             watch.cancel()
             lag.cancel()
+            self._watchdog.stop()
             self.server.close()
             for w in list(self._rr_conns):  # client đang giữ kết nối (AsyncHubClient) thấy EOF ngay
                 try:

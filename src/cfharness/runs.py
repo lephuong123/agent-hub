@@ -1240,6 +1240,8 @@ class RunManager:
             ev.task_id = ar.task_id
             ev.team_id = ar.team_id
         if ev.type in ("run.completed", "run.failed"):
+            if ar.result is not None and ar.handle is not None and ar.handle.internal.get("exit_grace_stopped"):
+                return  # hub tự dừng CLI không chịu thoát sau `result`: `result` do ngắt sinh ra không đè kết quả thật
             ar.result = dict(ev.payload)
             # sự kiện kết thúc chính thức do hub phát trong _finalize (sau khi ghi DB)
             return
