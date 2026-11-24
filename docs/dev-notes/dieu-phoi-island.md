@@ -1,10 +1,10 @@
 # Điều phối — hợp đồng v2 (GĐ1 của phương án B: island)
 
-Mã: `src/cfharness/web/manager_feed.py` (route + `Feed` + `Converter`), `web/manager.py` (`page_ctx`, `workstreams_data` dùng chung với trang cũ),
+Mã: `src/cfharness/web/manager_feed.py` (route + `Feed` + `Converter`), `web/manager.py` (`page_ctx`, `workstreams_data`, POST `send|stop|read`),
 `bus.py` / `daemon.py` (`detail_agent_id`), `web/demo_stream.py` (kịch bản `[demo]`). Test: `tests/test_web_manager_v2.py`.
 
-Trang cũ (`GET /manager`, `/partials/manager*`, `/sse/manager`, `/manager/send|stop|read`) giữ nguyên tới GĐ3. Island (GĐ2, `?ui=next`) chỉ dùng
-hợp đồng dưới đây + `POST /manager/send|stop|read` sẵn có.
+Island là trang Điều phối DUY NHẤT (từ bản sau v0.2.31 — trang cũ htmx/app.js, `?ui=old`, `/sse/manager`, `/partials/manager/tabs` đã gỡ, xem
+mục cuối). Island chỉ dùng hợp đồng dưới đây + `POST /manager/send|stop|read`.
 
 ## Kiến trúc
 
@@ -132,7 +132,7 @@ chạy chữ ~100 token/s (`demo_stream.TOKEN_S`). Đi qua adapter stream-json t
 - Đổi tab không mở lại SSE: tab đã mở giữ phạm vi; tab mới → snapshot (nếu chưa có) + `watch add`.
 - `ws.status.unread` là số toàn hub (một người dùng); trang cũ `_viewing` → island tự xử lý hội thoại đang xem.
 - Câu hỏi/duyệt của agent KHÁC trong luồng (không phải lượt điều phối viên) chưa lên trang này (như trang cũ) — chỉ làm chấm `danger` của tab.
-- `/sse/manager` (cũ) và `/partials/manager/tabs` gỡ ở GĐ3 khi island thành mặc định.
+- `/sse/manager` (cũ) và `/partials/manager/tabs`: đã gỡ (mục "Gỡ trang cũ" ở cuối).
 
 ## GĐ2 phần 1 — island `/manager?ui=next`
 
@@ -304,3 +304,16 @@ Mã mới: `static/coord/scroll.js` (cuộn dính đáy — THUẦN), `static/co
   chip với `preventScroll`. Đo: lệch 0 px khi mở và khi đóng (trước khi thêm preventScroll: −54 px lúc đóng).
 - **Ngân sách JS:** +0.5 KB gzip bản phục vụ (42.2 KB) → test chặn nâng lên 42.5 KB (nguồn 58.5 KB); ngân sách cuối vẫn chờ người dùng chốt.
 - **Còn mở:** chữ chạy `[demo]` có CLS ~0.011 mỗi lượt (dịch 2 px dòng chữ dưới cùng + bảng markdown) — y hệt trước vòng 4, chưa xử lý.
+
+## Gỡ trang cũ + chốt ngân sách JS (2026-11-24)
+- **Trang Điều phối cũ đã gỡ hẳn** (hết bản phát hành lối thoát của GĐ3): `?ui=old`/`?ui=new` + cookie `ahub_mgr_ui` (tham số `ui` giờ bị bỏ
+  qua — `/manager?ui=old` mở island; island bỏ `ui` khỏi URL khi đổi trang), vỏ `X-Ahub-Partial: grid`, `_manager.html`, `_manager_shell.html`,
+  `_manager_tabs.html`, phần chat của `manager.html`, app.js `initManager`/`mgrBoot`/`mgrGo`/`patchTabs` (~585 dòng), `GET /sse/manager` +
+  `_converter`, `GET /partials/manager/tabs`, `html_user`/`html_pending` trong JSON của `POST /manager/send` (giờ chỉ `{conversation_id,
+  run_id, steered}`), perf.js `wsSoft`, CSS `.mgr-loading`/`.mm-tail`, fixture `old_manager_ui` + test chỉ của trang cũ.
+- **Giữ:** `manager.html` = CHỈ phần chỉ định điều phối viên (`manager.setup_page`, island gọi khi ảnh chụp có `setup`); `_manager_status.html` +
+  `/partials/manager` (thẻ Điều phối ở Tổng quan); `page_ctx`/`_timeline`/`with_days`/`pending_info`/`question_from_event`/`workstreams_data`
+  (feed v2, office.py); `POST /manager/send|stop|read`; app.js `mgrInfo` (nút panel phải của island), `autoGrow`.
+- **Ngân sách JS (chốt):** 45 KB gzip bản PHỤC VỤ (vendor + coord đã `jsmin`), KHÔNG bước build — người dùng quyết 2026-11-24. Đo lúc chốt:
+  vendor 11.1 + coord 31.1 = 42.2 KB. Test `test_served_island_js_gzip_budget` chặn ở 45 000 B; chặn cỡ nguồn (`test_coord_island`, 58.5 KB)
+  giữ nguyên — nguồn đo 58.0 KB, chưa cần nâng.

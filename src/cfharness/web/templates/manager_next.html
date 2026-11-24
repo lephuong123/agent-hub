@@ -13,7 +13,7 @@
 {% block content %}
 <link rel="stylesheet" href="{{ static('coord.css') }}">
 <div class="mgr-grid coord" id="coord" data-state="boot"><p class="muted coord-boot-msg">Đang tải Điều phối…</p></div>
-<noscript><p class="flash error">Giao diện mới cần JavaScript — <a href="/manager">dùng giao diện cũ</a>.</p></noscript>
+<noscript><p class="flash error">Trang Điều phối cần JavaScript — bật JavaScript rồi tải lại trang.</p></noscript>
 <script type="application/json" id="coord-boot">{{ boot|tojson }}</script>
 <script type="importmap">{{ importmap|safe }}</script>
 <script type="module" src="{{ entry }}"></script>

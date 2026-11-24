@@ -1,17 +1,15 @@
-"""Trang Điều phối theo luồng việc (docs/dev-notes/workstreams.md) — daemon in-process + FakeRuntime, app Starlette qua ASGITransport."""
+"""Trang Điều phối theo luồng việc (docs/dev-notes/workstreams.md) — daemon in-process + FakeRuntime, app Starlette qua ASGITransport.
+Trang là island: tab luồng, thanh bên, panel luồng kiểm qua ảnh chụp JSON `/api/manager/snapshot`; thao tác ghi qua `/do/<action>`."""
 
 from __future__ import annotations
-
-import re
 
 import pytest
 
 from cfharness.runtime import FakeRuntime
 
 from test_web import ISOLATED, _start, _stop  # noqa: F401
-from test_web_manager import designate, mgr_rpc, send
+from test_web_manager import designate, mgr_rpc, send, snap
 
-pytestmark = pytest.mark.usefixtures("old_manager_ui")  # trang Điều phối CŨ (?ui=old) — island có test riêng (test_coord_*)
 
 
 @pytest.fixture
@@ -23,20 +21,17 @@ async def wenv(hub_home):
     await _stop(e)
 
 
-def _side(html: str) -> str:
-    return re.search(r'<section class="side-recents".*?</section>', html, re.S).group(0)
-
-
-def _bar(html: str) -> str:
-    return re.search(r'<nav class="ws-bar".*?</nav>', html, re.S).group(0)
+def _tab(s: dict, wid: str) -> dict:
+    return next(t for t in [*s["workstreams"]["active"], *s["workstreams"]["closed"]] if t["ws"] == wid)
 
 
 async def test_sidebar_groups_lobby_and_workstreams_and_create(wenv):
     await wenv.login()
     await designate(wenv)
     r = await wenv.client.get("/manager")
-    bar = _bar(r.text)
-    assert "Sảnh" in bar and 'action="/do/ws_create"' in bar and "Hội thoại ở Sảnh" in _side(r.text)
+    assert "Hội thoại ở Sảnh" in r.text  # thanh bên vẽ sẵn ở server (manager_next.html)
+    s = await snap(wenv)
+    assert s["workstreams"]["enabled"] and s["workstreams"]["lobby"]["title"] == "Sảnh" and s["scope"] == "_"
     # mở luồng chỉ cần tên; tên bắt đầu bằng mã Jira → tách mã
     r = await wenv.post("/do/ws_create", {"title": "LH-55166 Monitor <b>x</b>", "next": "/manager"})
     assert r.status_code == 303
@@ -44,10 +39,11 @@ async def test_sidebar_groups_lobby_and_workstreams_and_create(wenv):
     assert loc.startswith("/manager?w=ws_")
     wid = loc.split("w=", 1)[1]
     r = await wenv.client.get(loc)
-    assert "Monitor &lt;b&gt;x&lt;/b&gt;" in _bar(r.text) and "<b>x</b>" not in r.text  # tên luồng là dữ liệu: escape
-    assert 'class="ws-tab on"' in r.text and "LH-55166" in r.text
-    assert f'name="w" value="{wid}"' in r.text  # tin đầu tiên mở hội thoại trong luồng
-    assert "Ghi chú luồng" in r.text and 'action="/do/ws_state"' in r.text
+    assert "<b>x</b>" not in r.text and "Monitor &lt;b&gt;x&lt;/b&gt;" in r.text  # tên luồng là dữ liệu: escape (tiêu đề thanh bên)
+    s = await snap(wenv, f"?w={wid}")
+    assert s["ws"] == wid and s["scope"] == wid and s["conv"] is None  # tin đầu tiên mở hội thoại trong luồng
+    assert _tab(s, wid)["title"] == "Monitor <b>x</b>" and _tab(s, wid)["key"] == "LH-55166"  # chữ thô — island gán textContent
+    assert s["workstream"]["id"] == wid and "state" in s["workstream"]  # panel luồng: ghi chú (STATE.md)
     # tên trống → hub tự đặt tên
     r = await wenv.post("/do/ws_create", {"title": "", "next": "/manager"})
     assert r.status_code == 303
@@ -67,15 +63,14 @@ async def test_send_in_workstream_files_conversation_and_lobby_stays_separate(we
     lob = await send(wenv, "việc khác ở sảnh")
     assert lob["conversation_id"] != cid
     # mở hội thoại của luồng: chip + STATE + panel task; Sảnh chỉ có hội thoại không thuộc luồng
-    r = await wenv.client.get(f"/manager?c={cid}")
-    assert "PR #712 chờ QA" in r.text and "LH-55815" in r.text
-    side = _side(r.text)  # trong luồng: thanh bên chỉ có hội thoại của luồng
-    assert f"?c={cid}" in side and f"?c={lob['conversation_id']}" not in side
-    side = _side((await wenv.client.get("/manager")).text)  # Sảnh
-    assert f"?c={lob['conversation_id']}" in side and f"?c={cid}" not in side
+    s = await snap(wenv, f"?c={cid}")
+    assert s["ws"] == w["id"] and s["workstream"]["state"] == "PR #712 chờ QA" and s["workstream"]["key"] == "LH-55815"
+    side = [c["id"] for c in s["conversations"]]  # trong luồng: thanh bên chỉ có hội thoại của luồng
+    assert cid in side and lob["conversation_id"] not in side
+    side = [c["id"] for c in (await snap(wenv))["conversations"]]  # Sảnh
+    assert lob["conversation_id"] in side and cid not in side
     # ?w=<mã> → hội thoại gần nhất của luồng
-    r = await wenv.client.get("/manager?w=LH-55815")
-    assert f'name="c" value="{cid}"' in r.text
+    assert (await snap(wenv, "?w=LH-55815"))["conv"] == cid
 
 
 async def test_state_edit_rename_move_archive_close(wenv):
@@ -102,8 +97,8 @@ async def test_state_edit_rename_move_archive_close(wenv):
     # đóng luồng (xác nhận) → xuống mục Đã đóng
     r = await wenv.post("/do/ws_close", {"id": w["id"], "confirm": "yes", "next": "/manager"})
     assert r.status_code == 303
-    r = await wenv.client.get("/manager")
-    assert "Đã đóng 1" in _bar(r.text)
+    s = await snap(wenv)
+    assert [t["ws"] for t in s["workstreams"]["closed"]] == [w["id"]] and not s["workstreams"]["active"]
     actions = [row["kind"] for row in wenv.hub.store.conn.execute("SELECT kind FROM audit_log")]
     assert "workstream.update" in actions and "manager.conversation_update" in actions
 
@@ -122,7 +117,7 @@ def test_tab_state_priority():
     assert tab_state({}, 0, 0, False)[0] == "none"
 
 
-async def test_tabs_partial_shows_running_then_done(wenv):
+async def test_tab_status_shows_running_then_done(wenv):
     import asyncio
 
     await wenv.login()
@@ -135,28 +130,22 @@ async def test_tabs_partial_shows_running_then_done(wenv):
         if (wenv.hub.store.get_run(run_id) or {}).get("status") not in ("queued", "running"):
             break
         await asyncio.sleep(0.05)
-
-    def tab(html: str) -> str:
-        return re.search(rf'<a class="ws-tab[^"]*" href="/manager\?w={w["id"]}".*?</a>', html, re.S).group(0)
-
     # giả lập lượt điều phối viên còn đang chạy trong luồng
     wenv.hub.store.conn.execute("UPDATE runs SET status='running' WHERE id=?", (run_id,))
     convs = await mgr_rpc(wenv, "manager.conversations", {"workstream": w["id"]})
     assert convs[0]["running"] == {"id": run_id, "status": "running"}
-    r = await wenv.client.get(f"/partials/manager/tabs?w={w['id']}")
-    assert r.status_code == 200 and r.text.lstrip().startswith('<div class="ws-tabs" id="ws-tabs"')
-    t = tab(r.text)
-    assert 'ws-dot run' in t and "Đang chạy" in t and "ws-tab on" in t
-    page = (await wenv.client.get(f"/manager?c={cid}")).text
-    assert 'ws-dot run' in _side(page)  # hội thoại đang chạy có chấm ở thanh bên
+    s = await snap(wenv, f"?c={cid}")
+    t = _tab(s, w["id"])
+    assert t["dot"] == "run" and "Đang chạy" in t["dot_label"] and s["ws"] == w["id"]
+    assert next(c for c in s["conversations"] if c["id"] == cid)["running"]  # hội thoại đang chạy có chấm ở thanh bên
     # xong → dấu "đã xong"
     wenv.hub.store.conn.execute("UPDATE runs SET status='completed' WHERE id=?", (run_id,))
-    t = tab((await wenv.client.get("/partials/manager/tabs")).text)
-    assert 'ws-dot done' in t and "Đã xong" in t and "ws-tab on" not in t
-    # trả lời tới trong lúc đang xem hội thoại: làm mới hàng tab kèm c=<hội thoại> → không hiện "chưa đọc"
+    t = _tab(await snap(wenv), w["id"])
+    assert t["dot"] == "done" and "Đã xong" in t["dot_label"]
+    # trả lời tới trong lúc đang xem hội thoại: ảnh chụp kèm c=<hội thoại> → không hiện "chưa đọc"
     wenv.hub.store.conn.execute("UPDATE manager_conversations SET read_upto=0 WHERE id=?", (cid,))
-    assert '<span class="ws-unread">' in tab((await wenv.client.get(f"/partials/manager/tabs?w={w['id']}")).text)
-    assert '<span class="ws-unread">' not in tab((await wenv.client.get(f"/partials/manager/tabs?w={w['id']}&c={cid}")).text)
+    assert _tab(await snap(wenv), w["id"])["unread"] >= 1  # đang ở Sảnh
+    assert _tab(await snap(wenv, f"?c={cid}"), w["id"])["unread"] == 0
 
 
 async def test_manage_menu_info_rename_and_delete(wenv):
@@ -164,11 +153,9 @@ async def test_manage_menu_info_rename_and_delete(wenv):
     await wenv.login()
     await designate(wenv)
     w = await mgr_rpc(wenv, "workstream.create", {"title": "Monitor", "key": "LH-55166", "sprint": "S216"})
-    html = (await wenv.client.get(f"/manager?w={w['id']}")).text
-    menu = re.search(r'<details class="ws-pop-wrap" id="ws-manage">.*?</details>', html, re.S).group(0)
-    for s in ("Đang mở", "LH-55166", "S216", "0/0 xong", w["id"], 'action="/do/ws_edit"', 'action="/do/ws_close"', 'action="/do/ws_delete"'):
-        assert s in menu, s
-    assert 'id="ws-manage"' not in (await wenv.client.get("/manager")).text  # Sảnh: không có menu luồng
+    wx = (await snap(wenv, f"?w={w['id']}"))["workstream"]  # dữ liệu menu "⚙ Luồng này" của island
+    assert (wx["id"], wx["status"], wx["key"], wx["sprint"]) == (w["id"], "active", "LH-55166", "S216")
+    assert (await snap(wenv))["workstream"] is None  # Sảnh: không có menu luồng
     r = await wenv.post("/do/ws_edit", {"id": w["id"], "title": "LH-55167 Monitor mới", "next": "/manager"})
     assert r.status_code == 303
     got = await mgr_rpc(wenv, "workstream.get", {"id": w["id"]})
@@ -180,6 +167,6 @@ async def test_manage_menu_info_rename_and_delete(wenv):
     r = await wenv.post("/do/ws_delete", {"id": w["id"], "confirm": "yes", "next": "/manager"})
     assert r.status_code == 303 and r.headers["location"].startswith("/manager")
     assert await mgr_rpc(wenv, "workstream.list", {"status": "all"}) == []
-    assert "Monitor mới" not in _bar((await wenv.client.get("/manager")).text)
+    assert not (await snap(wenv))["workstreams"]["active"]
     row = wenv.hub.store.conn.execute("SELECT channel FROM audit_log WHERE kind='workstream.delete'").fetchone()
     assert row and row[0] == "web"

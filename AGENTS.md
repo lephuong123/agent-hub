@@ -361,7 +361,7 @@ Chi tiết, hợp đồng dùng, test chứng minh, việc dở: `docs/dev-notes
 
 | Module | Vai trò |
 |---|---|
-| `web/manager.py` | Trang "Điều phối" (`/manager`, đầu menu): chat theo conversation kênh `web` (`manager.chat/history/conversations`), SSE `/sse/manager` (agent = điều phối viên: delta/draft/seg/think/tool/reply/action/run_end/tick, mọi message mang `seq` → client bỏ trùng + tự nối lại `since=<seq cuối>`), `/partials/manager`, `POST /manager/send`, `POST /manager/stop` (nút Dừng: chỉ run của điều phối viên thuộc hội thoại điều phối, `run.stop` audit `web`); `ACTIONS` `manager_set`/`manager_unset` (xác nhận) |
+| `web/manager.py` | Trang "Điều phối" (`/manager`, đầu menu): island `web/coord.py` + `manager_feed.py` (hợp đồng `docs/dev-notes/dieu-phoi-island.md`, SSE `/sse/manager/v2`, `/api/manager/*`); `page_ctx` = dữ liệu dùng chung; chưa có điều phối viên → `manager.html` (form chỉ định). `/partials/manager` (thẻ trạng thái ở Tổng quan), `POST /manager/send|read`, `POST /manager/stop` (nút Dừng: chỉ run của điều phối viên thuộc hội thoại điều phối, `run.stop` audit `web`); `ACTIONS` `manager_set`/`manager_unset` (xác nhận). Trang cũ (htmx + app.js `initManager`, `/sse/manager`, `?ui=old`) đã gỡ |
 | `web/present.py` (`mgr_*`) | Thuần: đích `manager.action` → link NỘI BỘ (loại đã biết + id an toàn), chuẩn hoá history/conversation |
 | `chat/manager_chat.py` | `hub.telegram.manager`: tin không `/` → `manager.chat(channel=telegram:<chat>)`, reply → đúng conversation (`hub_state telegram.mgr_*`), `/moi`, `manager.reply` (theo `channel`) → khung WT-8 |
 | `web/manager_stub.py` | Stub `manager.*` cùng chữ ký — CHỈ test/demo (`install(daemon, force=)`) |
@@ -742,7 +742,7 @@ Steer/nhắn agent = câu cố định tiếng Anh, đường dẫn đã `one_li
 ## Giọng nói trên web — đọc chép + hội thoại giọng nói với điều phối viên
 Chi tiết, an toàn, việc dở: `docs/dev-notes/voice.md`. Không migration. Test: `tests/test_voice.py`.
 - `web/static/voice.js` (Web Speech API, `vi-VN` mặc định): nút micro cho mọi `textarea[data-voice]` + `#mgr-mic`; nút sóng âm `#mgr-voice` = chế độ
-  hội thoại (tự gửi khi im, đọc to trả lời). Chỉ nghe sự kiện `mgr:*` do `app.js initManager` phát; chữ agent chỉ qua `textContent`/`speechSynthesis`.
+  hội thoại (tự gửi khi im, đọc to trả lời). Chỉ nghe sự kiện `mgr:*` do island Điều phối (`static/coord/main.js`) phát; chữ agent chỉ qua `textContent`/`speechSynthesis`.
 - Bất biến: tin giọng nói mang `voice=dictation|conversation` → `manager.chat{voice}` → `_owner_shortcut` KHÔNG BAO GIỜ duyệt approval/chốt câu hỏi
   xin phép từ giọng nói (`_voice_shortcut`). Header `microphone=(self)` — không nới thêm (camera/geolocation vẫn `()`).
 

@@ -2,13 +2,13 @@
 
 - khung "đang trả lời" đọc event GẦN NHẤT của run (run dài > PENDING_SCAN event không ra tool cũ);
 - mỗi lần tải trang chỉ MỘT `manager.conversations` (kể cả `?w=`), GET không ghi "đã đọc" — `POST /manager/read` (CSRF + khoá phiên);
-- đổi tab bằng app.js (`X-Ahub-Partial: grid`) → vỏ tối giản, không thanh bên/menu;
-- nháp markdown đang chạy chữ không vào LRU `present.md`, nhịp nháp ≥ 0,5 s;
+- nháp markdown đang chạy chữ không vào LRU `present.md`;
 - tĩnh có `?v=` → Cache-Control immutable; gzip cho HTML/JS (không cho SSE).
 Không gọi `claude`."""
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 import pytest
@@ -19,9 +19,8 @@ from cfharness.web import manager_stub
 from cfharness.web import present as P
 
 from test_web import ISOLATED, _start, _stop, until  # noqa: F401
-from test_web_manager import designate, mgr_rpc, send
+from test_web_manager import designate, mgr_rpc, send, snap
 
-pytestmark = pytest.mark.usefixtures("old_manager_ui")  # trang Điều phối CŨ (?ui=old) — island có test riêng (test_coord_*)
 
 
 @pytest.fixture
@@ -73,14 +72,18 @@ async def test_pending_frame_reads_newest_events_of_long_run(mheld, monkeypatch)
     e.hub.publish(make_event("tool.start", "boss", {"name": "Grep", "tool_id": "new", "args_preview": "moi-nhat"}, run_id=run))
     calls = _spy(e, "events.query")
     monkeypatch.setattr(M, "PENDING_SCAN", 4)
-    page = (await e.client.get(f"/manager?c={conv}")).text
-    frame = re.search(rf'data-pending="{run}".*', page, re.S).group(0)
-    assert "moi-nhat" in frame and "cu-xa-lam" not in frame, frame[:2000]
+    pend: dict = {}
+    for _ in range(100):  # event ghi DB bất đồng bộ — chờ tool mới nhất đã lưu
+        pend = (await snap(e, f"?c={conv}"))["pending"] or {}
+        if pend.get("tool"):
+            break
+        await asyncio.sleep(0.05)
+    assert pend["run"] == run and "moi-nhat" in pend["tool"] and "cu-xa-lam" not in pend["tool"], pend
     assert any(c.get("run_id") == run and c.get("order") == "desc" and c.get("limit") == 4 for c in calls), calls
 
 
 # =========================================================================== RPC trùng + "đã đọc" không ghi trong GET
-async def test_one_conversations_rpc_and_get_never_marks_read(menv):
+async def test_one_conversations_rpc_and_get_never_marks_read(menv, monkeypatch):
     e = menv
     await e.login()
     await designate(e)
@@ -88,9 +91,14 @@ async def test_one_conversations_rpc_and_get_never_marks_read(menv):
     j = await send(e, "chào")
     cid = j["conversation_id"]
     await until(lambda: (e.hub.store.get_run(j["run_id"]) or {}).get("status") not in ("queued", "running"))
+    assert (await e.client.get("/manager")).status_code == 200  # tạo feed của island
+    feed = e.app.state.mgr_feed  # trạng thái tab làm mới NỀN theo event (debounce) — không thuộc lượt tải trang, tắt khi đếm
+    monkeypatch.setattr(feed, "kick_tabs", lambda: None)
+    if feed._ws_task is not None:
+        await feed._ws_task
     convs = _spy(e, "manager.conversations")
     reads = _spy(e, "manager.conversation_read")
-    for url in ("/manager", f"/manager?c={cid}", f"/manager?w={w['id']}", "/partials/manager/tabs?c=" + cid):
+    for url in ("/manager", f"/manager?c={cid}", f"/manager?w={w['id']}", f"/api/manager/snapshot?c={cid}"):
         convs.clear()
         r = await e.client.get(url)
         assert r.status_code == 200, (url, r.text[:300])
@@ -116,69 +124,24 @@ async def test_viewing_conversation_shows_no_unread_without_writing(menv):
     await until(lambda: (e.hub.store.get_run(r.json()["run_id"]) or {}).get("status") not in ("queued", "running"))
     e.hub.store.conn.execute("UPDATE manager_conversations SET read_upto=0 WHERE id=?", (cid,))
 
-    def tab(html: str) -> str:
-        return re.search(rf'<a class="ws-tab[^"]*" href="/manager\?w={w["id"]}".*?</a>', html, re.S).group(0)
+    async def unread(q: str = "") -> int:  # số chưa đọc trên tab luồng (ảnh chụp island)
+        tabs = (await snap(e, q))["workstreams"]["active"]
+        return next(t["unread"] for t in tabs if t["ws"] == w["id"])
 
-    assert '<span class="ws-unread">' in tab((await e.client.get("/partials/manager/tabs")).text)
-    assert '<span class="ws-unread">' not in tab((await e.client.get(f"/manager?c={cid}")).text)  # đang xem: không hiện
-    assert '<span class="ws-unread">' in tab((await e.client.get("/partials/manager/tabs")).text)  # …nhưng chưa ghi
+    reads = _spy(e, "manager.conversation_read")
+    assert await unread() >= 1
+    assert await unread(f"?c={cid}") == 0  # đang xem: không hiện
+    assert await unread() >= 1 and reads == []  # …nhưng chưa ghi
     await e.post("/manager/read", {"c": cid}, headers={"X-Ahub-Fetch": "1"})
-    assert '<span class="ws-unread">' not in tab((await e.client.get("/partials/manager/tabs")).text)
-
-
-# =========================================================================== đổi tab: vỏ tối giản
-async def test_partial_grid_shell_for_tab_switch(menv):
-    e = menv
-    await e.login()
-    await designate(e)
-    j = await send(e, "chào")
-    badge = _spy(e, "tui.snapshot")
-    r = await e.client.get(f"/manager?c={j['conversation_id']}", headers={"X-Ahub-Partial": "grid"})
-    assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
-    t = r.text
-    assert 'id="mgr-grid"' in t and 'class="side-recents"' in t and 'id="toasts"' in t and "<title>Điều phối · cfharness</title>" in t
-    assert 'class="nav"' not in t and "<script" not in t and 'id="confirm-dlg"' not in t  # không thanh bên/menu, không nạp lại JS
-    full = (await e.client.get(f"/manager?c={j['conversation_id']}")).text
-    assert 'class="nav"' in full and "app.js" in full
-    grid = lambda h: re.search(r'<div class="mgr-grid" id="mgr-grid">.*', h, re.S).group(0)  # noqa: E731
-    assert grid(t).split('data-sse-manager=')[0] == grid(full).split('data-sse-manager=')[0]
-    assert len(badge) <= 2  # trang đầy đủ có thể hỏi trạng thái agent; vỏ thì không thêm số trên menu
-
+    assert await unread() == 0
 
 # =========================================================================== nháp chạy chữ
 def test_draft_markdown_skips_lru_and_is_throttled():
-    from cfharness.web import manager as M
-
-    assert M.DRAFT_EVERY_S >= 0.5
     P._MD_CACHE.clear()
     out = P.md("**nháp** đang chạy", cache=False)
     assert "<strong>nháp</strong>" in out and len(P._MD_CACHE) == 0
     assert P.md("**nháp** đang chạy") == out and len(P._MD_CACHE) == 1
     assert P.md("<script>x</script>", cache=False).count("<script>") == 0  # vẫn an toàn
-
-
-def test_converter_draft_uses_uncached_markdown(monkeypatch):
-    from types import SimpleNamespace
-
-    from cfharness.web import manager as M
-
-    seen: list[bool] = []
-    real = P.md
-
-    def md(text, *, cache=True):
-        seen.append(cache)
-        return real(text, cache=cache)
-
-    monkeypatch.setattr(M.P, "md", md)
-    monkeypatch.setattr(M, "_mod", lambda request: SimpleNamespace())
-    t = [0.0]
-    conv = M._converter(None, clock=lambda: t[0])
-    msgs = []
-    for i in range(6):
-        t[0] += 0.2  # 0,2 s mỗi delta → nháp tối đa mỗi 0,5 s
-        msgs += conv({"type": "message.delta", "run_id": "r1", "seq": i, "payload": {"text": f"chữ {i} "}})
-    drafts = [m for m in msgs if m["t"] == "draft"]
-    assert 1 <= len(drafts) <= 3 and seen and not any(seen)
 
 
 # =========================================================================== tĩnh + gzip
@@ -189,7 +152,7 @@ async def test_static_versioned_is_immutable_and_gzip(menv):
     url = re.search(r'src="(/static/app\.js\?v=[0-9a-f]+)"', html).group(1)
     r = await e.client.get(url, headers={"Accept-Encoding": "gzip"})
     assert r.status_code == 200 and "immutable" in r.headers["cache-control"] and "max-age=31536000" in r.headers["cache-control"]
-    assert r.headers.get("content-encoding") == "gzip" and "initManager" in r.text  # httpx tự giải nén
+    assert r.headers.get("content-encoding") == "gzip" and "function txAppend" in r.text  # httpx tự giải nén
     r = await e.client.get("/static/app.js")  # không phiên bản → vẫn hỏi lại server
     assert r.headers["cache-control"] == "no-cache"
     r = await e.client.get("/manager", headers={"Accept-Encoding": "gzip"})
@@ -213,5 +176,5 @@ async def test_sse_is_never_gzipped():
         return {"type": "http.request", "body": b""}
 
     mw = GzipMiddleware(app)
-    await mw({"type": "http", "path": "/sse/manager", "method": "GET", "headers": [(b"accept-encoding", b"gzip")]}, receive, send)
+    await mw({"type": "http", "path": "/sse/manager/v2", "method": "GET", "headers": [(b"accept-encoding", b"gzip")]}, receive, send)
     assert not any(k == b"content-encoding" for k, _ in sent[0]["headers"])

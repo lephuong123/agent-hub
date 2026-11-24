@@ -161,12 +161,12 @@ def _beacon(env, samples, **over):
 async def test_beacon_accepts_valid_and_maps_routes(env):
     await env.login()
     r = await _beacon(env, [{"m": "nav.ttfb", "r": "/runs", "d": 120.5}, {"m": "htmx", "r": "/partials/run/r_abc123?x=1", "d": 40},
-                            {"m": "switch.ws", "r": "/manager", "d": 900}, {"m": "sse.lag", "r": "/sse/manager", "d": 15},
+                            {"m": "switch.ws", "r": "/manager", "d": 900}, {"m": "sse.lag", "r": "/sse/manager/v2", "d": 15},
                             {"m": "evil", "r": "/runs", "d": 1}, {"m": "htmx", "r": "http://x/y", "d": 1}, {"m": "htmx", "r": "/runs", "d": -5},
                             {"m": "htmx", "r": "/runs", "d": True}, {"m": "htmx", "r": "/runs", "d": 1e12}, "rác"])
     assert r.status_code == 204
     keys = {x["key"]: x for x in env.app.state.web.perf.frontend.snapshot()}
-    assert set(keys) == {"nav.ttfb /runs", "htmx /partials/run/{id}", "switch.ws /manager", "sse.lag /sse/manager"}
+    assert set(keys) == {"nav.ttfb /runs", "htmx /partials/run/{id}", "switch.ws /manager", "sse.lag /sse/manager/v2"}
     assert keys["nav.ttfb /runs"]["max"] == 120.5
 
 

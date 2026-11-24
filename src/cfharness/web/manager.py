@@ -1,27 +1,23 @@
 """Trang "Điều phối" (M7 — luồng MGR-UI): chat với điều phối viên (agent manager) qua conversation kênh `web`.
 
 RPC dùng (hợp đồng `docs/plan/M7-manager.md`, MGR-CORE cung cấp): `manager.get|set|chat|conversations|history`, event
-`manager.reply{conversation_id, run_id, text}`, `manager.action{tool, target, summary, audit_id}`; cộng `events.subscribe`
-(agent = điều phối viên, level detail) cho chữ chạy (`message.delta`) và kết thúc run.
+`manager.reply{conversation_id, run_id, text}`, `manager.action{tool, target, summary, audit_id}`. Chữ chạy, thẻ, trạng thái tới island qua
+luồng v2 `/sse/manager/v2` (`web/manager_feed.py`).
 
-- `GET /manager[?c=<conv>|?new=1][&w=<luồng>][&run=<run>]`: lịch sử + thẻ hành động + nhịp tick + ô nhập. Chưa có điều phối viên →
-  hướng dẫn + form chỉ định (action `manager_set`, HUMAN_ONLY, hộp xác nhận).
+- `GET /manager[?c=<conv>|?new=1][&w=<luồng>][&run=<run>]`: island Điều phối (`web/coord.py`, hợp đồng `docs/dev-notes/dieu-phoi-island.md`;
+  dữ liệu từ `page_ctx` qua `manager_feed`). Chưa có điều phối viên / daemon chưa có `manager.*` → `manager.html` (hướng dẫn + form chỉ
+  định, action `manager_set`, HUMAN_ONLY, hộp xác nhận). Trang Điều phối cũ (htmx + app.js, `?ui=old`) đã gỡ.
 - Luồng việc (docs/dev-notes/workstreams.md): thanh bên = Sảnh (hội thoại web không gắn luồng) + các luồng đang mở (chấm trạng thái,
   số tin chưa đọc) + luồng đã đóng. `?w=<luồng>` mở hội thoại web gần nhất của luồng (chưa có → hội thoại mới trong luồng, ô nhập
   mang `w`). Panel phải trong luồng = STATE.md (sửa được) + task của luồng + hội thoại kênh khác. Thao tác: `ws_create|ws_edit|ws_close|ws_delete|
   ws_reopen|ws_state|conv_rename|conv_move|conv_archive` (HUMAN_ONLY ở daemon). Mở hội thoại → `manager.conversation_read`.
 - `POST /manager/send`: `post_guard` (CSRF + Origin + khoá phiên WT-1) → `manager.chat(channel=web)` (`_audit.channel=web`).
-  Có header `X-Ahub-Fetch` (app.js) → JSON (mục đã vẽ sẵn phía server); không → 303 về trang (form thuần).
+  Có header `X-Ahub-Fetch` (island, trang 3D) → JSON `{conversation_id, run_id, steered}`; không → 303 về trang (form thuần).
   Đính kèm (multipart, trường `attach`, chọn bằng nút 📎 / kéo–thả / dán ảnh): ảnh PNG/JPEG/GIF/WebP (nhận theo magic bytes) → `images`,
   tệp văn bản UTF-8 hoặc tài liệu PDF/Office (nhận theo nội dung, `manager/doc_extract.py`) → `files`; nhị phân khác → báo lỗi,
   KHÔNG gửi gì. Giới hạn = của daemon (`manager/service.py`), daemon kiểm lại.
 - `POST /manager/stop` (P0-6): dừng lượt trả lời đang chạy (chỉ run của điều phối viên thuộc hội thoại điều phối) — `run.stop`, audit kênh `web`.
-- `GET /sse/manager?since=&epoch=`: luồng JSON `{t: delta|draft|seg|think|tool|reply|action|run_end|tick|status|question, seq}`; `seq` = seq
-  event gốc (client bỏ trùng, nối lại với `since=<seq cuối>`). HTML chỉ do server vẽ: macro autoescape + `present.md()` (đã cứng hoá).
-- `GET /partials/manager`: khung trạng thái (htmx làm mới).
-- `GET /partials/manager/tabs?w=&c=`: hàng tab luồng (`c` = hội thoại đang mở → đánh dấu đã đọc) — chấm "đang chạy / cần bạn / đang chờ / đã xong" mỗi luồng (app.js làm mới khi SSE báo
-  `status`/`run_end`/`reply`/`tick`, và hỏi lại mỗi 20 s vì task của agent khác không đi qua luồng SSE này).
-- Đổi tab/hội thoại không tải lại cả trang: app.js tải `/manager?…` bằng fetch, thay `#mgr-grid` + danh sách hội thoại, `pushState`.
+- `GET /partials/manager[?compact=1]`: khung trạng thái điều phối viên (htmx làm mới — thẻ ở trang Tổng quan).
 Chữ của điều phối viên là DỮ LIỆU: hiển thị qua `present.md()` đã cứng hoá (không HTML thô, không `<img>`, link ngoài có `rel` + tên
 miền; link nội bộ chỉ từ `mgr_target`) — đó là đầu ra DUY NHẤT được `|safe`/innerHTML. Tin của người vẫn là chữ thô `pre-wrap` (test XSS).
 """
@@ -33,15 +29,13 @@ import base64
 import json
 from typing import Any
 
-from starlette.exceptions import HTTPException
 from starlette.requests import Request
-from starlette.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
+from starlette.responses import JSONResponse, RedirectResponse, Response
 
-from ..events import TERMINAL_RUN_EVENTS
 from ..rpc import METHOD_NOT_FOUND, DaemonUnavailable, RpcError
 from ..tui.model import short_tool
 from . import present as P
-from .app import CHANNEL, _stream, err_text, flash_redirect, gather_ordered, post_guard, render, rpc, session_of, ws
+from .app import CHANNEL, err_text, flash_redirect, gather_ordered, post_guard, render, rpc, session_of, ws
 
 HISTORY_LIMIT = 200
 HEARTBEAT = "heartbeat"  # = manager.service.HEARTBEAT_CHANNEL (không import service ở web)
@@ -340,42 +334,15 @@ def question_from_event(ev: dict[str, Any]) -> dict[str, Any]:
     return q
 
 
-async def _page(request: Request, ctx: dict[str, Any]) -> Response:
-    """Vẽ trang Điều phối. app.js đổi tab/hội thoại gửi `X-Ahub-Partial: grid` → vỏ tối giản `_manager_shell.html` (chỉ lưới + danh
-    sách hội thoại + thông báo; KHÔNG thanh bên/menu nên không hỏi số trên menu — bớt RPC và HTML mỗi lần đổi tab)."""
-    if request.headers.get("x-ahub-partial") != "grid":
-        return await render(request, "manager.html", ctx)
-    sess = session_of(request)
-    base = {"csrf": sess.csrf if sess else "", "flashes": sess.pop_flashes() if sess else [], "badge": {}, "nav": "manager",
-            "path": request.url.path, "layout": "_manager_shell.html"}
-    return ws(request).templates.TemplateResponse(request, "manager.html", {**base, **ctx}, headers={"Cache-Control": "no-store"})
-
-
-UI_COOKIE = "ahub_mgr_ui"  # "old" = người chọn trang Điều phối cũ (lối thoát ?ui=old, giữ MỘT bản phát hành rồi gỡ cùng trang cũ)
-
-
-def wants_old_ui(request: Request) -> bool:
-    """Trang Điều phối cũ (htmx + app.js initManager) thay vì island (mặc định từ GĐ3): `?ui=old`, cookie đã chọn trước đó, hoặc yêu cầu
-    vỏ lưới của app.js cũ (`X-Ahub-Partial: grid` — chỉ trang cũ gửi). `?ui=next|new` = quay về island."""
-    ui = request.query_params.get("ui")
-    if ui in ("next", "new"):
-        return False
-    return ui == "old" or request.headers.get("x-ahub-partial") == "grid" or request.cookies.get(UI_COOKIE) == "old"
+async def setup_page(request: Request, ctx: dict[str, Any]) -> Response:
+    """Phần chỉ định điều phối viên (chưa có điều phối viên / daemon chưa có `manager.*`) — island chỉ vẽ trang chat (`coord.coord_page`)."""
+    return await render(request, "manager.html", ctx)
 
 
 async def manager_page(request: Request) -> Response:
-    ui = request.query_params.get("ui")
-    if wants_old_ui(request):
-        resp = await _page(request, await page_ctx(request))
-        if ui == "old":  # nhớ lựa chọn: link nội bộ của trang cũ không mang ?ui=old
-            resp.set_cookie(UI_COOKIE, "old", max_age=30 * 86400, httponly=True, samesite="lax", path="/manager")
-        return resp
-    from .coord import coord_page  # island Điều phối (GĐ2/GĐ3 phương án B, web/coord.py)
+    from .coord import coord_page  # island Điều phối (web/coord.py)
 
-    resp = await coord_page(request)
-    if request.cookies.get(UI_COOKIE):
-        resp.delete_cookie(UI_COOKIE, path="/manager")
-    return resp
+    return await coord_page(request)
 
 
 async def page_ctx(request: Request) -> dict[str, Any]:
@@ -491,29 +458,11 @@ async def page_ctx(request: Request) -> dict[str, Any]:
     return ctx
 
 
-async def partial_tabs(request: Request) -> Response:
-    """Hàng tab luồng (htmx/app.js làm mới khi có run bắt đầu/kết thúc, tin trả lời, luồng đổi — và hỏi lại định kỳ cho task)."""
-    cid = str(request.query_params.get("c") or "").strip()
-    wsd = await _workstreams(request)
-    _viewing(wsd, cid)  # hội thoại đang mở: tin mới tới trong lúc xem không HIỆN là chưa đọc (ghi "đã đọc" = POST /manager/read)
-    wid = str(request.query_params.get("w") or "").strip()
-    wsx = (wsd.get("by_id") or {}).get(wid) if wid else None
-    sess = session_of(request)
-    return ws(request).templates.TemplateResponse(request, "_manager_tabs.html", {"wsd": wsd, "wsx": wsx, "csrf": sess.csrf if sess else ""},
-                                                  headers={"Cache-Control": "no-store"})
-
-
 async def partial_status(request: Request) -> Response:
     st = await mgr_state(request)
     sess = session_of(request)
     return ws(request).templates.TemplateResponse(request, "_manager_status.html", {"m": st, "csrf": sess.csrf if sess else "",
                                                                                     "compact": request.query_params.get("compact") == "1"})
-
-
-def _mod(request: Request) -> Any:
-    """Module macro của _manager.html KÈM ngữ cảnh csrf (thẻ câu hỏi có form) — khoá phiên không bao giờ vào HTML."""
-    sess = session_of(request)
-    return ws(request).templates.env.get_template("_manager.html").make_module({"csrf": sess.csrf if sess else "", "path": "/manager"})
 
 
 async def manager_send(request: Request) -> Response:
@@ -563,10 +512,7 @@ async def manager_send(request: Request) -> Response:
         return fail(err_text(e), 503)
     conv, run_id = res.get("conversation_id") or cid, res.get("run_id")
     if want_json:
-        mod = _mod(request)
-        user = {"kind": "user", "text": (text + (f"\n📎 {', '.join(names)}" if names else "")).strip(), "ts": None, "run_id": run_id}
-        return JSONResponse({"conversation_id": conv, "run_id": run_id, "steered": bool(res.get("steered")), "html_user": str(mod.item(user)),
-                             "html_pending": str(mod.pending(run_id)) if run_id else ""})
+        return JSONResponse({"conversation_id": conv, "run_id": run_id, "steered": bool(res.get("steered"))})
     return RedirectResponse(f"/manager?c={conv}" + (f"&run={run_id}" if run_id else ""), status_code=303)
 
 
@@ -612,142 +558,6 @@ async def manager_stop(request: Request) -> Response:
     except DaemonUnavailable as e:
         return done(err_text(e), 503)
     return done("Đã dừng điều phối viên")
-
-
-DRAFT_EVERY_S = 0.5  # P1-1: bản nháp markdown của câu trả lời đang chạy chữ — tối đa 2 lần/giây mỗi luồng SSE (chữ thô vẫn tới ngay qua delta)
-DRAFT_MAX = 24_000  # chữ đang chạy dài hơn → thôi gửi nháp (đỡ CPU), client chỉ nối delta thô
-STREAM_KEEP = 200_000  # trần bộ đệm chữ của một lượt (RAM)
-
-
-def _norm(s: str) -> str:
-    return " ".join(s.split())
-
-
-def _converter(request: Request, clock: Any = None) -> Any:
-    """Event → message SSE của trang Điều phối. MỌI message mang `seq` của event gốc (client bỏ trùng khi nối lại).
-    Chữ của điều phối viên: `delta` = chữ thô (client gán textContent); `draft`/`reply` = HTML của `present.md()` (đã cứng hoá) —
-    chỉ đầu ra này được chèn bằng innerHTML. `think`/`tool` không bao giờ mang HTML (client gán textContent)."""
-    import time as _time
-
-    mod = _mod(request)
-    now = clock or _time.monotonic
-    bufs: dict[str, dict[str, Any]] = {}  # run → {done: [đoạn đã xong], cur: đoạn đang chạy, at: lần gửi nháp cuối}
-
-    def full(b: dict[str, Any]) -> str:
-        parts = [x for x in b["done"] if x.strip()] + ([b["cur"]] if b["cur"].strip() else [])
-        return "\n\n".join(parts)
-
-    def buf(rid: str) -> dict[str, Any]:
-        b = bufs.get(rid)
-        if b is None:
-            b = bufs[rid] = {"done": [], "cur": "", "at": 0.0}
-            while len(bufs) > 16:  # lượt cũ không có `manager.reply` (bị huỷ…) — đừng giữ mãi
-                bufs.pop(next(iter(bufs)))
-        return b
-
-    def draft(rid: str, seq: Any, b: dict[str, Any], force: bool = False) -> list[dict[str, Any]]:
-        text = full(b)
-        if not text.strip() or len(text) > DRAFT_MAX or (not force and now() - b["at"] < DRAFT_EVERY_S):
-            return []
-        b["at"] = now()
-        return [{"t": "draft", "run": rid, "seq": seq, "html": P.md(text, cache=False)}]  # nháp đổi liên tục → không chiếm LRU
-
-    def conv(ev: dict[str, Any]) -> list[dict[str, Any]]:
-        out = _conv(ev)
-        for m in out:
-            m.setdefault("seq", ev.get("seq"))
-        return out
-
-    def _conv(ev: dict[str, Any]) -> list[dict[str, Any]]:
-        t = ev.get("type") or ""
-        p = ev.get("payload") or {}
-        rid = ev.get("run_id")
-        seq = ev.get("seq")
-        sub = bool(ev.get("subagent_id"))
-        if t == "message.delta":
-            if sub:
-                return []
-            text = str(p.get("text") or "")
-            out: list[dict[str, Any]] = [{"t": "delta", "run": rid, "text": text}]
-            if rid:
-                b = buf(rid)
-                if len(b["cur"]) + sum(len(x) for x in b["done"]) < STREAM_KEEP:
-                    b["cur"] += text
-                out += draft(rid, seq, b)
-            return out
-        if t == "message.complete":  # hết một đoạn trả lời (giữa các lần dùng tool) → client xuống đoạn mới
-            if sub or not rid:
-                return []
-            b = buf(rid)
-            b["done"].append(str(p.get("text") or "") or b["cur"])
-            b["cur"] = ""
-            return [{"t": "seg", "run": rid}] + draft(rid, seq, b, force=True)
-        if t == "reasoning.delta":
-            if sub:
-                return []
-            return [{"t": "think", "run": rid, "text": str(p.get("text") or "")}]
-        if t in ("tool.start", "tool.complete"):
-            if sub:
-                return []
-            name = str(p.get("name") or "?")
-            inp = p.get("input") if isinstance(p.get("input"), dict) else None
-            v = P.tool_view(name, inp, summary=str(p.get("args_preview") or "")) if t == "tool.start" else {}
-            label = " ".join(x for x in (v.get("verb"), v.get("target")) if x)[:120]
-            msgs = [{"t": "tool", "run": rid, "id": str(p.get("tool_id") or ""), "name": short_tool(name), "label": label or short_tool(name),
-                     "done": t == "tool.complete", "error": bool(p.get("is_error"))}]
-            todo = P.todo_item(ev)
-            if todo:  # P2: checklist TodoWrite trong khung "đang trả lời" — HTML do server vẽ (macro tx_todo, autoescape)
-                txm = ws(request).templates.env.get_template("_transcript.html").module
-                msgs.append({"t": "todo", "run": rid, "html": str(txm.tx_todo(todo))})
-            return msgs
-        if t == "manager.reply":
-            run = p.get("run_id") or rid
-            notify = p.get("kind") == "notify" or bool(p.get("notify"))
-            text = str(p.get("text") or "")
-            if not notify and run in bufs:
-                # câu trả lời cuối (`run.summary`) thường chỉ là đoạn CUỐI — giữ toàn bộ chữ đã chạy (lời dẫn + các đoạn) nếu nó chứa câu trả lời
-                b = bufs.pop(run)
-                streamed = full(b)
-                if streamed.strip():
-                    text = streamed if _norm(text) in _norm(streamed) else streamed + "\n\n" + text
-            it = {"kind": "manager", "text": text, "ts": ev.get("ts"), "run_id": run, "notify": notify, "tick": p.get("kind") == "tick",
-                  "agent": ev.get("agent_id"),
-                  "cut": P.cut_note("Tin", len(str(p.get("text") or "")), run) if p.get("truncated") else ""}
-            return [{"t": "reply", "run": run, "conv": p.get("conversation_id"), "notify": notify, "html": str(mod.item(it))}]
-        if t == "manager.action":
-            it = P.mgr_action_item(ev)
-            group = {"kind": "actions", "run_id": rid, "items": [it], "ok": it["ok"], "ts": it.get("ts")}
-            return [{"t": "action", "run": rid, "conv": it.get("conversation_id"), "html": str(mod.item(group)), "one": str(mod.item(it)),
-                     "ok": it["ok"], "side": str(mod.side_action(it))}]
-        if t.startswith("question.") and t != "question.reminder":
-            q = question_from_event(ev)
-            if not q.get("conversation_id"):
-                return []
-            if t == "question.answered":  # thẻ đã trả lời: lấy lại nội dung câu hỏi từ thẻ đang có phía trình duyệt — chỉ thay trạng thái
-                return [{"t": "question", "conv": q["conversation_id"], "dom": f"q-{q['id']}", "answered": True, "html": str(mod.answered(q))}]
-            return [{"t": "question", "conv": q["conversation_id"], "dom": f"q-{q['id']}", "html": str(mod.item({"kind": "question", "q": q}))}]
-        if t in TERMINAL_RUN_EVENTS and ev.get("source") == "hub" and rid:
-            outcome = p.get("outcome") or t.removeprefix("run.")
-            label, tone = P.run_status(str(outcome))
-            note = {"kind": "note", "tone": tone, "run_id": rid, "text": f"Lượt xử lý kết thúc: {label}"}
-            return [{"t": "run_end", "run": rid, "ok": outcome == "completed", "html": str(mod.item(note))}]
-        if t.startswith("manager.tick"):
-            return [{"t": "tick"}]
-        if t in ("run.queued", "run.started", "workstream.updated"):
-            return [{"t": "status", "run": rid}]
-        return []
-
-    return conv
-
-
-async def sse_manager(request: Request) -> Response:
-    st = await mgr_state(request, with_row=False)
-    if not st.get("agent_id"):
-        raise HTTPException(404, "Chưa có điều phối viên")
-    q = request.query_params
-    params = {"agent_id": st["agent_id"], "since_seq": int(q.get("since") or 0), "epoch": q.get("epoch") or None, "level": "detail"}
-    return StreamingResponse(_stream(request, params, _converter(request), stamp=True), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 def mgr_set_confirm(f: Any) -> str:
@@ -848,9 +658,7 @@ def routes() -> list[Any]:
         Route("/manager/stop", manager_stop, methods=["POST"]),
         Route("/manager/read", manager_read, methods=["POST"]),
         Route("/partials/manager", partial_status),
-        Route("/partials/manager/tabs", partial_tabs),
-        Route("/sse/manager", sse_manager),
     ]
 
 
-__all__ = ["manager_page", "manager_send", "manager_stop", "sse_manager", "partial_status", "mgr_state", "register_actions", "routes", "json"]
+__all__ = ["manager_page", "manager_send", "manager_stop", "partial_status", "setup_page", "mgr_state", "register_actions", "routes", "json"]

@@ -262,12 +262,3 @@ def fake_cli(tmp_path: Path, script: Path, name: str = "claude") -> Path:
     p.write_text(f"#!/bin/sh\nexec {sys.executable} {script} \"$@\"\n")
     p.chmod(0o755)
     return p
-
-
-@pytest.fixture
-def old_manager_ui(monkeypatch):
-    """Vẽ trang Điều phối CŨ cho test viết cho nó: island là mặc định từ GĐ3, trang cũ chỉ còn qua `?ui=old` MỘT bản phát hành — gỡ fixture
-    này cùng các test đó khi gỡ trang cũ."""
-    from cfharness.web import manager as M
-
-    monkeypatch.setattr(M, "wants_old_ui", lambda request: request.query_params.get("ui") not in ("next", "new"))

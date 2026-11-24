@@ -1,5 +1,7 @@
 """Trang "Điều phối" (M7 MGR-UI) — daemon IN-PROCESS + FakeRuntime, app Starlette qua ASGITransport (như tests/test_web.py).
 
+Trang là island (`web/coord.py`) — nội dung kiểm qua ảnh chụp JSON `GET /api/manager/snapshot` (cùng dữ liệu island vẽ); trang cũ đã gỡ.
+
 Daemon chưa có `manager.*` của MGR-CORE → cài stub cùng chữ ký (`cfharness.web.manager_stub`). Test cần điều khiển nội dung
 trả lời (XSS) cài stub bắt buộc (`force=True`). Không gọi `claude`.
 """
@@ -8,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import re
 
 import pytest
@@ -20,7 +21,6 @@ from cfharness.web import present as P
 from test_web import ISOLATED, _start, _stop, audit_rows, until  # noqa: F401  (dùng lại hạ tầng test web)
 from cfharness.runtime import FakeRuntime
 
-pytestmark = pytest.mark.usefixtures("old_manager_ui")  # trang Điều phối CŨ (?ui=old) — island có test riêng (test_coord_*)
 
 XSS = '<script>alert("x")</script><img src=x onerror=alert(1)>[bấm](javascript:alert(2)) <a href="http://evil">duyệt</a>'
 
@@ -64,6 +64,13 @@ async def send(e, text: str, conv: str | None = None) -> dict:
     return r.json()
 
 
+async def snap(e, query: str = "") -> dict:
+    """Ảnh chụp JSON của trang Điều phối (island vẽ từ đây)."""
+    r = await e.client.get("/api/manager/snapshot" + query)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
 # =========================================================================== menu + chưa có điều phối viên
 async def test_menu_first_and_guidance_when_no_manager(menv):
     await menv.login()
@@ -91,7 +98,8 @@ async def test_designate_needs_confirmation_session_key_and_is_human_only(menv):
     assert (await mgr_rpc(menv, "manager.get"))["agent_id"] is None
     await designate(menv)
     r = await menv.client.get("/manager")
-    assert "Trò chuyện với điều phối viên" in r.text and 'action="/do/manager_unset"' in r.text
+    assert 'id="coord"' in r.text and "Chưa có điều phối viên" not in r.text  # có điều phối viên → island
+    assert (await snap(menv))["manager"]["agent_id"] == "boss"
     if menv.stub is None:  # MGR-CORE thật: manager.set HUMAN_ONLY + audit kênh web
         rows = audit_rows(menv, "manager.set")
         assert rows and rows[-1]["channel"] == "web" and rows[-1]["actor"] == "user"
@@ -109,7 +117,7 @@ async def test_chat_send_reply_history_actions_and_links(menv):
     j = await send(menv, "Tạo agent researcher để tóm tắt README rồi giao việc đó")
     conv, run = j["conversation_id"], j["run_id"]
     assert conv and run
-    assert "Tạo agent researcher" in j["html_user"] and f'data-pending="{run}"' in j["html_pending"]
+    assert set(j) == {"conversation_id", "run_id", "steered"}  # JSON thuần — island tự vẽ tin người + khung "đang trả lời"
     # thẻ hành động của run này (MGR-CORE phát `manager.action` cho mọi thao tác ghi)
     menv.hub.publish(make_event("manager.action", "boss", {"tool": "agent_create", "target": "agent:researcher", "summary": "Đã tạo agent researcher",
                                                          "audit_id": 7}, run_id=run))
@@ -125,21 +133,24 @@ async def test_chat_send_reply_history_actions_and_links(menv):
             break
         await asyncio.sleep(0.05)
     assert await replied()
-    r = await menv.client.get(f"/manager?c={conv}")
-    assert r.status_code == 200
-    t = r.text
-    assert "Tạo agent researcher để tóm tắt README" in t
-    assert 'class="mm mgr"' in t  # trả lời của điều phối viên
-    assert "Đã tạo agent researcher" in t and 'href="/agents/researcher"' in t
-    assert "Đã giao task t_abc cho team docs" in t and 'href="/tasks/t_abc"' in t
-    assert t.index("Tạo agent researcher để") < t.index("Đã tạo agent researcher")  # theo thứ tự thời gian
-    assert f'href="/manager?c={conv}"' in t  # danh sách cuộc trò chuyện web
-    assert "Nhịp gần nhất" in t and "Nhịp kế tiếp" in t
+    assert (await menv.client.get(f"/manager?c={conv}")).status_code == 200
+    s = await snap(menv, f"?c={conv}")
+    items = s["items"]
+    ui = next(i for i, it in enumerate(items) if it["kind"] == "user")
+    assert "Tạo agent researcher để tóm tắt README" in items[ui]["text"]
+    assert any(it["kind"] == "manager" for it in items)  # trả lời của điều phối viên
+    ai = next(i for i, it in enumerate(items) if it["kind"] == "actions")
+    acts = {a["summary"]: a for it in items if it["kind"] == "actions" for a in it["items"]}
+    assert acts["Đã tạo agent researcher"]["target"]["href"] == "/agents/researcher"
+    assert acts["Đã giao task t_abc cho team docs"]["target"]["href"] == "/tasks/t_abc"
+    assert ui < ai  # theo thứ tự thời gian
+    assert any(c["id"] == conv for c in s["conversations"])  # danh sách cuộc trò chuyện web
+    assert {"last_tick", "next_tick"} <= set(s["manager"])
     # tin tiếp theo giữ conversation; "Cuộc trò chuyện mới" mở conversation khác
     j2 = await send(menv, "Còn gì đang kẹt không?", conv)
     assert j2["conversation_id"] == conv
-    r = await menv.client.get("/manager?new=1")
-    assert 'name="c" value=""' in r.text and "Cuộc trò chuyện mới" in r.text
+    s = await snap(menv, "?new=1")
+    assert s["conv"] is None and s["items"] == []
     j3 = await send(menv, "Việc khác")
     assert j3["conversation_id"] != conv
     # form thuần (không JS fetch) → 303 về trang cuộc trò chuyện
@@ -161,7 +172,6 @@ async def test_send_guards_and_errors(menv):
     assert not menv.hub.store.list_runs(agent_id="boss")
     r = await menv.post("/manager/send", {"text": "   "}, headers={"X-Ahub-Fetch": "1"})
     assert r.status_code == 400
-    assert (await c.get("/sse/manager")).status_code == 404  # chưa có điều phối viên
 
 
 # =========================================================================== đính kèm (nút 📎 / kéo–thả / dán ảnh)
@@ -189,7 +199,7 @@ async def test_send_with_image_and_text_file_attachments(menv):
     r = await post_files(menv, [("chup man hinh.png", PNG_1PX, "image/png"), ("ghi chú.md", md, "text/markdown")], text="xem giúp tôi")
     assert r.status_code == 200, r.text
     j = r.json()
-    assert "chup man hinh.png" in j["html_user"] and "ghi chú.md" in j["html_user"]
+    assert j["conversation_id"] and j["run_id"]
     p = seen[-1]
     assert p["channel"] == "web" and p["text"] == "xem giúp tôi"
     assert [i["name"] for i in p["images"]] == ["chup man hinh.png"] and base64.b64decode(p["images"][0]["data_b64"]) == PNG_1PX
@@ -216,7 +226,6 @@ async def test_office_document_attachment_forwarded(menv):
     r = await post_files(menv, [("Rà soát.xlsx", XLSX, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
                                 ("bao-cao.pdf", b"%PDF-1.7\n\x00\xff binary", "application/pdf")], text="File này")
     assert r.status_code == 200, r.text
-    assert "Rà soát.xlsx" in r.json()["html_user"]
     assert [f["name"] for f in seen[-1]["files"]] == ["Rà soát.xlsx", "bao-cao.pdf"]
     assert base64.b64decode(seen[-1]["files"][0]["data_b64"]) == XLSX
 
@@ -242,12 +251,6 @@ MD_EVIL = XSS + "\n\n**đậm** ![ảnh](http://x/a.png) [a](http://evil.example
 ON_ATTR = re.compile(r"<[^>]+\son[a-z]+\s*=", re.I)
 
 
-def _log_html(t: str) -> str:
-    """Phần dòng thời gian của trang (#mgr-log … ô nhập) — chỗ chữ của agent xuất hiện."""
-    a = t.index('id="mgr-log"')
-    return t[a:t.index('class="composer-wrap"', a)]
-
-
 async def test_manager_content_is_hardened_markdown_user_text_plain(stubbed):
     """Q1 (2026-11-13): chữ điều phối viên = markdown qua present.md() đã cứng hoá; tin người vẫn là chữ thô. XSS vẫn bị vô hiệu."""
     e = stubbed
@@ -255,7 +258,6 @@ async def test_manager_content_is_hardened_markdown_user_text_plain(stubbed):
     await designate(e)
     j = await send(e, XSS + " **không đậm**")  # tin của người chỉ là dữ liệu — không markdown
     conv, run = j["conversation_id"], j["run_id"]
-    assert "<script>" not in j["html_user"] and "&lt;script&gt;" in j["html_user"] and "<strong>" not in j["html_user"]
     assert await until(lambda: run not in e.stub.run_conv)
     e.stub.convs[conv]["messages"].append({"role": "manager", "text": MD_EVIL, "ts": "2099-01-01T00:00:00+00:00", "run_id": run})
     e.hub.publish(make_event("manager.action", "boss", {"tool": "agent_create", "target": "javascript:alert(3)", "summary": XSS}, run_id=run))
@@ -266,150 +268,24 @@ async def test_manager_content_is_hardened_markdown_user_text_plain(stubbed):
         assert "<script>alert" not in t and "<img src=x" not in t and '<a href="http://evil">' not in t
         assert not re.search(r'href="\s*javascript:', t, re.I)
     r = await e.client.get(f"/manager?c={conv}")
-    t = r.text
-    log = _log_html(t)
-    assert "<img" not in log and not ON_ATTR.search(log) and "<script" not in log
-    assert "&lt;script&gt;alert(&#34;x&#34;)&lt;/script&gt;" in t or "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in t
-    # markdown của điều phối viên: đậm, khối code có header + nút chép, ảnh → link chữ, link ngoài có rel + tên miền, javascript: không là link
-    mgr = log[log.index('class="mm mgr'):]
-    assert '<div class="md">' in mgr and "<strong>đậm</strong>" in mgr and 'class="tx-code' in mgr and "tx-copy" in mgr
-    assert re.search(r'<a [^>]*href="http://evil\.example/p"[^>]*rel="nofollow noopener noreferrer"', mgr) or \
-        re.search(r'<a [^>]*rel="nofollow noopener noreferrer"[^>]*href="http://evil\.example/p"', mgr)
-    assert 'class="ext-host"' in mgr and "evil.example" in mgr
-    assert 'href="http://x/a.png"' in mgr  # ảnh chỉ còn là link chữ
-    # tin người: chữ thô (không <strong>), văn bản gốc cho Sao chép/Sửa nằm trong <template class="mm-src"> và đã escape
-    user = log[log.index('class="mm user"'):log.index('class="mm mgr')]
-    assert "<strong>" not in user and "**không đậm**" in user
-    srcs = re.findall(r'<template class="mm-src">(.*?)</template>', log, re.S)
-    assert len(srcs) >= 2 and all("<script" not in s and "<img" not in s for s in srcs)
-    assert any("&lt;script&gt;" in s for s in srcs) and any("![ảnh](http://x/a.png)" in s for s in srcs)  # Copy = markdown gốc
-    assert 'data-mm="copy"' in log and 'data-mm="retry"' in log and 'data-mm="edit"' in log
-    assert 'href="/agents/../../logout"' not in t and "/agents/..%2F" not in t  # id không an toàn → không có link
-    assert 'aria-live' not in t[t.index('id="mgr-log"'):t.index('id="mgr-log"') + 400]  # log không còn aria-live (vùng role=status riêng)
-    assert 'id="mgr-status-live" role="status"' in t and 'id="mgr-jump"' in t and 'id="mgr-send"' in t
     assert "script-src 'self'" in r.headers["content-security-policy"]
-
-
-async def _sse_collect(e, events: list[dict], until_pred, conv_factory=None) -> list[dict]:
-    from starlette.requests import Request
-
-    from cfharness.web.app import _stream
-    from cfharness.web.manager import _converter
-
-    st = e.hub.status()
-    got: list[dict] = []
-    req = Request({"type": "http", "app": e.app, "path": "/", "headers": [], "query_string": b""})
-    params = {"agent_id": "boss", "since_seq": st["last_seq"], "epoch": st["epoch"], "level": "detail"}
-
-    async def reader() -> None:
-        async for chunk in _stream(req, params, (conv_factory or _converter)(req)):
-            if chunk.startswith("data: "):
-                got.append(json.loads(chunk[6:]))
-                if until_pred(got):
-                    return
-
-    task = asyncio.create_task(reader())
-    await asyncio.sleep(0.2)
-    for ev in events:
-        e.hub.publish(make_event(ev["type"], "boss", ev["payload"], run_id=ev.get("run_id", "r_x"), **({"subagent_id": ev["sub"]} if ev.get("sub") else {})))
-    await asyncio.wait_for(task, 10)
-    return got
-
-
-async def test_sse_streams_reply_action_markdown_hardened_with_seq(stubbed):
-    e = stubbed
-    await e.login()
-    await designate(e)
-    got = await _sse_collect(e, [
-        {"type": "message.delta", "payload": {"text": "Đang tạo…"}},
-        {"type": "manager.action", "payload": {"tool": "team_create", "target": "team:docs", "summary": XSS}},
-        {"type": "manager.reply", "payload": {"conversation_id": "conv_1", "run_id": "r_x", "text": MD_EVIL}},
-    ], lambda g: any(m.get("t") == "reply" for m in g) and any(m.get("t") == "action" for m in g))
-    kinds = [m["t"] for m in got]
-    assert "delta" in kinds and "action" in kinds and "reply" in kinds
-    d = next(m for m in got if m["t"] == "delta")
-    assert d["run"] == "r_x" and d["text"] == "Đang tạo…"  # delta là chữ thuần — client gán bằng textContent
-    for m in got:
-        if m["t"] not in ("hello", "end"):
-            assert isinstance(m.get("seq"), int), m  # P0-4: mọi message mang seq của event gốc (client bỏ trùng khi nối lại)
-        for k in ("html", "side", "one"):
-            if k in m:
-                assert "<script" not in m[k] and "<img" not in m[k] and not ON_ATTR.search(m[k]), m[k]
-                assert not re.search(r'href="\s*javascript:', m[k], re.I)
-    act = next(m for m in got if m["t"] == "action")
-    assert 'href="/teams#team-docs"' in act["html"] and "&lt;script&gt;" in act["html"]
-    rep = next(m for m in got if m["t"] == "reply")
-    assert rep["conv"] == "conv_1" and 'class="mm mgr"' in rep["html"] and "&lt;img src=x" in rep["html"]
-    assert "<strong>đậm</strong>" in rep["html"] and 'rel="nofollow noopener noreferrer"' in rep["html"]
-    # reply giữ cả lời dẫn đã chạy chữ ("Đang tạo…") — không xoá chữ đã stream
-    assert rep["html"].index("Đang tạo…") < rep["html"].index("<strong>đậm</strong>")
-    seqs = [m["seq"] for m in got if isinstance(m.get("seq"), int)]
-    assert seqs == sorted(seqs)
-
-
-async def test_sse_seg_think_tool_have_no_html_and_subagent_ignored(stubbed):
-    e = stubbed
-    await e.login()
-    await designate(e)
-    got = await _sse_collect(e, [
-        {"type": "reasoning.delta", "payload": {"text": "<b>nghĩ</b>"}},
-        {"type": "tool.start", "payload": {"name": "<script>alert(1)</script>", "tool_id": "t1", "input": {"x": "<img src=x onerror=alert(1)>"}}},
-        {"type": "tool.start", "payload": {"name": "Read", "tool_id": "t9", "input": {"file_path": "/a/b.py"}}, "sub": "sa_1"},
-        {"type": "tool.complete", "payload": {"name": "<script>alert(1)</script>", "tool_id": "t1"}},
-        {"type": "message.delta", "payload": {"text": "phần một"}},
-        {"type": "message.complete", "payload": {"text": "phần một"}},
-        {"type": "message.complete", "payload": {"text": "của subagent"}, "sub": "sa_1"},
-        {"type": "manager.reply", "payload": {"conversation_id": "conv_1", "run_id": "r_x", "text": "xong"}},
-    ], lambda g: any(m.get("t") == "reply" for m in g))
-    think = [m for m in got if m["t"] == "think"]
-    tools = [m for m in got if m["t"] == "tool"]
-    segs = [m for m in got if m["t"] == "seg"]
-    assert think and think[0]["text"] == "<b>nghĩ</b>" and "html" not in think[0]
-    assert len(tools) == 2 and all("html" not in m for m in tools)  # tool của subagent bị bỏ
-    assert tools[0]["name"] == "<script>alert(1)</script>" and tools[0]["done"] is False and tools[1]["done"] is True  # chuỗi JSON thô
-    assert len(segs) == 1 and segs[0]["run"] == "r_x"  # message.complete của subagent không sinh seg
-    drafts = [m for m in got if m["t"] == "draft"]
-    assert drafts and "phần một" in drafts[-1]["html"]
-    rep = next(m for m in got if m["t"] == "reply")
-    assert "phần một" in rep["html"] and "xong" in rep["html"]  # lời dẫn + câu trả lời cuối, cách đoạn
-
-
-def test_draft_throttled_sanitized_and_capped():
-    """P1-1: nháp markdown ≤ 1 lần/150 ms (đồng hồ giả), luôn gửi khi hết đoạn; HTML = present.md() (không <script>/<img>);
-    quá DRAFT_MAX thì thôi gửi nháp (chỉ delta thô)."""
-    from types import SimpleNamespace
-
-    from cfharness.web import manager as M
-
-    class Mod:
-        def item(self, it):
-            return P.md(it.get("text") or "")
-
-    clock = [100.0]
-    orig = M._mod
-    M._mod = lambda request: Mod()
-    try:
-        conv = M._converter(SimpleNamespace(), clock=lambda: clock[0])
-    finally:
-        M._mod = orig
-
-    def ev(t, text, seq, **kw):
-        return {"type": t, "run_id": "r1", "seq": seq, "payload": {"text": text}, **kw}
-
-    out = conv(ev("message.delta", "<script>x</script> ![i](http://h/a.png)", 1))
-    assert [m["t"] for m in out] == ["delta", "draft"] and all(m["seq"] == 1 for m in out)
-    assert "<script" not in out[1]["html"] and "<img" not in out[1]["html"] and "&lt;script&gt;" in out[1]["html"]
-    clock[0] += 0.3
-    assert [m["t"] for m in conv(ev("message.delta", " thêm", 2))] == ["delta"]  # chưa đủ DRAFT_EVERY_S (0,5 s) → chỉ delta
-    clock[0] += 0.25
-    assert [m["t"] for m in conv(ev("message.delta", " nữa", 3))] == ["delta", "draft"]
-    clock[0] += 0.01
-    out = conv(ev("message.complete", "", 4))
-    assert [m["t"] for m in out] == ["seg", "draft"]  # hết đoạn → luôn gửi nháp
-    big = "x" * (M.DRAFT_MAX + 10)
-    clock[0] += 1
-    assert [m["t"] for m in conv(ev("message.delta", big, 5))] == ["delta"]  # quá ngưỡng → không nháp
-    assert conv(ev("message.delta", "sub", 6, subagent_id="sa")) == []
+    s = await snap(e, f"?c={conv}")
+    user = next(it for it in s["items"] if it["kind"] == "user")
+    assert user["text"] == XSS + " **không đậm**" and "html" not in user  # tin người: chữ thô (island gán textContent)
+    mgr = next(it for it in s["items"] if it["kind"] == "manager" and "đậm" in it["text"])
+    h = mgr["html"]  # HTML DUY NHẤT trong ảnh chụp: present.md() đã cứng hoá
+    assert "<img" not in h and not ON_ATTR.search(h) and "<script" not in h and not re.search(r'href="\s*javascript:', h, re.I)
+    assert "&lt;script&gt;" in h and '<a href="http://evil">' not in h
+    # markdown của điều phối viên: đậm, khối code có header + nút chép, ảnh → link chữ, link ngoài có rel + tên miền, javascript: không là link
+    assert "<strong>đậm</strong>" in h and 'class="tx-code' in h and "tx-copy" in h
+    assert re.search(r'<a [^>]*href="http://evil\.example/p"[^>]*rel="nofollow noopener noreferrer"', h) or \
+        re.search(r'<a [^>]*rel="nofollow noopener noreferrer"[^>]*href="http://evil\.example/p"', h)
+    assert 'class="ext-host"' in h and "evil.example" in h
+    assert 'href="http://x/a.png"' in h  # ảnh chỉ còn là link chữ
+    assert mgr["text"] == MD_EVIL  # chữ gốc cho Sao chép = markdown gốc
+    acts = [a for it in s["items"] if it["kind"] == "actions" for a in it["items"]]
+    assert acts and all(a["target"]["href"] is None for a in acts)  # javascript:/id không an toàn → không có link
+    assert any(a["summary"] == XSS for a in acts)  # tóm tắt = chữ thô (island gán textContent)
 
 
 @pytest.fixture
@@ -432,8 +308,7 @@ async def test_stop_button_route_guards_scope_and_audit(mheld):
     j = await send(e, "làm việc dài")
     conv, run = j["conversation_id"], j["run_id"]
     assert await until(lambda: (e.hub.store.get_run(run) or {}).get("status") == "running")
-    page = (await e.client.get(f"/manager?c={conv}")).text
-    assert f'data-pending="{run}"' in page and 'aria-busy="true"' in page and "i-stop" in page
+    assert ((await snap(e, f"?c={conv}"))["pending"] or {}).get("run") == run  # khung "đang trả lời" (nút Dừng) của lượt này
     calls: list[dict] = []
     orig = e.d.methods["run.stop"]
 
@@ -470,13 +345,14 @@ def test_manager_templates_have_no_handlers_and_template_scan_covers_them():
     from pathlib import Path
 
     tdir = Path(P.__file__).parent / "templates"
-    for name in ("_manager.html", "manager.html"):
+    for name in ("manager.html", "manager_next.html", "_manager_status.html"):
         s = (tdir / name).read_text(encoding="utf-8")
         assert not re.search(r"\son[a-z]+\s*=", s, re.I) and not re.search(r"\sstyle\s*=", s, re.I), name
+    for gone in ("_manager.html", "_manager_shell.html", "_manager_tabs.html"):  # trang Điều phối cũ đã gỡ
+        assert not (tdir / gone).exists(), gone
     js = (tdir.parent / "static" / "app.js").read_text(encoding="utf-8")
-    mgr = js[js.index("function initManager"):]
+    assert "initManager" not in js and "mgrBoot" not in js and "/sse/manager" not in js
     assert "scroll-behavior" not in (tdir.parent / "static" / "app.css").read_text(encoding="utf-8").split(".mgr-log {", 1)[1].split("}", 1)[0]
-    assert ".innerHTML = m.html" in mgr and "aria-live" not in mgr  # nháp = HTML server; còn lại textContent
 
 
 # =========================================================================== Tổng quan
@@ -540,8 +416,6 @@ async def _replied(e, conv: str) -> None:
 async def test_tick_now_from_web(menv):
     await menv.login()
     await designate(menv)
-    r = await menv.client.get("/manager")
-    assert "/do/manager_tick" in r.text and "Chạy nhịp ngay" in r.text
     r = await menv.post("/do/manager_tick", {"next": "/manager"})
     assert r.status_code == 200 and "Chạy một nhịp" in r.text  # xác nhận trước (tốn tiền)
     r = await menv.post("/do/manager_tick", {"next": "/manager", "confirm": "yes"})
@@ -555,8 +429,8 @@ async def test_schedule_message_shown_in_conversation(menv):
     conv = (await send(menv, "xin chào"))["conversation_id"]
     await _replied(menv, conv)
     menv.hub.manager._add_msg(conv, "schedule", "⏰ Lịch 'Nhắc <b>uống nước</b>' (mỗi 15 phút) chạy.", None)
-    r = await menv.client.get(f"/manager?c={conv}")
-    assert 'class="mm-note info"' in r.text and "Nhắc &lt;b&gt;uống nước&lt;/b&gt;" in r.text
+    notes = [it for it in (await snap(menv, f"?c={conv}"))["items"] if it["kind"] == "note"]
+    assert any(n["tone"] == "info" and "Nhắc <b>uống nước</b>" in n["text"] for n in notes)  # chữ thô — island gán textContent
 
 
 async def test_manager_reply_mentioned_files_get_view_open_chips(stubbed):
@@ -571,15 +445,13 @@ async def test_manager_reply_mentioned_files_get_view_open_chips(stubbed):
     text = (r"Ở đây: `C:\Users\x\.cfharness\agents\boss\workspaces\conv-1\notes.md`. Thư mục `C:\Users\x\ws` "
             "và https://jira.example/browse/LH-1")
     e.stub.convs[conv]["messages"].append({"role": "manager", "text": text, "ts": "2099-01-01T00:00:00+00:00", "run_id": run})
-    log = _log_html((await e.client.get(f"/manager?c={conv}")).text)
-    mgr = log[log.index('class="mm mgr'):]
-    user = log[log.index('class="mm user"'):log.index('class="mm mgr')]
-    assert 'class="mm-files"' in mgr and mgr.count('class="fchip"') == 1  # thư mục không có chip
-    assert "/files/view?agent=boss&amp;path=C%3A%5CUsers%5Cx%5C.cfharness%5Cagents%5Cboss%5Cworkspaces%5Cconv-1%5Cnotes.md" in mgr
-    assert 'data-fopen="open"' in mgr and 'data-fopen="reveal"' in mgr
-    assert re.search(r'<a href="https://jira\.example/browse/LH-1"[^>]*rel="nofollow noopener noreferrer"', mgr)
-    assert "fchip" not in user
-
+    s = await snap(e, f"?c={conv}")
+    mgr = next(it for it in s["items"] if it["kind"] == "manager" and "notes.md" in it["text"])
+    user = next(it for it in s["items"] if it["kind"] == "user")
+    assert [f["path"] for f in mgr["files"]] == [r"C:\Users\x\.cfharness\agents\boss\workspaces\conv-1\notes.md"]  # thư mục không có chip
+    assert mgr["files"][0]["name"] == "notes.md" and mgr["agent"] == "boss"  # chip Xem/Mở/Thư mục theo agent điều phối viên
+    assert re.search(r'<a href="https://jira\.example/browse/LH-1"[^>]*rel="nofollow noopener noreferrer"', mgr["html"])
+    assert "files" not in user
 
 async def test_send_with_files_waits_longer_and_timeout_is_clear(menv, monkeypatch):
     # tệp kèm: daemon trích PDF trước khi trả → web chờ `CHAT_FILES_TIMEOUT_S` (không phải 60 s mặc định); hết giờ → 504 + lời báo

@@ -19,10 +19,9 @@ from cfharness.store import MIGRATIONS, Store
 from cfharness.tui.rpc import LEARN_COUNT_SQL
 
 from test_web import ISOLATED, _start, _stop  # noqa: F401
-from test_web_manager import designate, mgr_rpc
+from test_web_manager import designate, mgr_rpc, snap
 from cfharness.runtime import FakeRuntime
 
-pytestmark = pytest.mark.usefixtures("old_manager_ui")  # trang Điều phối CŨ (?ui=old) — island có test riêng (test_coord_*)
 
 
 def _plan(s: Store, sql: str, args: tuple = ()) -> str:
@@ -182,13 +181,11 @@ async def test_side_actions_newest_and_filtered_by_workstream(wenv, monkeypatch)
     for i in range(30):  # event loại khác của điều phối viên không lấn chỗ thẻ hành động
         wenv.hub.publish(make_event("tool.start", "boss", {"name": "Read"}, run_id="r_lobby"))
 
-    r = await wenv.client.get("/manager")
-    side = r.text.split('id="mgr-actions"', 1)[1].split("</ol>", 1)[0]
+    side = [a["summary"] for a in (await snap(wenv))["side_actions"]]  # panel "Hành động gần đây" của island
     assert "Sảnh việc số 07" in side and "Sảnh việc số 03" in side and "Sảnh việc số 02" not in side
     assert side.index("Sảnh việc số 07") < side.index("Sảnh việc số 03")  # mới nhất trên cùng
-    assert "luồng Monitor" not in side and "luồng khác" not in side
+    assert "Việc của luồng Monitor" not in side and "Việc của luồng khác" not in side
 
-    r = await wenv.client.get(f"/manager?w={w['id']}")
-    side = r.text.split('id="mgr-actions"', 1)[1].split("</ol>", 1)[0]
+    side = [a["summary"] for a in (await snap(wenv, f"?w={w['id']}"))["side_actions"]]
     assert "Việc của luồng Monitor" in side
-    assert "Sảnh việc" not in side and "luồng khác" not in side
+    assert not any("Sảnh việc" in x for x in side) and "Việc của luồng khác" not in side

@@ -10,6 +10,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Gỡ giao diện Điều phối cũ
+- **Giao diện Điều phối cũ đã được gỡ hẳn** — `/manager` chỉ còn trang Điều phối mới (ra mắt ở v0.2.31). Link `/manager?ui=old` không còn mở trang cũ: nó mở trang mới như bình thường, lựa chọn "giao diện cũ" trình duyệt từng nhớ cũng không còn tác dụng. Hub chưa có điều phối viên vẫn thấy phần hướng dẫn + chỉ định như trước; thẻ Điều phối ở trang Tổng quan không đổi.
+
 ---
 
 ## v0.2.31 — 2026-11-24

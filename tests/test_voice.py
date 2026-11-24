@@ -85,13 +85,13 @@ async def test_web_voice_header_and_controls(menv):
     r = await menv.client.get("/manager")
     assert r.status_code == 200 and 'id="coord"' in r.text and "/static/voice.js" in r.text
     assert "microphone=(self)" in r.headers["permissions-policy"]
-    r = await menv.client.get("/manager?ui=old")  # trang cũ (lối thoát một bản phát hành)
-    assert r.status_code == 200
     pp = r.headers["permissions-policy"]
     assert "microphone=(self)" in pp and "camera=()" in pp
-    assert 'id="mgr-mic"' in r.text and 'data-voice-for="mgr-text"' in r.text and 'id="mgr-voice"' in r.text
-    assert '<input type="hidden" name="voice" value="">' in r.text
-    assert "/static/voice.js" in r.text
+    from pathlib import Path
+
+    comp = (Path(__file__).resolve().parent.parent / "src" / "cfharness" / "web" / "static" / "coord" / "composer.js").read_text(encoding="utf-8")
+    assert 'id="mgr-mic" data-voice-for="mgr-text"' in comp and 'id="mgr-voice"' in comp  # id voice.js tìm (composer của island)
+    assert '<input type="hidden" name="voice" value="" />' in comp
     js = await menv.client.get("/static/voice.js")
     assert js.status_code == 200
     assert "innerHTML" not in js.text and "eval(" not in js.text  # chữ agent chỉ qua textContent / speechSynthesis
@@ -124,10 +124,10 @@ def test_voice_flag_cleared_after_send_static():
     from pathlib import Path
 
     static = Path(__file__).resolve().parents[1] / "src" / "cfharness" / "web" / "static"
-    app = (static / "app.js").read_text(encoding="utf-8")
-    m = re.search(r'mtext\.value = "";(?P<body>.*?)emit\("sent"', app, re.S)
-    assert m, "không thấy nhánh gửi thành công trong app.js"
-    assert re.search(r'mtext\.dispatchEvent\(new Event\("input"', m.group("body")), "app.js không báo input sau khi xoá ô nhập"
+    main = (static / "coord" / "main.js").read_text(encoding="utf-8")  # island Điều phối (trang cũ app.js initManager đã gỡ)
+    m = re.search(r'if \(j\.error\) \{(?P<err>.*?)return;\s*\}(?P<ok>.*?)emit\("sent"', main, re.S)
+    assert m, "không thấy nhánh gửi thành công (emit sent) trong coord/main.js"
+    assert 'emit("sent"' not in m.group("err")  # gửi lỗi: giữ cờ voice (người gửi lại)
     voice = (static / "voice.js").read_text(encoding="utf-8")
     # trình nghe mgr:sent ở mức trang (không chỉ trong chế độ hội thoại) gọi clearVoice
     assert re.search(r'addEventListener\("mgr:sent", function \(\) \{ clearVoice\(', voice), "voice.js không xoá cờ voice khi mgr:sent"
