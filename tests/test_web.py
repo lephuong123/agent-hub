@@ -52,7 +52,7 @@ class Env:
         sid = r.cookies.get(self.cookie) or self.client.cookies.get(self.cookie)
         self.csrf = self.auth.sessions[sid].csrf
         loc = r.headers["location"]
-        assert loc.startswith("/#k=")  # khoá phiên chỉ đi trong fragment (trình duyệt không gửi lên server)
+        assert loc.startswith("/manager#k=")  # khoá phiên chỉ đi trong fragment (trình duyệt không gửi lên server)
         self.key = loc.split("#k=", 1)[1]
         assert self.key == self.auth.sessions[sid].key
         return self.csrf
@@ -151,11 +151,11 @@ async def test_unauthenticated_requests_are_blocked(env):
 async def test_one_time_login_link_sets_strict_httponly_cookie(env):
     tok = env.auth.mint()
     r = await env.client.get("/login?t=" + tok)
-    assert r.status_code == 303 and r.headers["location"].startswith("/#k=")
+    assert r.status_code == 303 and r.headers["location"].startswith("/manager#k=")
     sc = r.headers["set-cookie"].lower()
     assert "httponly" in sc and "samesite=strict" in sc and "path=/" in sc
     assert tok not in r.headers.get("location", "")
-    assert (await env.client.get("/")).status_code == 200
+    assert (await env.client.get("/activity")).status_code == 200
     # dùng lại link → từ chối (một lần)
     c2 = httpx.AsyncClient(transport=httpx.ASGITransport(app=env.app), base_url=BASE)
     r = await c2.get("/login?t=" + tok)
@@ -216,7 +216,7 @@ async def test_csrf_and_origin_required_for_writes(env):
 
 async def test_security_headers_and_no_cors(env):
     await env.login()
-    r = await env.client.get("/", headers={"Origin": "http://evil.example"})
+    r = await env.client.get("/activity", headers={"Origin": "http://evil.example"})
     h = r.headers
     assert "default-src 'self'" in h["content-security-policy"] and "script-src 'self'" in h["content-security-policy"]
     assert "frame-ancestors 'none'" in h["content-security-policy"]
@@ -245,7 +245,7 @@ async def test_human_token_never_in_html_or_logs(held, caplog):
     await env.login()
     run = await running_run(env)
     ap = open_approval(env.hub, run["id"])
-    pages = ["/", "/partials/overview", "/agents", "/agents/ag0", "/agents/ag0/edit", "/agents/new", "/runs", f"/runs/{run['id']}",
+    pages = ["/activity", "/partials/overview", "/agents", "/agents/ag0", "/agents/ag0/edit", "/agents/new", "/runs", f"/runs/{run['id']}",
              f"/partials/run/{run['id']}", "/approvals", "/tasks", "/teams", "/learnings", "/mcp", "/costs", "/audit", "/settings"]
     for p in pages:
         r = await env.client.get(p)
@@ -294,7 +294,7 @@ async def test_daily_flow_create_agent_with_mcp_assign_task_see_result_and_cost(
     assert f"cfharness takeover {rid}" in r.text
     r = await env.client.get("/costs")
     assert "nc" in r.text and "$0.00" in r.text
-    r = await env.client.get("/")
+    r = await env.client.get("/activity")
     assert "Nghiên cứu 2" in r.text
     # tiếp hội thoại
     r = await env.post("/do/run_continue", {"id": rid, "prompt": "ngắn hơn"})
@@ -311,7 +311,7 @@ async def test_approve_deny_need_confirmation_and_are_audited_web(held):
     run = await running_run(env)
     ap = open_approval(env.hub, run["id"])
     env.hub.approvals.to_waiting_human(ap["id"])
-    r = await env.client.get("/")
+    r = await env.client.get("/activity")
     assert "Chờ bạn duyệt" in r.text and "rm -rf /srv/data" in r.text and "data-confirm" in r.text
     # chưa xác nhận → trang xác nhận, chưa quyết
     r = await env.post("/do/approve", {"id": ap["id"], "preview": "rm -rf /srv/data", "next": "/"})
@@ -791,7 +791,7 @@ async def test_sandbox_localhost_badge_and_toggle(env):
     assert r.status_code == 303
     ov = env.hub.guard.sandbox_overrides("ag0")
     assert ov["allow_localhost"] and ov["channel"] == "web" and ov["by"] == "user"
-    for path in ("/", "/agents", "/agents/ag0"):
+    for path in ("/activity", "/agents", "/agents/ag0"):
         html = (await env.client.get(path)).text
         assert html.count("lh-badge") >= 1 and "localhost</span>" in html, path
         assert "chỉ người tắt được" in html.lower(), path

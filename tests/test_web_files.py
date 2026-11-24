@@ -367,7 +367,7 @@ async def test_agent_scope_and_diff_chip(env, ws):
 
 async def test_files_js_and_css_served(env):
     await env.login()
-    page = await env.client.get("/")
+    page = await env.client.get("/activity")
     assert "/static/files.js" in page.text and "/static/files.css" in page.text
     js = await env.client.get("/static/files.js")
     assert js.status_code == 200 and "/files/open" in js.text and "innerHTML" not in js.text

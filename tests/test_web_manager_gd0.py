@@ -153,7 +153,7 @@ def test_draft_markdown_skips_lru_and_is_throttled():
 async def test_static_versioned_is_immutable_and_gzip(menv):
     e = menv
     await e.login()
-    html = (await e.client.get("/")).text
+    html = (await e.client.get("/activity")).text
     url = re.search(r'src="(/static/app\.js\?v=[0-9a-f]+)"', html).group(1)
     r = await e.client.get(url, headers={"Accept-Encoding": "gzip"})
     assert r.status_code == 200 and "immutable" in r.headers["cache-control"] and "max-age=31536000" in r.headers["cache-control"]

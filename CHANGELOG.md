@@ -10,6 +10,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Điều hướng tập trung vào trò chuyện
+- **Mở web là vào thẳng trò chuyện với điều phối viên**: thanh bên chính gọn còn luồng việc hằng ngày (Cần bạn, Công việc, Lượt chạy, Đội ngũ, Hoạt động) và danh sách **Hội thoại** (luồng đang mở + hội thoại gần đây) hiện trên mọi trang. Trang Tổng quan đổi tên thành **Hoạt động** (`/activity`); link `/` cũ tự chuyển về trò chuyện. Các trang cấu hình (Team, Lịch chạy, Skill, Memory, Tự học, MCP, Hệ thống ngoài, Chi phí, Nhật ký, Nhật ký hệ thống, Quyền đã cấp) vào qua khối **Quản lý** ở đầu trang Cài đặt — đường dẫn giữ nguyên. Nút **Dừng khẩn cấp** luôn có ở chân thanh bên (bấm là hỏi xác nhận; đang bật thì có nút Tắt); khối "Bạn" ở chân thành menu: Cài đặt, Chi phí, Cập nhật (có chấm khi có bản mới), Tải app, Quản trị máy, Đăng xuất. Trên điện thoại: thanh dưới là Chat · Cần bạn · Công việc · Lượt chạy · Thêm (Dừng khẩn cấp đứng đầu), trang chat bớt một tầng thanh trên cùng.
+
 ### Giao diện dễ đọc hơn
 - **Web dễ đọc hơn ở cả nền sáng lẫn tối**: nút chính, nút Dừng khẩn cấp/nguy hiểm ở nền tối, nhãn trạng thái (ok/cảnh báo/nhấn) và chữ phụ (gợi ý phím tắt, dòng lưu ý, giờ) giờ đủ tương phản (chuẩn WCAG AA); mục đang mở ở thanh bên có vạch màu bên trái; ô nhập và khung chat có viền rõ khi đang gõ; nút đóng thông báo và nút thêm hội thoại dễ bấm hơn; gợi ý phím tắt dưới ô chat gọn còn một dòng; thẻ "có bản cập nhật" dùng màu thông tin thay vì đỏ; trang Cài đặt trên điện thoại không còn bị tràn ngang khi email tài khoản dài.
 

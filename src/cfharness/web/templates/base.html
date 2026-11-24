@@ -13,58 +13,81 @@
 <script src="{{ static("early.js") }}"></script>
 </head>
 <body class="{% block bodyclass %}{% endblock %}">
+{%- import "_nav.html" as N with context -%}
 {%- set navkey = 'inbox' if nav == 'approvals' else nav %}
 {%- set on3d = path == '/office' %}
+{%- set in_cfg = navkey in N.CFG_KEYS %}
+{%- set ns = namespace(cur=None) %}{% for it in N.CFG_PAGES %}{% if it[0] == navkey %}{% set ns.cur = it %}{% endif %}{% endfor %}
 {%- macro view_toggle(id, cls) -%}
-<a href="{{ '/' if on3d else '/office' }}" id="{{ id }}" class="{{ cls }}" data-view-toggle role="button" aria-pressed="{{ 'true' if on3d else 'false' }}" aria-label="Chế độ 3D văn phòng" title="{{ 'Về giao diện 2D' if on3d else 'Chế độ 3D văn phòng' }}"><span class="view-lbl">{{ '2D' if on3d else '3D' }}</span></a>
+<a href="{{ '/manager' if on3d else '/office' }}" id="{{ id }}" class="{{ cls }}" data-view-toggle role="button" aria-pressed="{{ 'true' if on3d else 'false' }}" aria-label="Chế độ 3D văn phòng" title="{{ 'Về giao diện 2D' if on3d else 'Chế độ 3D văn phòng' }}"><span class="view-lbl">{{ '2D' if on3d else '3D' }}</span></a>
+{%- endmacro %}
+{#- Dừng khẩn cấp LUÔN thấy được (chân thanh bên + đầu sheet "Thêm" trên điện thoại). Tắt → nút viền đỏ mở hộp xác nhận có sẵn (dừng mọi
+    run + chặn run mới; "chỉ chặn run mới" ở Cài đặt). Người dùng bật → nút đỏ đặc + "Tắt" (xác nhận). Quản trị máy bật → trỏ /machine. -#}
+{%- macro estop_ctl() -%}
+{%- if badge.admin_estop -%}
+{%- if badge.machine %}<a href="/machine" class="btn danger solid sm side-btn estop-ctl" title="Hub đang tạm dừng bởi quản trị máy — bạn không tắt được">{{ _m.icon('stop') }}<span class="lbl">Hub đang tạm dừng</span></a>
+{%- else %}<span class="btn danger solid sm side-btn estop-ctl" title="Hub đang tạm dừng — liên hệ quản trị">{{ _m.icon('stop') }}<span class="lbl">Hub đang tạm dừng</span></span>{% endif -%}
+{%- elif badge.estop -%}
+<div class="estop-ctl estop-on"><a href="/settings#estop" class="btn danger solid sm side-btn" title="Dừng khẩn cấp đang bật — không run mới nào được chạy">{{ _m.icon('stop') }}<span class="lbl">ESTOP đang bật</span></a><form method="post" action="/do/estop" class="inline estop-off" data-confirm="Tắt dừng khẩn cấp (ESTOP) — cho phép agent chạy lại?"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="on" value="0"><input type="hidden" name="next" value="{{ path or '/manager' }}"><button type="submit" class="btn sm" title="Tắt ESTOP">Tắt</button></form></div>
+{%- else -%}
+<form method="post" action="/do/estop" class="estop-ctl" data-confirm="BẬT dừng khẩn cấp (ESTOP)? Mọi run đang chạy sẽ bị dừng và không run mới nào được chạy cho tới khi bạn tắt. (Chỉ chặn run mới mà không dừng run đang chạy: Cài đặt → Dừng khẩn cấp.)" data-note="Lý do (tuỳ chọn)"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="on" value="1"><input type="hidden" name="stop_running" value="1"><input type="hidden" name="next" value="{{ path or '/manager' }}"><button type="submit" class="btn danger sm side-btn estop-btn" title="Dừng khẩn cấp: dừng mọi run và chặn run mới">{{ _m.icon('power') }}<span class="lbl">Dừng khẩn cấp</span></button></form>
+{%- endif -%}
 {%- endmacro %}
 {%- set need = (badge.approvals or 0) + (badge.questions or 0) %}
 {%- set need_tone = 'danger' if badge.waiting_human else ('ask' if badge.questions and not badge.approvals else '') %}
-{%- set GROUPS = [
-  ("Làm việc", [("manager", "/manager", "chat", "Điều phối"), ("inbox", "/inbox", "inbox", "Cần bạn"), ("overview", "/", "home", "Tổng quan"), ("search", "/search", "search", "Tìm kiếm")]),
-  ("Đội ngũ", [("agents", "/agents", "bot", "Agent"), ("teams", "/teams", "team", "Team"), ("tasks", "/tasks", "task", "Công việc"), ("runs", "/runs", "run", "Lượt chạy"), ("schedules", "/schedules", "calendar", "Lịch chạy")]),
-  ("Học & chất lượng", [("learnings", "/learnings", "learn", "Tự học"), ("skills", "/skills", "star", "Skill"), ("memory", "/memory", "graph", "Memory")]),
-  ("Hệ thống", [("mcp", "/mcp", "plug", "MCP"), ("systems", "/systems", "power", "Hệ thống ngoài"), ("costs", "/costs", "dollar", "Chi phí")] + ([("admin", "/admin/overview", "terminal", "Tổng quan máy"), ("admin_users", "/admin/users", "team", "Người dùng máy")] if badge.admin else []) + ([("machine", "/machine", "shield", "Quản trị máy")] if badge.machine else []) + ([("team_inbox", "/team-inbox", "task", "Việc được giao" ~ (" (" ~ badge.team_inbox ~ ")" if badge.team_inbox else ""))] if badge.team_inbox is number else []) + [("permissions", "/permissions", "shield", "Quyền đã cấp"), ("audit", "/audit", "log", "Nhật ký"), ("logs", "/logs", "terminal", "Nhật ký hệ thống"), ("perf", "/perf", "zap", "Hiệu năng"), ("settings", "/settings", "settings", "Cài đặt")]),
-] %}
 <div class="shell{{ ' noside' if not csrf }}">
   {% if csrf %}
   <aside class="side" aria-label="Thanh bên">
     <div class="side-top">
-      <a class="brand" href="/" title="cfharness">{{ _m.icon('logo') }}<span class="lbl wordmark">cfharness</span></a>
+      <a class="brand" href="/manager" title="cfharness — Trò chuyện">{{ _m.icon('logo') }}<span class="lbl wordmark">cfharness</span></a>
       {{ view_toggle('view-toggle', 'view-toggle side-view') }}
       <button type="button" class="side-toggle" id="side-toggle" aria-label="Thu gọn / mở rộng thanh bên" title="Thu gọn / mở rộng thanh bên">{{ _m.icon('sidebar') }}</button>
     </div>
     <a class="side-new" href="/manager?new=1" title="Cuộc trò chuyện mới với điều phối viên"><span class="side-new-ic">{{ _m.icon('plus') }}</span><span class="lbl">Cuộc trò chuyện mới</span></a>
     <form method="get" action="/search" class="side-search" role="search"><label class="sr-only" for="side-q">Tìm trong hội thoại</label>{{ _m.icon('search') }}<input id="side-q" name="q" placeholder="Tìm trong hội thoại…" value="{{ request.query_params.get('q', '') if nav == 'search' else '' }}" autocomplete="off" spellcheck="false"></form>
     <nav class="nav" aria-label="Điều hướng chính">
-      {% for gname, items in GROUPS %}
-      <div class="nav-group">{{ gname }}</div>{% if not loop.first %}<div class="nav-sep" aria-hidden="true"></div>{% endif %}
-      {% for key, href, ic, label in items %}
+      <div class="nav-group">Luồng việc</div>
+      {% for key, href, ic, label in N.APP_NAV %}
       <a href="{{ href }}" class="{{ 'on' if navkey == key }}" title="{{ label }}"{% if navkey == key %} aria-current="page"{% endif %}>{{ _m.icon(ic) }}<span class="lbl">{{ label }}</span>{% if key == 'inbox' and need %}<span class="badge {{ need_tone }}">{{ need }}</span>{% endif %}</a>
       {% endfor %}
-      {% endfor %}
+      {% if in_cfg %}{#- đang ở trang cấu hình: mục tạm cho biết mình đang ở đâu + đường về Cài đặt -#}
+      <div class="nav-sep" aria-hidden="true"></div>
+      {% if ns.cur %}<div class="nav-group nav-cfg-head"><a href="/settings">Cài đặt</a></div>
+      <a href="{{ ns.cur[1] }}" class="on nav-cfg" title="Cài đặt › {{ ns.cur[3] }}" aria-current="page">{{ _m.icon(ns.cur[2]) }}<span class="lbl">{{ ns.cur[3] }}</span></a>
+      {% else %}<a href="/settings" class="on nav-cfg" title="Cài đặt" aria-current="page">{{ _m.icon('settings') }}<span class="lbl">Cài đặt</span></a>{% endif %}
+      {% endif %}
     </nav>
-    {% block side_extra %}{% endblock %}
+    {% block side_extra %}<section class="side-recents" id="side-convs" aria-label="Hội thoại" hx-get="/partials/manager/side" hx-trigger="load" hx-swap="innerHTML"><div class="nav-group ws-head"><span>Hội thoại</span><a class="ws-add" href="/manager?new=1" title="Hội thoại mới" aria-label="Hội thoại mới">＋</a></div><p class="muted small side-none">Đang tải…</p></section>{% endblock %}
     <div class="side-foot">
-      {% if badge.admin_estop %}<span class="btn danger solid sm side-btn" title="Hub đang tạm dừng — liên hệ quản trị">{{ _m.icon('stop') }}<span class="lbl">Hub đang tạm dừng</span></span>
-      {% elif badge.estop %}<a href="/settings#estop" class="btn danger solid sm side-btn" title="Dừng khẩn cấp đang bật">{{ _m.icon('stop') }}<span class="lbl">ESTOP đang bật</span></a>{% endif %}
-      <a href="/settings#desktop-app" class="side-dl" title="Tải ứng dụng máy tính Cfharness Desktop (macOS, Windows)">{{ _m.icon('download') }}<span class="lbl">Tải app máy tính</span></a>
-      <div class="side-user">
-        <span class="side-av" aria-hidden="true">B</span>
-        <div class="side-user-t lbl"><span class="nm">Bạn</span><span class="daemon-st {{ 'down' if badge.down }}" title="{{ 'Không kết nối được daemon' if badge.down else 'Daemon đang chạy' }}">{{ _m.icon('dot') }}<span>{{ 'daemon tắt' if badge.down else 'daemon đang chạy' }}</span></span></div>
-        <form method="post" action="/logout" class="side-out"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn ghost sm icon side-btn" type="submit" title="Thoát" aria-label="Thoát">{{ _m.icon('logout') }}</button></form>
-      </div>
+      {{ estop_ctl() }}
+      <details class="menu side-menu">
+        <summary class="side-user" title="Tài khoản, cài đặt, đăng xuất" aria-label="Menu người dùng">
+          <span class="side-av" aria-hidden="true">B</span>
+          <span class="side-user-t lbl"><span class="nm">Bạn</span><span class="daemon-st {{ 'down' if badge.down }}" title="{{ 'Không kết nối được daemon' if badge.down else 'Daemon đang chạy' }}">{{ _m.icon('dot') }}<span>{{ 'daemon tắt' if badge.down else 'daemon đang chạy' }}</span></span></span>
+          <span id="upd-dot" class="menu-dot{{ '' if update_available else ' off' }}" title="Có bản cập nhật" aria-hidden="true"></span>
+          <span class="side-user-more lbl" aria-hidden="true">{{ _m.icon('more') }}</span>
+        </summary>
+        <div class="menu-pop side-menu-pop">
+          <a class="item{{ ' on' if in_cfg and navkey not in ('costs', 'machine', 'admin', 'admin_users') }}" href="/settings"{% if navkey == 'settings' %} aria-current="page"{% endif %}>{{ _m.icon('settings') }}<span>Cài đặt</span>{% if ns.cur and navkey not in ('costs', 'machine', 'admin', 'admin_users') %}<span class="item-sub">› {{ ns.cur[3] }}</span>{% endif %}</a>
+          <a class="item{{ ' on' if navkey == 'costs' }}" href="/costs">{{ _m.icon('dollar') }}<span>Chi phí</span></a>
+          <a class="item" href="/update">{{ _m.icon('refresh') }}<span>Cập nhật</span><span id="upd-item" class="upd-flag{{ '' if update_available else ' off' }}">có bản mới</span></a>
+          <a class="item" href="/settings#desktop-app">{{ _m.icon('download') }}<span>Tải app máy tính</span></a>
+          {% if badge.machine %}<a class="item{{ ' on' if navkey == 'machine' }}" href="/machine">{{ _m.icon('shield') }}<span>Quản trị máy</span></a>{% endif %}
+          {% if badge.admin %}<a class="item{{ ' on' if navkey in ('admin', 'admin_users') }}" href="/admin/overview">{{ _m.icon('terminal') }}<span>Tổng quan máy</span></a>{% endif %}
+          <hr>
+          <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn" type="submit">{{ _m.icon('logout') }}<span>Đăng xuất</span></button></form>
+        </div>
+      </details>
     </div>
   </aside>
   {% endif %}
   <div class="main">
     {% if csrf %}
     <header class="mtop">
-      <a class="brand" href="/">{{ _m.icon('logo') }}<span class="wordmark">cfharness</span></a>
+      <a class="brand" href="/manager">{{ _m.icon('logo') }}<span class="wordmark">cfharness</span></a>
       <div class="mtop-right">
-        {{ view_toggle('view-toggle-m', 'view-toggle') }}
         <a class="btn ghost sm icon" href="/manager?new=1" title="Cuộc trò chuyện mới" aria-label="Cuộc trò chuyện mới">{{ _m.icon('pen-new') }}</a>
-        {% if badge.admin_estop %}<span class="pill danger strong" title="Liên hệ quản trị">{{ _m.icon('stop') }}Hub đang tạm dừng</span>
+        {% if badge.admin_estop %}<{{ 'a href="/machine"' if badge.machine else 'span' }} class="pill danger strong" title="Hub đang tạm dừng bởi quản trị máy">{{ _m.icon('stop') }}Hub đang tạm dừng</{{ 'a' if badge.machine else 'span' }}>
         {% elif badge.estop %}<a href="/settings#estop" class="pill danger strong">{{ _m.icon('stop') }}ESTOP</a>{% endif %}
         {% if badge.down %}<span class="pill danger">daemon tắt</span>{% endif %}
       </div>
@@ -78,16 +101,18 @@
 </div>
 {% if csrf %}
 <nav class="tabbar" aria-label="Điều hướng (màn nhỏ)">
-  {% for key, href, ic, label in [("manager", "/manager", "chat", "Điều phối"), ("inbox", "/inbox", "inbox", "Cần bạn"), ("agents", "/agents", "bot", "Agent"), ("runs", "/runs", "run", "Lượt chạy")] %}
-  <a href="{{ href }}" class="{{ 'on' if navkey == key }}">{{ _m.icon(ic) }}<span>{{ label }}</span>{% if key == 'inbox' and need %}<span class="badge {{ need_tone }}">{{ need }}</span>{% endif %}</a>
+  {% for key, href, ic, label in [("manager", "/manager", "chat", "Chat"), ("inbox", "/inbox", "inbox", "Cần bạn"), ("tasks", "/tasks", "task", "Công việc"), ("runs", "/runs", "run", "Lượt chạy")] %}
+  <a href="{{ href }}" class="{{ 'on' if navkey == key }}"{% if navkey == key %} aria-current="page"{% endif %}>{{ _m.icon(ic) }}<span>{{ label }}</span>{% if key == 'inbox' and need %}<span class="badge {{ need_tone }}">{{ need }}</span>{% endif %}</a>
   {% endfor %}
   <details class="tab-more">
-    <summary>{{ _m.icon('menu') }}<span>Thêm</span></summary>
+    <summary class="{{ 'on' if in_cfg or navkey in ('agents', 'overview', 'search', 'team_inbox') }}">{{ _m.icon('menu') }}<span>Thêm</span></summary>
     <div class="tab-sheet">
-      {% for key, href, ic, label in [("overview", "/", "home", "Tổng quan"), ("search", "/search", "search", "Tìm kiếm"), ("schedules", "/schedules", "calendar", "Lịch chạy"), ("teams", "/teams", "team", "Team"), ("tasks", "/tasks", "task", "Công việc"), ("learnings", "/learnings", "learn", "Tự học"), ("skills", "/skills", "star", "Skill"), ("memory", "/memory", "graph", "Memory"), ("mcp", "/mcp", "plug", "MCP"), ("costs", "/costs", "dollar", "Chi phí")] + ([("admin", "/admin/overview", "terminal", "Tổng quan máy"), ("admin_users", "/admin/users", "team", "Người dùng máy")] if badge.admin else []) + ([("machine", "/machine", "shield", "Quản trị máy")] if badge.machine else []) + ([("team_inbox", "/team-inbox", "task", "Việc được giao" ~ (" (" ~ badge.team_inbox ~ ")" if badge.team_inbox else ""))] if badge.team_inbox is number else []) + [("permissions", "/permissions", "shield", "Quyền đã cấp"), ("audit", "/audit", "log", "Nhật ký"), ("logs", "/logs", "terminal", "Nhật ký hệ thống"), ("perf", "/perf", "zap", "Hiệu năng"), ("settings", "/settings", "settings", "Cài đặt")] %}
-      <a href="{{ href }}" class="{{ 'on' if navkey == key }}">{{ _m.icon(ic) }}<span>{{ label }}</span></a>
+      <div class="tab-estop">{{ estop_ctl() }}</div>
+      {% for key, href, ic, label in [("agents", "/agents", "bot", "Đội ngũ"), ("overview", "/activity", "home", "Hoạt động"), ("search", "/search", "search", "Tìm kiếm")] + ([("team_inbox", "/team-inbox", "task", "Việc được giao")] if badge.team_inbox is number else []) + [("settings", "/settings", "settings", "Cài đặt")] + ([("machine", "/machine", "shield", "Quản trị máy")] if badge.machine else []) + ([("admin", "/admin/overview", "terminal", "Tổng quan máy")] if badge.admin else []) %}
+      <a href="{{ href }}" class="{{ 'on' if navkey == key or (key == 'settings' and in_cfg and navkey not in ('machine', 'admin', 'admin_users')) or (key == 'admin' and navkey == 'admin_users') }}">{{ _m.icon(ic) }}<span>{{ label }}</span></a>
       {% endfor %}
-      <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn ghost" type="submit">{{ _m.icon('logout') }}<span>Thoát</span></button></form>
+      <a href="{{ '/manager' if on3d else '/office' }}" data-view-toggle role="button" aria-pressed="{{ 'true' if on3d else 'false' }}" title="{{ 'Về giao diện 2D' if on3d else 'Chế độ 3D văn phòng' }}">{{ _m.icon('graph') }}<span>Văn phòng <span class="view-lbl">{{ '2D' if on3d else '3D' }}</span></span></a>
+      <form method="post" action="/logout" class="tab-out"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">{{ _m.icon('logout') }}<span>Đăng xuất</span></button></form>
     </div>
   </details>
 </nav>

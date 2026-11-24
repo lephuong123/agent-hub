@@ -132,10 +132,40 @@ ul, ol { margin: 0 0 var(--s3); padding-left: 1.3rem; }
 .daemon-st .ic { width: 9px; height: 9px; color: var(--ok); }
 .daemon-st.down .ic { color: var(--danger); } .daemon-st.down { color: var(--danger); }
 .side-btn { justify-content: flex-start !important; }
-.side-dl { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 8px 0 10px; border-radius: 8px; color: var(--text-2); font-size: var(--fs-sm); white-space: nowrap; }
-.side-dl .ic { color: var(--muted); width: 17px; height: 17px; }
-.side-dl:hover { background: var(--surface-3); color: var(--text); text-decoration: none; }
 .side-foot > .side-btn { width: 100%; }
+/* chat-first: vùng HỘI THOẠI trên mọi trang (_side_convs.html), mục tạm "Cài đặt › …" khi đang ở trang cấu hình */
+.side-sub { font-size: 11px; font-weight: 550; color: var(--muted); padding: 8px 10px 2px; text-transform: uppercase; letter-spacing: .04em; }
+.side-recents .mgr-convs + .side-sub { margin-top: 4px; }
+.side-recents .side-more .ct { color: var(--muted); font-weight: 450; }
+.side-recents .ws-head { padding-top: 6px; }
+.nav .nav-cfg-head a { display: inline; height: auto; padding: 0; color: var(--muted); font-size: inherit; font-weight: inherit; background: none; }
+.nav .nav-cfg-head a::after { content: " ›"; }
+.nav .nav-cfg-head a:hover { color: var(--text); text-decoration: underline; }
+/* Dừng khẩn cấp — luôn hiện ở chân thanh bên */
+.estop-ctl { display: flex; gap: 6px; margin: 0; width: 100%; }
+.estop-ctl .side-btn, .estop-ctl.side-btn { flex: 1 1 auto; min-width: 0; }
+.estop-ctl .btn { height: 32px; }
+.estop-btn { width: 100%; background: transparent; box-shadow: none; }
+.estop-on .estop-off { flex: 0 0 auto; }
+/* menu người dùng (khối "Bạn" ở chân) — mở lên trên */
+.side-menu { display: block; width: 100%; }
+.side-menu > summary.side-user { cursor: pointer; border-radius: 10px; padding: 6px 6px 6px 6px; }
+.side-menu > summary.side-user:hover, .side-menu[open] > summary.side-user { background: var(--surface-3); }
+.side-user-more .ic { color: var(--muted); width: 16px; height: 16px; }
+.side-menu .side-menu-pop { top: auto; bottom: calc(100% + 6px); left: 0; right: 0; min-width: 232px; }
+.side-menu-pop a.item.on { background: var(--nav-active-bg); font-weight: 600; }
+.side-menu-pop .item-sub { margin-left: auto; color: var(--muted); font-size: var(--fs-xs); font-weight: 450; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: 0 0 auto; }
+.menu-dot.off, .upd-flag.off { display: none; }
+.upd-flag { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--accent-text); background: var(--accent-soft); border-radius: 999px; padding: 1px 8px; }
+/* khối "Quản lý" đầu /settings (tạm thời, trước khu Cài đặt 2 cột) */
+.cfg-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; }
+.cfg-link { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: var(--r); border: 1px solid var(--line); color: var(--text); min-height: 44px; }
+.cfg-link:hover { background: var(--surface-2); border-color: var(--line-2); text-decoration: none; }
+.cfg-link .ic { color: var(--muted); margin-top: 2px; }
+.cfg-t { display: flex; flex-direction: column; min-width: 0; }
+.cfg-t b { font-weight: 600; font-size: var(--fs-sm); }
+.cfg-d { color: var(--muted); font-size: var(--fs-xs); }
 
 .shell.noside { display: block; background: var(--bg); }
 .main { min-width: 0; display: flex; flex-direction: column; }
@@ -158,7 +188,9 @@ ul, ol { margin: 0 0 var(--s3); padding-left: 1.3rem; }
   html.side-min .side-foot { align-items: center; width: 100%; }
   html.side-min .side-user { flex-direction: column; padding: 0; gap: 6px; }
   html.side-min .side-btn { justify-content: center !important; width: 36px; padding: 0; }
-  html.side-min .side-dl { justify-content: center; width: 36px; padding: 0; }
+  html.side-min .estop-ctl { flex-direction: column; align-items: center; }
+  html.side-min .estop-off, html.side-min .menu-dot { display: none; }
+  html.side-min .side-menu .side-menu-pop { left: 0; right: auto; }
 }
 
 /* ============================================================ đầu trang */
@@ -849,7 +881,9 @@ html.mgr-info-closed .mgr-side { display: none; }
   .side-foot { align-items: center; width: 100%; }
   .side-user { flex-direction: column; padding: 0; gap: 6px; }
   .side-btn { justify-content: center !important; width: 36px; padding: 0; }
-  .side-dl { justify-content: center; width: 36px; padding: 0; }
+  .estop-ctl { flex-direction: column; align-items: center; }
+  .estop-off, .menu-dot { display: none; }
+  .side-menu .side-menu-pop { left: 0; right: auto; }
   .grid-main { grid-template-columns: minmax(0, 1fr); }
 }
 @media (min-width: 1101px) { .nav-sep { display: none; } html.side-min .nav-sep { display: block; } }
@@ -885,6 +919,20 @@ html.mgr-info-closed .mgr-side { display: none; }
   .tab-sheet { position: fixed; left: 8px; right: 8px; bottom: calc(var(--tab-h) + 8px + env(safe-area-inset-bottom)); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-xl); box-shadow: var(--shadow-lg); padding: 8px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
   .tab-sheet a { height: 64px; border-radius: 12px; color: var(--text-2) !important; }
   .tab-sheet a.on { background: var(--accent-soft); color: var(--accent-text) !important; }
+  .cfg-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cfg-link { padding: 10px; }
+  .cfg-d { display: none; }
+  .tabbar summary.on { color: var(--accent-text); font-weight: 650; }
+  .tab-sheet .tab-estop { grid-column: 1 / -1; display: flex; }
+  .tab-sheet .tab-estop .btn { height: 44px; font-size: var(--fs-sm); flex: 1 1 auto; justify-content: center !important; }
+  .tab-sheet .tab-estop .estop-off .btn { flex: 0 0 auto; }
+  .tab-sheet .tab-estop .estop-off { display: flex; }
+  .tab-sheet .tab-out { display: contents; }
+  .tab-sheet .tab-out button { height: 64px; border: 0; background: transparent; border-radius: 12px; font: inherit; font-size: 11px; font-weight: 550; color: var(--text-2); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; cursor: pointer; }
+  .tab-sheet .tab-out button .ic { width: 22px; height: 22px; }
+  .tab-sheet .tab-out button:hover { background: var(--surface-2); }
+  /* trang chat: header chat của island thay .mtop (bớt một tầng thanh; ESTOP/mất kết nối đã hiện trong khung chat) */
+  .chat-page .mtop { display: none; }
   .toasts { left: 16px; right: 16px; bottom: calc(var(--tab-h) + 12px); max-width: none; }
   .tbl.stack thead { display: none; }
   .tbl.stack, .tbl.stack tbody, .tbl.stack tr, .tbl.stack td { display: block; width: 100%; }
@@ -906,7 +954,6 @@ html.mgr-info-closed .mgr-side { display: none; }
   .menu-pop { right: auto; left: 0; }
   /* chat trên điện thoại */
   .chat-page .main { padding-bottom: calc(var(--tab-h) + env(safe-area-inset-bottom)); }
-  .chat-page .mtop { position: static; }
   .chat-head { padding: 6px 8px 6px 6px; min-height: 48px; }
   .chat-sub, .composer-hint { display: none; }
   .mgr-convs-m { display: block; }

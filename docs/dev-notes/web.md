@@ -58,7 +58,7 @@ tương đương rủi ro token người đã ghi ở `hardening-SEC.md` §3.
 **WT-1 (cookie không tách theo cổng → app localhost duyệt thay người).** Nhiều lớp:
 1. Host riêng `cfharness.localhost:<port>` (mặc định; `--host-name` đổi). Cookie host-only → KHÔNG gửi tới `127.0.0.1:*`/`localhost:*`.
    Chrome/Firefox/Safari tự phân giải `*.localhost`; resolver macOS cũng vậy (`getaddrinfo` → ::1, 127.0.0.1 — đã kiểm). Server vẫn bind 127.0.0.1.
-2. Khoá phiên NGOÀI cookie (`Session.key`, 256 bit): trao MỘT lần qua fragment `/#k=…` của redirect đăng nhập (fragment không lên server,
+2. Khoá phiên NGOÀI cookie (`Session.key`, 256 bit): trao MỘT lần qua fragment `/manager#k=…` của redirect đăng nhập (fragment không lên server,
    không vào log/Referer), `app.js` cất vào `localStorage` của origin web (origin khác — kể cả `cfharness.localhost:<cổng khác>` — không
    đọc được) và gắn `k` vào MỌI form POST; server từ chối 403 nếu thiếu/sai (`post_guard`). HTML không bao giờ chứa khoá (trang xác nhận
    mang trường form qua `carry()` đã loại `k`/`csrf`). Hệ quả: thao tác ghi cần JavaScript; tab/trình duyệt khác chưa có khoá → đăng nhập lại.

@@ -112,7 +112,7 @@ async def test_web_send_voice_reaches_manager(menv):
 
 async def test_dictation_textareas_marked(menv):
     await menv.login()
-    r = await menv.client.get("/")
+    r = await menv.client.get("/activity")
     assert r.status_code == 200
     assert "data-voice" in r.text
 

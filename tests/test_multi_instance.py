@@ -285,7 +285,7 @@ async def test_two_hubs_same_host_do_not_share_session_cookie(tmp_path):
         app = create_app(hp, auth=auth, port=port)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=f"http://cfharness.localhost:{port}") as c:
             r = await c.get("/login?t=" + auth.mint())
-            assert r.status_code == 303 and r.headers["location"].startswith("/#k=")  # khoá phiên vẫn ngoài cookie
+            assert r.status_code == 303 and r.headers["location"].startswith("/manager#k=")  # khoá phiên vẫn ngoài cookie
             sc = r.headers["set-cookie"]
             assert sc.startswith(cookie_name(hp) + "=") and "httponly" in sc.lower()
             names.append(cookie_name(hp))
