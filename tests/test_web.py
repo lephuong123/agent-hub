@@ -246,7 +246,8 @@ async def test_human_token_never_in_html_or_logs(held, caplog):
     run = await running_run(env)
     ap = open_approval(env.hub, run["id"])
     pages = ["/activity", "/partials/overview", "/agents", "/agents/ag0", "/agents/ag0/edit", "/agents/new", "/runs", f"/runs/{run['id']}",
-             f"/partials/run/{run['id']}", "/approvals", "/tasks", "/teams", "/learnings", "/mcp", "/costs", "/audit", "/settings"]
+             f"/partials/run/{run['id']}", "/approvals", "/tasks", "/teams", "/learnings", "/mcp", "/costs", "/audit", "/settings",
+             *(f"/settings/{t}" for t in ("safety", "accounts", "config", "notifications", "secrets", "filehub", "security", "system", "backup", "support", "desktop"))]
     for p in pages:
         r = await env.client.get(p)
         assert r.status_code == 200, (p, r.status_code, r.text[:500])
@@ -369,7 +370,7 @@ async def test_human_only_admin_actions_audited_as_web(env):
     assert r.status_code == 303 and env.hub.config.get("guard.enabled") is True
     # secret: giá trị không bao giờ hiện lại
     await env.post("/do/secret_set", {"name": "MY_TOKEN", "value": "sieu-bi-mat-123", "confirm": "yes"})
-    r = await env.client.get("/settings")
+    r = await env.client.get("/settings/secrets")
     assert "MY_TOKEN" in r.text and "sieu-bi-mat-123" not in r.text
     # xoá mềm + khôi phục + revert
     await env.post("/do/agent_delete", {"id": "ag0", "confirm": "yes"})
@@ -391,7 +392,7 @@ async def test_human_only_admin_actions_audited_as_web(env):
 async def test_settings_lists_are_dropdowns(env):
     """Cài đặt: bool/enum là <select>, danh sách chọn nhiều là dropdown checkbox; server chỉ nhận giá trị trong danh mục."""
     await env.login()
-    html = (await env.client.get("/settings")).text
+    html = (await env.client.get("/settings/config")).text + (await env.client.get("/settings/notifications")).text         + (await env.client.get("/settings/security")).text
     assert 'name="key" value="digest.enabled"' in html and '<option value="true" selected>Bật</option>' in html
     assert 'name="key" value="approval.on_timeout"' in html and '<option value="deny_and_continue"' in html
     assert 'class="msel"' in html and 'type="checkbox" name="value" value="learning.digest" checked' in html
@@ -870,7 +871,7 @@ async def test_slack_connect_wizard(env, monkeypatch):
         return {"sent": True, "kind": "webhook"}
 
     monkeypatch.setattr(env.hub.notifier, "send_now", fake_send)  # không gọi mạng thật
-    r = await env.client.get("/settings")
+    r = await env.client.get("/settings/notifications")
     assert "manifest_json=" in r.text and "Kết nối Slack" in r.text
     url = "https://hooks.slack.com/services/T000/B000/abcSECRETxyz"
     # URL sai dạng → từ chối, không lưu
@@ -886,7 +887,7 @@ async def test_slack_connect_wizard(env, monkeypatch):
     assert r.status_code == 303
     assert "SLACK_WEBHOOK_URL" in [x["name"] for x in env.hub.secrets.list()]
     assert env.hub.config.get("notify.slack.enabled") is True and sent
-    r = await env.client.get("/settings")
+    r = await env.client.get("/settings/notifications")
     assert "đã kết nối" in r.text and "abcSECRETxyz" not in r.text
     assert audit_rows(env, "secret.set")[-1]["channel"] == "web"
     assert "abcSECRETxyz" not in json.dumps([dict(x) for x in env.hub.store.conn.execute("SELECT * FROM audit_log").fetchall()], default=str)

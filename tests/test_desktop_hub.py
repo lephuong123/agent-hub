@@ -119,7 +119,7 @@ async def test_app_user_agent_logged_not_rendered(env, caplog):
 # =========================================================================== Tải app desktop từ web của hub
 async def test_settings_has_desktop_download_links(env):
     await env.login()
-    r = await env.client.get("/settings")
+    r = await env.client.get("/settings/desktop")
     assert r.status_code == 200
     html = r.text
     assert 'id="desktop-app"' in html
@@ -131,7 +131,7 @@ async def test_settings_has_desktop_download_links(env):
     assert D.DOWNLOADS["windows"].endswith("/Cfharness-Desktop-Windows-setup.exe")
     # Mọi trang đã đăng nhập có link nhanh trong menu người dùng (chân thanh bên); biểu tượng có trong sprite.
     home = await env.client.get("/activity")
-    assert 'href="/settings#desktop-app"' in home.text
+    assert 'href="/settings/desktop"' in home.text
     sprite = await env.client.get("/static/icons.svg")
     assert 'id="i-download"' in sprite.text
 

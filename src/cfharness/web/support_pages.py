@@ -71,14 +71,14 @@ async def page(request: Request) -> Response:
         ctx["down"] = True
     except RpcError as e:
         ctx["error"] = err_text(e)
-    return await render(request, "support.html", {"nav": "settings", **ctx})
+    return await render(request, "support.html", {"nav": "settings_support", **ctx})
 
 
 async def download_link(request: Request) -> Response:
     sess, form = await post_guard(request)
     name = str(form.get("name") or "")
     if not SB.NAME_RE.match(name):
-        return flash_redirect(request, "/settings#support", "error", "Tên gói chẩn đoán không hợp lệ")
+        return flash_redirect(request, "/settings/support", "error", "Tên gói chẩn đoán không hợp lệ")
     return RedirectResponse(f"/support/download/{mint_download(request, sess, name, NS)}", status_code=303)
 
 
@@ -127,9 +127,9 @@ def _step2(f: Any) -> str:
 
 def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
     actions["support_create"] = Action("support.create", _build(False), _ok, confirm=_confirm, call=_create,
-                                       goto=lambda r, f: "/settings#support")
+                                       goto=lambda r, f: "/settings/support")
     actions["support_create_raw"] = Action("support.create", _build(True), _ok, confirm=_confirm, step2=_step2, danger=True, call=_create,
-                                           goto=lambda r, f: "/settings#support")
+                                           goto=lambda r, f: "/settings/support")
 
 
 def routes() -> list[Any]:

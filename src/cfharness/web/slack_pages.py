@@ -30,7 +30,7 @@ from ..rpc import DaemonUnavailable, RpcError
 from .app import rpc, session_of, slack_2way_create_url, slack_slash, ws
 
 PAIR_KEY = "slack_pair"
-NEXT = "/settings#slack2"
+NEXT = "/settings/notifications#slack2"
 # Mẫu cho thuộc tính `pattern` của <input> (trình duyệt neo cả chuỗi; `\-` hợp lệ cả ở cờ u lẫn v)
 BOT_PATTERN = r"xoxb-[A-Za-z0-9\-]{20,}"
 APP_PATTERN = r"xapp-[A-Za-z0-9\-]{20,}"

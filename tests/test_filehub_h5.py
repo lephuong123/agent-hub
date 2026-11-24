@@ -297,7 +297,7 @@ async def web(hub_home, tmp_path):
 async def test_web_card_shows_needs_migration_and_old_routes_gone(web):
     e = web
     await e.login()
-    page = (await e.client.get("/settings")).text
+    page = (await e.client.get("/settings/filehub")).text
     assert 'hx-get="/partials/filehub/lane"' in page and 'id="filehub"' in page
     for path in ("/partials/filehub", "/partials/filehub/lane"):
         card = (await e.client.get(path)).text
@@ -307,5 +307,5 @@ async def test_web_card_shows_needs_migration_and_old_routes_gone(web):
     r = await e.client.get("/filehub/oauth/cb?code=x&state=" + "s" * 32, follow_redirects=False)
     assert r.status_code == 404
     for act in ("filehub_setup", "filehub_login", "filehub_pause", "filehub_switch", "filehub_switch_mode", "filehub_add"):
-        r = await e.post(f"/do/{act}", {"confirm": "yes", "next": "/settings#filehub-lane"})
+        r = await e.post(f"/do/{act}", {"confirm": "yes", "next": "/settings/filehub"})
         assert r.status_code in (303, 400, 404), (act, r.status_code)

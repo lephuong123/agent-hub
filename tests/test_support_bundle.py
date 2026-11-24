@@ -310,22 +310,22 @@ async def test_web_card_plan_create_and_single_use_download(hub_home):
         assert (await c.get("/partials/support")).status_code == 401
         await env.login()
         _plant_logs(hub_home)
-        assert 'hx-get="/partials/support"' in (await c.get("/settings")).text
+        assert 'hx-get="/partials/support"' in (await c.get("/settings/support")).text
         card = await c.get("/partials/support")
         assert card.status_code == 200 and "Gói chẩn đoán" in card.text
         page = await c.get("/support?since=24h")
         assert page.status_code == 200 and "logs/hub.log" in page.text and "/do/support_create" in page.text
         assert SECRET not in page.text
-        r = await env.post("/do/support_create", {"since": "24h", "runs": "", "next": "/settings#support"})
+        r = await env.post("/do/support_create", {"since": "24h", "runs": "", "next": "/settings/support"})
         assert r.status_code == 200 and "Tạo gói chẩn đoán?" in r.text and not SB.list_bundles(hub_home)  # bước xác nhận
-        r = await env.post("/do/support_create", {"since": "24h", "runs": "", "confirm": "yes", "next": "/settings#support"})
+        r = await env.post("/do/support_create", {"since": "24h", "runs": "", "confirm": "yes", "next": "/settings/support"})
         assert r.status_code == 303, r.text
         b = SB.list_bundles(hub_home)
         assert len(b) == 1
         row = env.hub.store.conn.execute("SELECT channel, outcome FROM audit_log WHERE kind='support.create'").fetchone()
         assert tuple(row) == ("web", "ok")
         # raw: confirm=yes chưa đủ — bước 2 bắt buộc
-        r = await env.post("/do/support_create_raw", {"since": "24h", "runs": RID, "confirm": "yes", "next": "/settings#support"})
+        r = await env.post("/do/support_create_raw", {"since": "24h", "runs": RID, "confirm": "yes", "next": "/settings/support"})
         assert r.status_code == 200 and "RAW TRANSCRIPT" in r.text and len(SB.list_bundles(hub_home)) == 1
         # tải về: link MỘT lần, gắn phiên, kho token riêng
         name = b[0]["name"]

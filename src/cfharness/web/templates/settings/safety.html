@@ -1,0 +1,45 @@
+{% extends "settings/_layout.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Chung & an toàn · Cài đặt{% endblock %}
+{% block h1 %}Chung &amp; an toàn{% endblock %}
+{% block sub %}Dừng khẩn cấp và cổng duyệt áp dụng cho toàn hub.{% endblock %}
+{% block body %}
+<section class="card danger-zone{{ ' on' if estop.on }}" id="danger" aria-labelledby="danger-h">
+  <h2 id="danger-h">{{ m.icon('alert') }} Vùng nguy hiểm</h2>
+  <div class="dz-item" id="estop">
+    <div class="dz-t">
+      <h3>{{ m.icon('power') }} Dừng khẩn cấp (ESTOP)</h3>
+      {% if estop.on %}
+      <p><span class="pill danger strong">{{ m.icon('stop') }}ĐANG BẬT</span> {% if estop.reason %}— {{ estop.reason }}{% endif %} Không run mới nào được chạy.</p>
+      {% if estop.admin %}<p class="muted small">Hub đang tạm dừng bởi quản trị máy — liên hệ quản trị.</p>{% endif %}
+      {% else %}
+      <p class="muted small">Dùng khi cần dừng toàn bộ hub ngay (agent làm sai, chi phí tăng bất thường…). Nút <b>Dừng khẩn cấp</b> ở chân thanh bên làm cùng việc với lựa chọn đầu.</p>
+      {% endif %}
+    </div>
+    <div class="dz-act">
+      {% if estop.on %}
+        {% if not estop.admin or estop.own_on %}{{ m.act("estop", "Tắt ESTOP", {"on": "0"}, "btn primary", confirm="Tắt ESTOP — cho phép agent chạy lại?", next="/settings/safety#estop") }}{% endif %}
+      {% else %}
+        {{ m.act("estop", "Dừng mọi run + chặn run mới", {"on": "1", "stop_running": "1"}, "btn danger solid", confirm="BẬT ESTOP và DỪNG mọi run đang chạy?", note="Lý do (tuỳ chọn)", next="/settings/safety#estop") }}
+        {{ m.act("estop", "Chỉ chặn run mới", {"on": "1"}, "btn danger", confirm="BẬT ESTOP (run đang chạy vẫn tiếp tục, không run mới nào được bắt đầu)?", note="Lý do (tuỳ chọn)", next="/settings/safety#estop") }}
+      {% endif %}
+    </div>
+  </div>
+</section>
+<section class="card {{ 'attention' if gates != 'human' }}" id="gates">
+  <h2>{{ m.icon('shield') }} Cổng duyệt (toàn hệ thống)</h2>
+  <p>Đang: <span class="pill {{ 'ok' if gates == 'human' else 'warn' }} strong">{{ {'human': 'Người duyệt', 'manager': 'Điều phối viên duyệt', 'off': 'Tắt hết'}[gates] }}</span></p>
+  <p class="muted small">Một công tắc cho mọi chỗ agent phải chờ: duyệt thao tác phá huỷ, task bị chặn chờ chủ xác nhận, câu hỏi, điều phối viên xin phép.
+    <b>Điều phối viên duyệt</b> = nó quyết thay bạn (kể cả push/deploy), báo lý do; <b>Tắt hết</b> = hub tự cho phép mọi thao tác lẽ ra phải hỏi.
+    Forbidden (agent tự duyệt, sửa chính sách), ESTOP, sandbox vẫn giữ. CLI: <code>cfharness gates human|manager|off</code>.</p>
+  <div class="row gap wrap-row">
+    {% for k, label in (('human', 'Người duyệt'), ('manager', 'Điều phối viên duyệt'), ('off', 'Tắt hết')) %}{% if k != gates %}
+    {{ m.act("gates_set", "Chuyển sang: " ~ label, {"mode": k}, "btn " ~ ('primary' if k == 'human' else 'danger' if k == 'off' else ''), next="/settings/safety#gates") }}
+    {% endif %}{% endfor %}
+  </div>
+</section>
+<section class="card" id="perm-link">
+  <div class="card-head"><h2>{{ m.icon('shield') }} Quyền đã cấp</h2><a class="btn sm" href="/permissions">Mở{{ m.icon('chev-right') }}</a></div>
+  <p class="muted small">Ngoại lệ sandbox, luật "luôn cho phép" và quyền tạm thời bạn đã cấp cho agent. Chỉ người thay đổi được — điều phối viên và agent thì không.</p>
+</section>
+{% endblock %}

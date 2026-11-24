@@ -1,0 +1,20 @@
+{#- /settings — trang danh mục khu Cài đặt. Máy tính: tổng quan cạnh cột nav con; điện thoại: danh sách → bấm vào mục mở trang chi tiết.
+    Link cũ /settings#<id>: app.js chuyển sang tab mới (giữ hash); không JS thì mỗi dòng mang id neo cũ nên trình duyệt vẫn cuộn tới đúng mục. -#}
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% import "_nav.html" as N with context %}
+{% block title %}Cài đặt{% endblock %}
+{% block content %}
+<div class="set-page" id="set-index">
+  <div class="page-head"><div class="ph-title"><h1>Cài đặt</h1><span class="sub">An toàn, tài khoản, cấu hình hub, đội ngũ và tri thức, nhật ký, bảo trì máy.</span></div></div>
+  {% if badge.estop %}<div class="banner danger">{{ m.icon('stop') }}<span><b>Dừng khẩn cấp (ESTOP) đang BẬT</b> — không run mới nào được chạy.</span> <a href="/settings/safety#estop">Mở Chung &amp; an toàn</a></div>{% endif %}
+  {% for gtitle, items in N.SET_GROUPS %}
+  <section class="set-group" aria-label="{{ gtitle }}">
+    <h2 class="set-group-h">{{ gtitle }}</h2>
+    <ul class="set-list">{% for key, href, ic, label, desc, anchors in items %}
+      <li>{% for a in anchors %}<span id="{{ a }}" class="set-anchor"></span>{% endfor %}<a href="{{ href }}" class="set-row">{{ m.icon(ic) }}<span class="set-t"><b>{{ label }}</b><span class="set-d">{{ desc }}</span></span>{{ m.icon('chev-right', 'set-chev') }}</a></li>{% endfor %}
+    </ul>
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}

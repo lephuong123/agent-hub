@@ -1,0 +1,17 @@
+{% extends "settings/_layout.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Hệ thống · Cài đặt{% endblock %}
+{% block h1 %}Hệ thống{% endblock %}
+{% block sub %}Phiên bản, cập nhật và sức khoẻ của hub trên máy này.{% endblock %}
+{% block body %}
+<div id="update" hx-get="/partials/update" hx-trigger="load" hx-swap="outerHTML"></div>
+<section class="card" id="system">
+  <h2>{{ m.icon('info') }} Hệ thống</h2>
+  <dl class="kv cols">
+    <div><dt>Phiên bản hub</dt><dd>{{ status.version }}</dd></div><div><dt>Runtime</dt><dd>{{ status.runtime }}</dd></div>
+    <div><dt>HUB_HOME</dt><dd><code>{{ status.home }}</code></dd></div><div><dt>Web</dt><dd>{{ web.host }}:{{ web.port }} · {{ web.sessions }} phiên đăng nhập</dd></div>
+    <div><dt>Toàn vẹn chính sách</dt><dd>{% if integ.recent_events %}<span class="pill danger">có {{ integ.recent_events|length }} cảnh báo</span>{% else %}<span class="pill ok">bình thường</span>{% endif %} <span class="muted small">kiểm mỗi {{ integ.tick_s }}s</span></dd></div>
+  </dl>
+</section>
+<div id="health-slot" hx-get="/partials/health" hx-trigger="load" hx-swap="outerHTML"></div>
+{% endblock %}

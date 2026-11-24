@@ -451,25 +451,25 @@ def _mrow(html: str) -> str:
 
 async def test_web_mcp_section_login_flow(env):
     state, calls = _mcp(env)
-    html = (await get(env, "/settings")).text
+    html = (await get(env, "/settings/accounts")).text
     row = _mrow(section(html))
     assert "atl" in row and "cần đăng nhập" in row and "/do/mcp_claude_login_start" in row and "/do/mcp_claude_rm" in row
     assert 'name="header_value"' in row  # machine cũng cho header (agent bị chặn đọc ~/.claude.json — v0.2.32)
     assert all(c[1].get("cached") for c in calls if c[0] == "mcp.claude_status")  # tải trang KHÔNG chạy claude
     r = await post(env, "/do/mcp_claude_login_start", {"account_id": "machine", "mcp_name": "atl", "name": "Máy",
-                                                       "next": "/settings#acct-mcp-machine"})
+                                                       "next": "/settings/accounts#acct-mcp-machine"})
     assert r.status_code == 303 and calls[-1][0] == "mcp.claude_login_start" and calls[-1][1]["_audit"]["channel"] == "web"
-    row = _mrow(section((await get(env, "/settings")).text))
+    row = _mrow(section((await get(env, "/settings/accounts")).text))
     link = re.search(r'<a class="btn primary" href="([^"]+)" target="_blank" rel="noopener noreferrer">', row)
     assert link and link.group(1).replace("&amp;", "&") == MCP_LOGIN_URL
     tag = re.search(r'<input name="redirect_url"[^>]*>', row).group(0)
     assert 'type="password"' in tag and "value=" not in tag
     await post(env, "/do/mcp_claude_login_finish", {"login_id": "LM", "redirect_url": BAD_REDIRECT, "next": "/settings"})
-    page = (await get(env, "/settings")).text
+    page = (await get(env, "/settings/accounts")).text
     assert "BADCODE" not in page and "flash error" in page
     state["login"] = {"login_id": "LM", "url": MCP_LOGIN_URL, "expires_at": "2099", "account": "machine", "name": "atl"}
     await post(env, "/do/mcp_claude_login_finish", {"login_id": "LM", "redirect_url": GOOD_REDIRECT, "next": "/settings"})
-    page = (await get(env, "/settings")).text
+    page = (await get(env, "/settings/accounts")).text
     assert "Đã đăng nhập MCP atl: đã kết nối" in page
     fin = [c[1] for c in calls if c[0] == "mcp.claude_login_finish"]
     assert fin[-1]["has_redirect"] and fin[-1]["_audit"]["channel"] == "web"
@@ -478,7 +478,7 @@ async def test_web_mcp_section_login_flow(env):
     # bad link từ daemon → không vẽ, tự huỷ
     env.d.methods["mcp.claude_login_start"] = lambda p: {"login_id": "LX", "url": "javascript:alert(1)", "account": "machine", "name": "atl"}
     await post(env, "/do/mcp_claude_login_start", {"account_id": "machine", "mcp_name": "atl", "next": "/settings"})
-    page = (await get(env, "/settings")).text
+    page = (await get(env, "/settings/accounts")).text
     assert "javascript:alert" not in page
 
 
@@ -514,7 +514,7 @@ async def test_web_mcp_add_rm_logout_confirm_and_validation(env):
 
 async def test_web_mcp_hidden_on_old_daemon(env):
     env.d.methods.pop("mcp.claude_status", None)
-    html = (await get(env, "/settings")).text
+    html = (await get(env, "/settings/accounts")).text
     assert "acct-mcp-" not in html
 
 
@@ -531,18 +531,18 @@ async def test_web_mcp_register_for_hub_button(env, tmp_path, monkeypatch):
         {"name": "jira", "transport": "http", "host": "j.example", "hub": False, "status": "connected", "registered": False, "agents": []},
         {"name": "loose", "transport": "http", "host": "l.example", "hub": False, "status": "connected", "registered": False, "agents": []},
         {"name": "selfhub", "transport": "stdio", "host": None, "hub": True, "status": "connected", "registered": False, "agents": []}]
-    row = _mrow(section((await get(env, "/settings")).text))
+    row = _mrow(section((await get(env, "/settings/accounts")).text))
     forms = re.findall(r'<form method="post" action="/do/mcp_claude_register".*?</form>', row, re.S)
     assert len(forms) == 2 and all('name="trust"' in f and 'type="checkbox"' in f for f in forms)
     assert 'value="selfhub"' not in "".join(forms) and "trỏ về chính hub" in row
     assert not any('value="atl"' in f for f in forms)  # đã đăng ký → không nút
     # chưa xác nhận → trang xác nhận, chưa đăng ký
     r = await post(env, "/do/mcp_claude_register", {"account_id": "machine", "mcp_name": "jira", "name": "Máy", "trust": "trusted",
-                                                     "next": "/settings#acct-mcp-machine"})
+                                                     "next": "/settings/accounts#acct-mcp-machine"})
     assert r.status_code == 200 and "Đăng ký MCP «jira»" in r.text and "Tin cậy" in r.text
     assert env.hub.mcp.get_row("jira") is None
     r = await post(env, "/do/mcp_claude_register", {"account_id": "machine", "mcp_name": "jira", "name": "Máy", "trust": "trusted",
-                                                     "confirm": "yes", "next": "/settings#acct-mcp-machine"})
+                                                     "confirm": "yes", "next": "/settings/accounts#acct-mcp-machine"})
     assert r.status_code == 303 and r.headers["location"].startswith("/settings")
     row_db = env.hub.mcp.show("jira")
     assert row_db["config"]["source"] == "claude" and row_db["trust"] == "trusted" and not row_db["config"].get("headers")
@@ -550,7 +550,7 @@ async def test_web_mcp_register_for_hub_button(env, tmp_path, monkeypatch):
     assert env.hub.mcp.show("loose")["trust"] == "untrusted"
     # tên không có trong cấu hình claude / tên sai → không đăng ký
     await post(env, "/do/mcp_claude_register", {"account_id": "machine", "mcp_name": "ghost", "confirm": "yes", "next": "/settings"})
-    assert env.hub.mcp.get_row("ghost") is None and "flash error" in (await get(env, "/settings")).text
+    assert env.hub.mcp.get_row("ghost") is None and "flash error" in (await get(env, "/settings/accounts")).text
     await post(env, "/do/mcp_claude_register", {"account_id": "machine", "mcp_name": "bad name", "confirm": "yes", "next": "/settings"})
     await post(env, "/do/mcp_claude_register", {"account_id": "../x", "mcp_name": "loose", "confirm": "yes", "next": "/settings"})
     aud = [dict(r) for r in env.hub.store.conn.execute("SELECT * FROM audit_log WHERE kind LIKE '%mcp.add%'")]

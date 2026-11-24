@@ -198,7 +198,7 @@ def test_status_chip_and_gate():
 # =========================================================================== danh sách
 async def test_list_renders_without_token(env):
     env.acc.tokens["a_11111111"] = TOKEN
-    r = await get(env, "/settings")
+    r = await get(env, "/settings/accounts")
     assert r.status_code == 200
     s = section(r.text)
     assert "Tài khoản Claude" in s and "Công ty" in s and "Cá nhân" in s and "Đăng nhập của máy" in s
@@ -227,47 +227,47 @@ async def test_list_renders_without_token(env):
 async def test_old_daemon_without_account_rpc(env):
     for n in ACCOUNT_RPC:
         env.d.methods.pop(n, None)
-    r = await get(env, "/settings")
+    r = await get(env, "/settings/accounts")
     assert r.status_code == 200
     assert "Daemon chưa có quản lý tài khoản" in section(r.text)
 
 
 # =========================================================================== thao tác từng dòng
 async def test_use_needs_confirm_then_calls_rpc(env):
-    r = await post(env, "/do/account_use", {"id": "a_22222222", "name": "Cá nhân", "next": "/settings#accounts"})
+    r = await post(env, "/do/account_use", {"id": "a_22222222", "name": "Cá nhân", "next": "/settings/accounts"})
     assert r.status_code == 200 and "Chuyển sang tài khoản Claude «Cá nhân»" in r.text  # trang xác nhận phía server
     assert "account.use" not in names(env)
-    r = await post(env, "/do/account_use", {"id": "a_22222222", "name": "Cá nhân", "confirm": "yes", "next": "/settings#accounts"})
+    r = await post(env, "/do/account_use", {"id": "a_22222222", "name": "Cá nhân", "confirm": "yes", "next": "/settings/accounts"})
     assert r.status_code == 303 and r.headers["location"].startswith("/settings")
     p = last(env, "account.use")
     assert p["id"] == "a_22222222" and p["_audit"]["channel"] == "web"
     assert env.acc.active == "a_22222222"
-    page = (await get(env, "/settings")).text
+    page = (await get(env, "/settings/accounts")).text
     assert "Đã chuyển sang tài khoản Cá nhân" in page
     assert "Đang dùng" in re.search(r'<tr id="acct-a_22222222">.*?</tr>', page, re.S).group(0)
 
 
 async def test_rename_rm_check(env):
-    r = await post(env, "/do/account_rename", {"id": "a_22222222", "label": "  Nhà   riêng ", "next": "/settings#accounts"})
+    r = await post(env, "/do/account_rename", {"id": "a_22222222", "label": "  Nhà   riêng ", "next": "/settings/accounts"})
     assert r.status_code == 303
     p = last(env, "account.rename")
     assert p == {**p, "id": "a_22222222", "label": "Nhà riêng"} and p["_audit"]["channel"] == "web"
     # tên rỗng → không gọi RPC
     n = len(names(env))
-    await post(env, "/do/account_rename", {"id": "a_22222222", "label": "  ", "next": "/settings#accounts"})
+    await post(env, "/do/account_rename", {"id": "a_22222222", "label": "  ", "next": "/settings/accounts"})
     assert len(names(env)) == n
     # kiểm tra
-    r = await post(env, "/do/account_check", {"id": "a_33333333", "name": "Hỏng", "next": "/settings#accounts"})
+    r = await post(env, "/do/account_check", {"id": "a_33333333", "name": "Hỏng", "next": "/settings/accounts"})
     assert r.status_code == 303 and last(env, "account.check")["id"] == "a_33333333"
-    assert "Kiểm tra Hỏng: ok" in (await get(env, "/settings")).text
+    assert "Kiểm tra Hỏng: ok" in (await get(env, "/settings/accounts")).text
     # xoá: cần xác nhận, rồi gọi RPC
-    r = await post(env, "/do/account_rm", {"id": "a_33333333", "name": "Hỏng", "next": "/settings#accounts"})
+    r = await post(env, "/do/account_rm", {"id": "a_33333333", "name": "Hỏng", "next": "/settings/accounts"})
     assert r.status_code == 200 and "Xoá tài khoản Claude «Hỏng»" in r.text and "account.rm" not in names(env)
-    r = await post(env, "/do/account_rm", {"id": "a_33333333", "name": "Hỏng", "confirm": "yes", "next": "/settings#accounts"})
+    r = await post(env, "/do/account_rm", {"id": "a_33333333", "name": "Hỏng", "confirm": "yes", "next": "/settings/accounts"})
     assert r.status_code == 303 and last(env, "account.rm")["id"] == "a_33333333" and "a_33333333" not in env.acc.rows
     # xoá tài khoản đang dùng → Conflict hiện thành flash lỗi
-    await post(env, "/do/account_rm", {"id": "a_11111111", "name": "Công ty", "confirm": "yes", "next": "/settings#accounts"})
-    page = (await get(env, "/settings")).text
+    await post(env, "/do/account_rm", {"id": "a_11111111", "name": "Công ty", "confirm": "yes", "next": "/settings/accounts"})
+    page = (await get(env, "/settings/accounts")).text
     assert "flash error" in page and "không xoá được tài khoản đang dùng" in page
 
 
@@ -278,10 +278,10 @@ async def test_post_without_csrf_rejected(env):
 
 # =========================================================================== thêm tài khoản
 async def test_login_start_finish_flow(env):
-    r = await post(env, "/do/account_login_start", {"label": "Dự phòng", "next": "/settings#accounts"})
+    r = await post(env, "/do/account_login_start", {"label": "Dự phòng", "next": "/settings/accounts"})
     assert r.status_code == 303
     assert last(env, "account.login_start")["label"] == "Dự phòng" and last(env, "account.login_start")["_audit"]["channel"] == "web"
-    s = section((await get(env, "/settings")).text)
+    s = section((await get(env, "/settings/accounts")).text)
     link = re.search(r'<a class="btn primary" href="([^"]+)" target="_blank" rel="noopener noreferrer">', s)
     assert link and link.group(1).replace("&amp;", "&") == LOGIN_URL
     assert "Bước 2/2 — Dự phòng" in s and 'action="/do/account_login_finish"' in s
@@ -289,14 +289,14 @@ async def test_login_start_finish_flow(env):
     tag = re.search(r'<input name="code"[^>]*>', s).group(0)
     assert 'type="password"' in tag and "value=" not in tag
     # code sai → flash lỗi, code không lộ
-    await post(env, "/do/account_login_finish", {"login_id": "L1", "code": "WRONG", "next": "/settings#accounts"})
+    await post(env, "/do/account_login_finish", {"login_id": "L1", "code": "WRONG", "next": "/settings/accounts"})
     env.acc.logins["L1"] = "Dự phòng"  # fake tiêu lượt khi sai; mở lại để thử tiếp
     # code đúng
-    r = await post(env, "/do/account_login_finish", {"login_id": "L1", "code": CODE, "next": "/settings#accounts"})
+    r = await post(env, "/do/account_login_finish", {"login_id": "L1", "code": CODE, "next": "/settings/accounts"})
     assert r.status_code == 303
     p = last(env, "account.login_finish")
     assert p["login_id"] == "L1" and p["has_code"] and "code" not in p and p["_audit"]["channel"] == "web"
-    page = (await get(env, "/settings")).text
+    page = (await get(env, "/settings/accounts")).text
     assert "Đã thêm tài khoản Dự phòng" in page
     s = section(page)
     assert "Bước 2/2" not in s and 'action="/do/account_login_start"' in s  # lượt đăng nhập đã xong → về bước 1
@@ -305,34 +305,34 @@ async def test_login_start_finish_flow(env):
 
 
 async def test_login_cancel_and_bad_url(env):
-    await post(env, "/do/account_login_start", {"label": "X", "next": "/settings#accounts"})
-    assert "Bước 2/2" in section((await get(env, "/settings")).text)
-    r = await post(env, "/do/account_login_cancel", {"login_id": "L1", "next": "/settings#accounts"})
+    await post(env, "/do/account_login_start", {"label": "X", "next": "/settings/accounts"})
+    assert "Bước 2/2" in section((await get(env, "/settings/accounts")).text)
+    r = await post(env, "/do/account_login_cancel", {"login_id": "L1", "next": "/settings/accounts"})
     assert r.status_code == 303 and last(env, "account.login_cancel")["login_id"] == "L1"
-    assert "Bước 2/2" not in section((await get(env, "/settings")).text)
+    assert "Bước 2/2" not in section((await get(env, "/settings/accounts")).text)
     # daemon trả link không phải https → không đưa vào trang, tự huỷ lượt
     orig = env.acc.login_start
     env.acc.login_start = lambda p: {**orig(p), "url": "javascript:alert(1)"}
     env.acc.install(env.d)
-    await post(env, "/do/account_login_start", {"label": "Y", "next": "/settings#accounts"})
-    page = (await get(env, "/settings")).text
+    await post(env, "/do/account_login_start", {"label": "Y", "next": "/settings/accounts"})
+    page = (await get(env, "/settings/accounts")).text
     assert "javascript:alert" not in page and "Bước 2/2" not in section(page) and "flash error" in page
     assert names(env)[-1] == "account.login_cancel"
 
 
 async def test_add_token(env):
-    r = await post(env, "/do/account_add_token", {"label": "Token tay", "token": TOKEN, "next": "/settings#accounts"})
+    r = await post(env, "/do/account_add_token", {"label": "Token tay", "token": TOKEN, "next": "/settings/accounts"})
     assert r.status_code == 303
     p = last(env, "account.add_token")
     assert p["label"] == "Token tay" and p["has_token"] and p["_audit"]["channel"] == "web"
     assert TOKEN in env.acc.tokens.values()
-    page = (await get(env, "/settings")).text
+    page = (await get(env, "/settings/accounts")).text
     assert "Đã thêm tài khoản Token tay" in page
     # token có khoảng trắng → không gọi RPC, lỗi không chứa token
     n = len(names(env))
-    await post(env, "/do/account_add_token", {"label": "Z", "token": TOKEN + " x", "next": "/settings#accounts"})
+    await post(env, "/do/account_add_token", {"label": "Z", "token": TOKEN + " x", "next": "/settings/accounts"})
     assert len(names(env)) == n
-    assert "token không được chứa khoảng trắng" in (await get(env, "/settings")).text
+    assert "token không được chứa khoảng trắng" in (await get(env, "/settings/accounts")).text
     no_leak(env)
 
 
@@ -355,28 +355,28 @@ async def test_secret_never_on_confirm_page(env):
 # =========================================================================== banner đổi tài khoản
 async def test_banner_on_auth_block(env):
     env.status_extra = {"auth_block": {"reason": "chưa đăng nhập"}}
-    s = section((await get(env, "/settings")).text)
+    s = section((await get(env, "/settings/accounts")).text)
     assert 'id="acct-switch"' in s and "lỗi đăng nhập" in s and "Đổi sang tài khoản…" in s
     form = re.search(r'<form method="post" action="/do/account_use"[^>]*>.*?</form>', s.split('id="acct-switch"', 1)[1], re.S).group(0)
     opts = re.findall(r'<option value="([^"]+)"', form)
     assert opts == ["a_22222222", "machine"]  # không gồm tài khoản đang dùng / lỗi đăng nhập
-    r = await post(env, "/do/account_use", {"id": "machine", "confirm": "yes", "next": "/settings#accounts"})
+    r = await post(env, "/do/account_use", {"id": "machine", "confirm": "yes", "next": "/settings/accounts"})
     assert r.status_code == 303 and env.acc.active == "machine"
 
 
 async def test_banner_on_closed_gate(env):
     now = datetime.now(timezone.utc)
     env.status_extra = {"rate_limit_gate": {"until": _iso(now + timedelta(hours=1)), "source": "rejected"}}
-    s = section((await get(env, "/settings")).text)
+    s = section((await get(env, "/settings/accounts")).text)
     assert 'id="acct-switch"' in s and "hết hạn mức tới" in s and 'action="/do/account_use"' in s
     # cổng đã mở (until đã qua) → không banner
     env.status_extra = {"rate_limit_gate": {"until": _iso(now - timedelta(minutes=1))}}
-    assert 'id="acct-switch"' not in section((await get(env, "/settings")).text)
+    assert 'id="acct-switch"' not in section((await get(env, "/settings/accounts")).text)
     # không còn tài khoản khác dùng được → gợi ý thêm tài khoản
     env.status_extra = {"rate_limit_gate": {"until": _iso(now + timedelta(hours=1))}}
     for i in ("a_22222222", "machine"):
         env.acc.rows.pop(i)
-    s = section((await get(env, "/settings")).text)
+    s = section((await get(env, "/settings/accounts")).text)
     assert 'id="acct-switch"' in s and "Chưa có tài khoản khác" in s
 
 
@@ -445,46 +445,46 @@ def machine_row(html: str) -> str:
 
 async def test_connector_on_machine_row_and_flow(env):
     st, calls = _cai(env)
-    html = (await get(env, "/settings")).text
+    html = (await get(env, "/settings/accounts")).text
     row = machine_row(html)
     assert "connector chưa gắn" in row and "/do/claudeai_login_start" in row and "Gắn connector" in row
     assert "connectors_auto_on" not in html and "connectors_auto_off" not in html  # mặc định bật, không có công tắc
-    r = await post(env, "/do/claudeai_login_start", {"next": "/settings#accounts"})
+    r = await post(env, "/do/claudeai_login_start", {"next": "/settings/accounts"})
     assert r.status_code == 303 and calls[-1][1]["_audit"]["channel"] == "web" and calls[-1][1]["id"] == "machine"
-    s = section((await get(env, "/settings")).text)
+    s = section((await get(env, "/settings/accounts")).text)
     link = re.search(r'<a class="btn primary" href="([^"]+)" target="_blank" rel="noopener noreferrer">', s)
     assert link and link.group(1).replace("&amp;", "&") == CAI_URL and 'name="login_id" value="LC"' in s
     tag = re.search(r'<input name="code"[^>]*>', s).group(0)
     assert 'type="password"' in tag and "value=" not in tag
-    await post(env, "/do/claudeai_login_finish", {"login_id": "LC", "code": "WRONG", "next": "/settings#accounts"})
+    await post(env, "/do/claudeai_login_finish", {"login_id": "LC", "code": "WRONG", "next": "/settings/accounts"})
     assert not st["logged_in"]
-    await post(env, "/do/claudeai_login_finish", {"login_id": "LC", "code": CODE, "next": "/settings#accounts"})
-    page = (await get(env, "/settings")).text
+    await post(env, "/do/claudeai_login_finish", {"login_id": "LC", "code": CODE, "next": "/settings/accounts"})
+    page = (await get(env, "/settings/accounts")).text
     assert "Đã gắn connector: claude.ai u@example.com" in page and "hạn mức/chi phí" in page
     row = machine_row(page)
     assert "u@example.com" in row and "Đổi tài khoản connector" in row and "Gỡ connector" in row
-    await post(env, "/do/claudeai_logout", {"next": "/settings#accounts"})
+    await post(env, "/do/claudeai_logout", {"next": "/settings/accounts"})
     assert st["logged_in"]  # cần xác nhận
-    await post(env, "/do/claudeai_logout", {"confirm": "yes", "next": "/settings#accounts"})
+    await post(env, "/do/claudeai_logout", {"confirm": "yes", "next": "/settings/accounts"})
     assert not st["logged_in"]
     no_leak(env)
 
 
 async def test_add_account_chains_connector_step(env):
     st, calls = _cai(env)
-    await post(env, "/do/account_login_start", {"label": "Mới", "next": "/settings#accounts"})
-    await post(env, "/do/account_login_finish", {"login_id": "L1", "code": CODE, "next": "/settings#accounts"})
+    await post(env, "/do/account_login_start", {"label": "Mới", "next": "/settings/accounts"})
+    await post(env, "/do/account_login_finish", {"login_id": "L1", "code": CODE, "next": "/settings/accounts"})
     starts = [c[1] for c in calls if c[0] == "account.claudeai_login_start"]
     assert len(starts) == 1  # thêm xong → mở luôn bước gắn connector
     new_id = next(i for i, a in env.acc.rows.items() if a["label"] == "Mới")
     assert starts[0]["id"] == new_id  # gắn connector CHO TÀI KHOẢN VỪA THÊM (không phải đăng nhập của máy)
-    page = (await get(env, "/settings")).text
+    page = (await get(env, "/settings/accounts")).text
     assert "Bước cuối: gắn connector" in page and 'action="/do/claudeai_login_finish"' in section(page)
     assert "Gắn connector cho tài khoản «Mới»" in section(page)
-    await post(env, "/do/claudeai_login_cancel", {"login_id": "LC", "next": "/settings#accounts"})  # Bỏ qua
-    assert st["login"] is None and 'action="/do/claudeai_login_finish"' not in section((await get(env, "/settings")).text)
+    await post(env, "/do/claudeai_login_cancel", {"login_id": "LC", "next": "/settings/accounts"})  # Bỏ qua
+    assert st["login"] is None and 'action="/do/claudeai_login_finish"' not in section((await get(env, "/settings/accounts")).text)
     # dán token cũng gắn luôn
-    await post(env, "/do/account_add_token", {"label": "Token", "token": TOKEN, "next": "/settings#accounts"})
+    await post(env, "/do/account_add_token", {"label": "Token", "token": TOKEN, "next": "/settings/accounts"})
     starts = [c[1] for c in calls if c[0] == "account.claudeai_login_start"]
     assert len(starts) == 2 and starts[1]["id"] == next(i for i, a in env.acc.rows.items() if a["label"] == "Token")
     no_leak(env)
@@ -500,25 +500,25 @@ async def test_connector_per_token_account_row(env):
     """Mỗi tài khoản một connector riêng: mọi hàng (token + máy) có trạng thái + nút mang đúng id."""
     st, calls = _cai(env)
     env.acc.cai["a_22222222"] = {"logged_in": True, "email": "canhan@example.com"}
-    html = (await get(env, "/settings")).text
+    html = (await get(env, "/settings/accounts")).text
     r1, r2 = acct_row(html, "a_11111111"), acct_row(html, "a_22222222")
     assert "connector chưa gắn" in r1 and "Gắn connector" in r1 and 'name="id" value="a_11111111"' in r1
     assert "canhan@example.com" in r2 and "Đổi tài khoản connector" in r2 and "Gỡ connector" in r2
     assert "connector chưa gắn" in machine_row(html)
-    await post(env, "/do/claudeai_login_start", {"id": "a_11111111", "name": "Công ty", "next": "/settings#accounts"})
+    await post(env, "/do/claudeai_login_start", {"id": "a_11111111", "name": "Công ty", "next": "/settings/accounts"})
     assert calls[-1][0] == "account.claudeai_login_start" and calls[-1][1]["id"] == "a_11111111"
-    s = section((await get(env, "/settings")).text)
+    s = section((await get(env, "/settings/accounts")).text)
     assert "Gắn connector cho tài khoản «Công ty»" in s
-    await post(env, "/do/claudeai_login_finish", {"login_id": "LC", "code": CODE, "next": "/settings#accounts"})
-    page = (await get(env, "/settings")).text
+    await post(env, "/do/claudeai_login_finish", {"login_id": "LC", "code": CODE, "next": "/settings/accounts"})
+    page = (await get(env, "/settings/accounts")).text
     assert "a_11111111@example.com" in acct_row(page, "a_11111111") and "connector chưa gắn" in machine_row(page)
     # gỡ connector của MỘT tài khoản: cần xác nhận, tài khoản khác giữ nguyên
-    await post(env, "/do/claudeai_logout", {"id": "a_22222222", "name": "Cá nhân", "next": "/settings#accounts"})
+    await post(env, "/do/claudeai_logout", {"id": "a_22222222", "name": "Cá nhân", "next": "/settings/accounts"})
     assert env.acc.cai["a_22222222"]["logged_in"]
-    await post(env, "/do/claudeai_logout", {"id": "a_22222222", "name": "Cá nhân", "confirm": "yes", "next": "/settings#accounts"})
+    await post(env, "/do/claudeai_logout", {"id": "a_22222222", "name": "Cá nhân", "confirm": "yes", "next": "/settings/accounts"})
     assert not env.acc.cai["a_22222222"]["logged_in"] and env.acc.cai["a_11111111"]["logged_in"]
     assert [c[1]["id"] for c in calls if c[0] == "account.claudeai_logout"] == ["a_22222222"]
-    r = await post(env, "/do/claudeai_login_start", {"id": "javascript:x", "next": "/settings#accounts"})
+    r = await post(env, "/do/claudeai_login_start", {"id": "javascript:x", "next": "/settings/accounts"})
     assert [c[1]["id"] for c in calls if c[0] == "account.claudeai_login_start"] == ["a_11111111"]  # id lạ bị từ chối ở web
     no_leak(env)
 
@@ -526,13 +526,13 @@ async def test_connector_per_token_account_row(env):
 async def test_claudeai_bad_url_never_rendered(env):
     st, calls = _cai(env)
     env.d.methods["account.claudeai_login_start"] = lambda p: {"login_id": "LX", "url": "javascript:alert(1)"}
-    await post(env, "/do/claudeai_login_start", {"next": "/settings#accounts"})
-    page = (await get(env, "/settings")).text
+    await post(env, "/do/claudeai_login_start", {"next": "/settings/accounts"})
+    page = (await get(env, "/settings/accounts")).text
     assert "javascript:alert" not in page and "flash error" in page
     assert [c[1]["login_id"] for c in calls if c[0] == "account.login_cancel"] == ["LX"]
 
 
 async def test_claudeai_hidden_on_old_daemon(env):
     env.d.methods.pop("account.claudeai_status", None)
-    html = (await get(env, "/settings")).text
+    html = (await get(env, "/settings/accounts")).text
     assert "connector chưa gắn" not in html and "claudeai_login_start" not in html

@@ -16,7 +16,7 @@
     {% if data.schedule.error %}<p class="small"><span class="pill danger">{{ m.icon('alert') }}lịch sao lưu lỗi</span> {{ data.schedule.error }}</p>{% endif %}
     {% if data.last_error %}<p class="small"><span class="pill danger">{{ m.icon('alert') }}lần sao lưu tự động gần nhất lỗi</span> {{ data.last_error }}</p>{% endif %}
     <div class="row gap wrap-row">
-      {{ m.act("backup_create", "Tạo bản sao lưu ngay", {}, "btn primary", next="/settings#backup", ic="plus") }}
+      {{ m.act("backup_create", "Tạo bản sao lưu ngay", {}, "btn primary", next="/settings/backup", ic="plus") }}
     </div>
     {% if data.backups %}
     <table class="tbl">

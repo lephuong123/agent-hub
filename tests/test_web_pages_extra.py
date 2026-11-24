@@ -126,7 +126,9 @@ async def test_schedules_page_and_nav(env):
     env.hub.agents.create({"id": "ag0", "name": "ag0", "model": "haiku"})
     r = await env.client.get("/schedules")
     assert r.status_code == 200 and "Lịch chạy" in r.text and "Chưa có lịch nào" in r.text
-    assert 'href="/schedules"' in r.text and 'href="/search"' in r.text and "#i-calendar" in r.text and 'class="side-search"' in r.text
+    # Lịch chạy ở khu Cài đặt (cột nav con, mục đang chọn); ô tìm hội thoại ở thanh bên chính của trang làm việc
+    assert 'href="/schedules" class="on"' in r.text and "#i-calendar" in r.text and 'class="snav"' in r.text
+    assert 'class="side-search"' in (await env.client.get("/tasks")).text
     assert '<option value="ag0"' in r.text
     r = await env.client.get("/schedules?preview=weekdays%2008:30")
     assert r.status_code == 200 and "Các lượt tới" in r.text
@@ -296,7 +298,7 @@ async def test_run_diff_section_and_revert_with_conflict(env, repo):
 # =========================================================================== sức khoẻ
 async def test_health_card_on_settings(env):
     await env.login()
-    page = await env.client.get("/settings")
+    page = await env.client.get("/settings/system")
     assert page.status_code == 200 and 'hx-get="/partials/health"' in page.text
     r = await env.client.get("/partials/health")
     assert r.status_code == 200 and "Sức khoẻ" in r.text and "Daemon" in r.text and "Toàn vẹn chính sách" in r.text and "cfharness doctor" in r.text

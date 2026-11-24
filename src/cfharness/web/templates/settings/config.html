@@ -1,0 +1,14 @@
+{% extends "settings/_layout.html" %}
+{% import "_macros.html" as m with context %}
+{% import "settings/_cfg.html" as C with context %}
+{% block title %}Hành vi hub · Cài đặt{% endblock %}
+{% block h1 %}Hành vi hub{% endblock %}
+{% block sub %}Giới hạn và hành vi của hub. Đổi có hiệu lực ngay và được ghi nhật ký; mỗi dòng có nút Lưu riêng.{% endblock %}
+{% block body %}
+<section class="card" id="config">
+  <h2>{{ m.icon('settings') }} Cấu hình hệ thống</h2>
+  <p class="muted small">Mục có danh sách giá trị cố định chọn bằng dropdown. Cấu hình thông báo ở <a href="/settings/notifications#cfg-notify">Thông báo &amp; kênh</a>;
+    khoá bảo mật (chỉ xem) ở <a href="/settings/security#cfg-security">Bảo mật &amp; thiết bị</a>.</p>
+  {% for g in groups %}{{ C.group(g, "/settings/config", open=loop.first) }}{% endfor %}
+</section>
+{% endblock %}
