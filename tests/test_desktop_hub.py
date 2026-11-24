@@ -86,7 +86,7 @@ async def test_badge_does_not_extend_session(env):
     before = sess.last
     assert (await env.client.get("/app/badge")).status_code == 200
     assert env.auth.sessions[sid].last == before  # polling của app không gia hạn phiên
-    await env.client.get("/")  # đối chứng: trang của người thì gia hạn
+    await env.client.get("/activity")  # đối chứng: trang của người thì gia hạn
     assert env.auth.sessions[sid].last > before
 
 
@@ -129,8 +129,8 @@ async def test_settings_has_desktop_download_links(env):
     assert D.DOWNLOADS["mac"].startswith("https://github.com/lephuong123/cfharness-desktop/releases/latest/download/")
     assert D.DOWNLOADS["mac"].endswith("/Cfharness-Desktop-macOS.dmg")
     assert D.DOWNLOADS["windows"].endswith("/Cfharness-Desktop-Windows-setup.exe")
-    # Mọi trang đã đăng nhập có link nhanh ở chân thanh bên; biểu tượng có trong sprite.
-    home = await env.client.get("/")
+    # Mọi trang đã đăng nhập có link nhanh trong menu người dùng (chân thanh bên); biểu tượng có trong sprite.
+    home = await env.client.get("/activity")
     assert 'href="/settings#desktop-app"' in home.text
     sprite = await env.client.get("/static/icons.svg")
     assert 'id="i-download"' in sprite.text

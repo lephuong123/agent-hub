@@ -4,6 +4,13 @@
 {% block title %}Điều phối{% endblock %}
 {% block content %}
 <div class="page-head"><div class="ph-title"><h1>Điều phối</h1><span class="sub">Nói mục tiêu bằng lời — điều phối viên tự tạo agent/team, giao việc, theo dõi và báo lại.</span></div></div>
+{% if fresh %}
+<section class="card attention" id="fresh-import">
+  <div class="card-head"><h2>Nhập hub từ máy khác</h2><a class="btn primary" href="/hub-transfer#import">Nhập gói .cfhx</a></div>
+  <p>Hub này đang trống. Đã có hub cfharness ở máy khác? Xuất ở máy đó (Cài đặt → Chuyển hub, hoặc <code>cfharness hub export</code>) rồi tải file lên đây —
+    agent, team, task, tri thức, lịch, lịch sử và session Claude đi theo. Hoặc bắt đầu mới: tạo agent ở trang <a href="/agents">Đội ngũ</a>.</p>
+</section>
+{% endif %}
 {% if not m.available %}
 <section class="card"><h2>Chưa sẵn sàng</h2>
 <p>Daemon đang chạy chưa có chức năng điều phối viên (<code>manager.*</code>). Cập nhật cfharness rồi khởi động lại daemon: <code class="cmd">cfharness daemon restart</code>.</p></section>

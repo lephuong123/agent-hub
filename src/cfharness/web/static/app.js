@@ -122,7 +122,7 @@
     try { localStorage.setItem("cfh_side", on ? "min" : ""); } catch (_) {}
   });
   // ------------------------------------------------------------ nút chuyển 2D/3D (`cfh_view`, docs/dev-notes/office-3d.md)
-  // Không JS → nút là link thường tới /office. Có JS: bật → nhớ `cfh_view=3d` + đi /office; tắt → xoá + đang ở /office thì về /.
+  // Không JS → nút là link thường tới /office. Có JS: bật → nhớ `cfh_view=3d` + đi /office; tắt → xoá + đang ở /office thì về /manager.
   var VIEW = "cfh_view";
   function view3d() {
     try { return localStorage.getItem(VIEW) === "3d"; } catch (_) { return false; }
@@ -135,7 +135,7 @@
       var vb = viewBtns[vi];
       vb.setAttribute("aria-pressed", on ? "true" : "false");
       vb.setAttribute("title", on ? "Về giao diện 2D" : "Chế độ 3D văn phòng");
-      vb.setAttribute("href", on ? "/" : "/office");
+      vb.setAttribute("href", on ? "/manager" : "/office");
       var lb = vb.querySelector(".view-lbl");
       if (lb) lb.textContent = on ? "2D" : "3D";
     }
@@ -146,7 +146,7 @@
     var on = this.getAttribute("aria-pressed") === "true";
     try { if (on) localStorage.removeItem(VIEW); else localStorage.setItem(VIEW, "3d"); } catch (_) {}
     if (!on) { location.href = "/office"; return; }
-    if (onOffice) { location.href = "/"; return; }
+    if (onOffice) { location.href = "/manager"; return; }
     paintView(false);
   });
   // khung "Thông tin điều phối viên": cột phải trên màn rộng (nhớ đóng/mở), ngăn kéo trên màn hẹp

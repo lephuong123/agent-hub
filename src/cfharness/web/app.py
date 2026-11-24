@@ -495,8 +495,10 @@ async def render(request: Request, name: str, ctx: dict[str, Any] | None = None,
     st = ws(request)
     sess = session_of(request)
     badge: dict[str, Any] = await nav_badge(request, sess) if sess is not None else {}
+    # chấm "có bản cập nhật" ở menu người dùng: chỉ đọc giá trị đã cache (manager.update_flag — nạp lười cùng thanh bên hội thoại)
+    upd = getattr(st, "_upd_flag", None)
     base = {"csrf": sess.csrf if sess else "", "flashes": sess.pop_flashes() if sess else [], "badge": badge, "nav": "", "htmx": HTMX,
-            "path": request.url.path}
+            "path": request.url.path, "update_available": bool(upd and upd[1])}
     return st.templates.TemplateResponse(request, name, {**base, **(ctx or {})}, status_code=status)
 
 
@@ -522,7 +524,7 @@ def _login_ok(request: Request, sess: Session, *, device: tuple[str, float] | No
     import time as _t
 
     # khoá phiên đi trong FRAGMENT (không gửi lên server, không vào log/Referer); app.js lưu vào localStorage rồi xoá khỏi URL
-    resp = RedirectResponse(f"/#{KEY_FIELD}={sess.key}" + ("&d=1" if device or sess.device_id else ""), status_code=303)
+    resp = RedirectResponse(f"/manager#{KEY_FIELD}={sess.key}" + ("&d=1" if device or sess.device_id else ""), status_code=303)
     # web public (tunnel TLS): cookie `Secure` — chỉ gửi qua https; host cục bộ http://cfharness.localhost giữ như cũ
     secure = ws(request).is_public(request.headers.get("host", ""))
     resp.set_cookie(ws(request).cookie, sess.sid, httponly=True, samesite="strict", path="/", secure=secure, max_age=ws(request).auth.max_s)
@@ -712,7 +714,7 @@ async def login(request: Request) -> Response:
     else:
         tok = request.query_params.get("t") or ""
         if not tok and session_of(request) is not None:
-            return RedirectResponse("/", status_code=303)
+            return RedirectResponse("/manager", status_code=303)
     if tok:
         sess = st.auth.redeem(tok)
         if sess is not None:
@@ -840,6 +842,11 @@ async def overview(request: Request) -> Response:
     except RpcError:
         fresh = False
     return await render(request, "overview.html", {**data, "nav": "overview", "agents": agents, "mgr": mgr, "fresh": fresh})
+
+
+async def home(request: Request) -> Response:
+    """`/` → trang Trò chuyện (chat-first). Trang "Hoạt động" (Tổng quan cũ) ở `/activity`. Chưa đăng nhập: middleware đã đưa về /login."""
+    return RedirectResponse("/manager", status_code=302)
 
 
 async def partial_overview(request: Request) -> Response:
@@ -2197,7 +2204,8 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
                      limiter=limiter or LoginLimiter(), totp=TotpStore(paths), devices=DeviceStore(paths, trusted_devices))
     state.auth.device_ok = state.devices.valid if state.devices is not None else None
     routes = [
-        Route("/", overview),
+        Route("/", home),
+        Route("/activity", overview),
         Route("/login", login, methods=["GET", "POST"]),
         Route("/enroll", enroll, methods=["GET", "POST"]),
         Route("/logout", logout, methods=["POST"]),

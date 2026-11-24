@@ -323,7 +323,7 @@ async def test_device_login_rotates_and_reuse_revokes(env):
     _, tok0 = await trusted_login(env, app, env.client(app))
     b = browser(env, app, tok0)
     r = await b.post("/login", data={"device": "1"}, headers={**HDR, "user-agent": UA_PHONE})
-    assert r.status_code == 303 and r.headers["location"].startswith("/#k=") and r.headers["location"].endswith("&d=1")
+    assert r.status_code == 303 and r.headers["location"].startswith("/manager#k=") and r.headers["location"].endswith("&d=1")
     tok1 = set_cookie_of(r, dev_cookie(env.paths)).split(";", 1)[0].split("=", 1)[1]
     assert tok1 != tok0 and session_of(app, b, env.paths).device_id == tok0.split(".")[0]
     assert (await b.get("/settings")).status_code == 200
@@ -390,14 +390,14 @@ async def test_revoke_outside_web_process_and_totp_disable_kill_session(env):
     app = env.app()
     c = env.client(app)
     _, tok = await trusted_login(env, app, c)
-    assert (await c.get("/")).status_code == 200
+    assert (await c.get("/activity")).status_code == 200
     DeviceStore(env.paths).revoke(tok.split(".")[0])  # như `cfharness web devices revoke` (tiến trình khác)
     assert (await c.get("/")).status_code == 303
     # tắt TOTP → mọi thiết bị vô hiệu
     TotpStore(env.paths).enroll(activate=True)
     c2 = env.client(app)
     _, tok2 = await trusted_login(env, app, c2)
-    assert (await c2.get("/")).status_code == 200
+    assert (await c2.get("/activity")).status_code == 200
     TotpStore(env.paths).disable()
     assert (await c2.get("/")).status_code == 303
     assert (await browser(env, app, tok2).post("/login", data={"device": "1"}, headers=HDR)).status_code == 200  # tính năng tắt (TOTP tắt)

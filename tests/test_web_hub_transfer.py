@@ -230,8 +230,8 @@ async def test_import_end_to_end_plan_step2_job_restart_session_survives(env, tm
     await env.login()
     c = env.client
     html: list[str] = []
-    page = (await c.get("/")).text
-    assert 'id="fresh-import"' in page  # hub trống → thẻ nổi bật ở trang chủ
+    page = (await c.get("/manager")).text
+    assert 'id="fresh-import"' in page  # hub trống → thẻ nổi bật ở trang Trò chuyện (chưa có điều phối viên)
     uid = await _upload(env, pkg)
     r = await c.get(f"/hub-transfer/import/{uid}")
     assert r.status_code == 200 and pkg_id in r.text and "cần passphrase" in r.text and "Bản đồ đường dẫn" in r.text
@@ -298,7 +298,7 @@ async def test_import_end_to_end_plan_step2_job_restart_session_survives(env, tm
         page = (await c.get(f"/hub-transfer?import={uid}")).text
         assert 'id="imported-from"' in page and pkg_id in page
         html.append(page)
-        assert 'id="fresh-import"' not in (await c.get("/")).text
+        assert 'id="fresh-import"' not in (await c.get("/manager")).text
         audit = [dict(x) for x in d2.hub.store.conn.execute("SELECT kind, channel, data FROM audit_log WHERE kind LIKE 'hub.import%'").fetchall()]
         assert any(a["kind"] == "hub.imported" for a in audit)
         assert PW not in "\n".join(d2.hub.store.conn.iterdump())

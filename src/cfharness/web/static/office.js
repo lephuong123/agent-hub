@@ -47,7 +47,7 @@ function bindTo2D() {
   if (b) b.addEventListener('click', (e) => {
     e.preventDefault();
     try { localStorage.removeItem('cfh_view'); } catch (_) { /* bỏ qua */ }
-    location.href = '/';
+    location.href = '/manager';
   });
 }
 
