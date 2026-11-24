@@ -161,7 +161,12 @@ def test_enroll_flow(env, signer):
     c = make_client(env, signer)
     r = c.get(f"/enroll/{code}", headers=H(signer, "new@ex.com"))
     assert r.status_code == 200 and "data:image/svg+xml" in r.text
-    sec = re.search(r'<code class="mono">([A-Z2-7]+)</code>', r.text).group(1)
+    # SVG dùng làm ảnh (data:) phải có xmlns, không thì trình duyệt hiện ảnh vỡ
+    qr = base64.b64decode(re.search(r'data:image/svg\+xml;base64,([A-Za-z0-9+/=]+)', r.text).group(1)).decode()
+    assert qr.startswith("<svg ") and 'xmlns="http://www.w3.org/2000/svg"' in qr.split(">", 1)[0]
+    # no-referrer làm Chrome/Safari gửi `Origin: null` cho form POST → mọi form bị "Bad Origin"
+    assert r.headers["referrer-policy"] == "same-origin"
+    sec =re.search(r'<code class="mono">([A-Z2-7]+)</code>', r.text).group(1)
     env.clock.tick(31)
     r = c.post(f"/enroll/{code}", data={"password": PW, "password2": PW, "totp": T.totp(sec, env.clock())}, headers=H(signer, "new@ex.com"))
     assert r.status_code == 200 and "Đã kích hoạt" in r.text
