@@ -353,7 +353,7 @@ def test_approval_and_question_are_one_line_links_to_cards():
     tx = replay_tx(EVENTS[:EVENTS.index(next(e for e in EVENTS if e["seq"] == 23))])
     mod = make_templates().env.get_template("_items.html").module
     ap = str(mod.item(tx.items[tx._at["ev-ap-ap1"]]))
-    assert 'href="#ap-ap1"' in ap and 'data-alt="/inbox#ap-ap1"' in ap and "Chờ bạn duyệt" in ap and "rm -rf build…" in ap
+    assert 'href="#ap-ap1"' in ap and 'data-alt="/inbox#ap-ap1"' in ap and "Chờ duyệt" in ap and "rm -rf build…" in ap
     assert "next line" not in ap and "<form" not in ap and "/do/" not in ap and "luật" not in ap
     q = str(mod.item(tx.items[tx._at["ev-q-q1"]]))
     assert 'href="#q-q1"' in q and 'data-alt="/inbox#q-q1"' in q and "Chọn cách nào?…" in q and "chi tiết dài" not in q

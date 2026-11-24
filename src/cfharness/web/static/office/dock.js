@@ -180,7 +180,7 @@ export function createDock(o) {
     showPanel('confirm', parts, note || yes, { from });
   }
   function yesLabel(name, fields, d) {
-    if (name === 'stop') return 'Dừng run';
+    if (name === 'stop') return 'Dừng lượt chạy';
     if (name === 'agent_delete') return 'Xoá';
     if (name === 'estop' || name === 'team_estop') return fields.on === '1' ? 'Bật ESTOP' : 'Cho chạy lại';
     return d.danger ? 'Đồng ý' : 'Đồng ý';
@@ -281,8 +281,10 @@ export function createDock(o) {
     // tiêu đề luôn cập nhật (kể cả khi thu gọn)
     tCount.textContent = String(ags.length);
     tCount.title = ags.length + ' agent';
-    tNeed.hidden = !sum.need;
-    tNeed.textContent = sum.need ? sum.need + ' cần bạn' : '';
+    // số "cần bạn" = CÙNG nguồn với huy hiệu menu 2D (server: present.need_count → hub.need); daemon cũ → đếm agent như trước
+    const needN = state.hub && typeof state.hub.need === 'number' ? state.hub.need : sum.need;
+    tNeed.hidden = !needN;
+    tNeed.textContent = needN ? needN + ' cần bạn' : '';
     tEstop.hidden = !hubEstop;
     box.classList.toggle('estop', hubEstop);
     const nsig = JSON.stringify([rows, sum, focusId, can3d, filter, query, hubEstop, menuFor, [...collapsed], ags.length]);

@@ -10,6 +10,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Trạng thái thống nhất & từ ngữ dễ hiểu
+- **Một trạng thái cho mọi nơi**: agent hoặc lượt chạy đang chờ duyệt thao tác phá huỷ giờ hiện "Chờ duyệt" ở Lượt chạy, đầu trang lượt chạy, Agent, Tổng quan, panel điều phối viên và chế độ 3D (trước đây có nơi vẫn ghi "Đang chạy"); agent đang hỏi bạn hiện "Chờ bạn trả lời", agent hỏi điều phối viên hiện "Chờ điều phối viên". Số "Cần bạn" ở menu và ở chế độ 3D nay là cùng một con số (câu hỏi còn ở điều phối viên không tính). Bảng Công việc gộp "Mới / Cần làm / Sẵn sàng" thành "Chưa bắt đầu", cột trống thu thành dải hẹp nên cột "Xong" luôn thấy trên màn rộng; trên điện thoại là danh sách nhóm theo trạng thái (Bị chặn, Đang làm… Xong cuối). Trang Cần bạn đưa thao tác phá huỷ đang chặn agent lên đầu, câu hỏi trả lời bằng một chạm (gõ câu khác ở "Trả lời khác…"). Bớt từ kỹ thuật: tiêu đề lượt chạy không còn hiện prompt nội bộ tiếng Anh ("Tiếp tục sau khi bạn trả lời"…), mã `r_…`/`t_…` và mô hình gập vào "Chi tiết kỹ thuật", "steer" thành "Nhắn thêm", "Phụ thuộc (DAG)" thành "Thứ tự thực hiện", "Nhịp" thành "Kiểm tra định kỳ"; thẻ duyệt nói "vì sao cần duyệt" bằng lời thường trước tên luật.
+
 ### Gỡ giao diện Điều phối cũ
 - **Giao diện Điều phối cũ đã được gỡ hẳn** — `/manager` chỉ còn trang Điều phối mới (ra mắt ở v0.2.31). Link `/manager?ui=old` không còn mở trang cũ: nó mở trang mới như bình thường, lựa chọn "giao diện cũ" trình duyệt từng nhớ cũng không còn tác dụng. Hub chưa có điều phối viên vẫn thấy phần hướng dẫn + chỉ định như trước; thẻ Điều phối ở trang Tổng quan không đổi.
 

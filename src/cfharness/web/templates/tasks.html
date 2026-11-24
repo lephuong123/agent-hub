@@ -2,7 +2,7 @@
 {% import "_macros.html" as m with context %}
 {% block title %}Công việc{% endblock %}
 {% block content %}
-<div class="page-head"><div class="ph-title"><h1>Công việc</h1><span class="sub">Task giao cho agent hoặc team; task có phụ thuộc chạy sau khi task cha xong.</span></div>
+<div class="page-head"><div class="ph-title"><h1>Công việc</h1><span class="sub">Việc giao cho agent hoặc team; việc phải chờ việc khác sẽ bắt đầu khi việc đó xong.</span></div>
   <form method="get" action="/tasks" class="filters inline-f">
     <select name="team" aria-label="Lọc theo team"><option value="">mọi team</option>{% for t in teams %}<option value="{{ t.id }}" {{ 'selected' if q.team == t.id }}>{{ t.name }}</option>{% endfor %}</select>
     <button class="btn sm" type="submit">Lọc</button>
@@ -17,7 +17,7 @@
       <label class="span2">Mô tả chi tiết <textarea data-voice name="body" rows="4" placeholder="Yêu cầu, tiêu chí xong, đường dẫn liên quan…"></textarea></label>
       <label>Giao cho agent <select name="assignee"><option value="">(để team tự phân)</option>{% for a in agents %}<option value="{{ a }}">{{ a }}</option>{% endfor %}</select></label>
       <label>Hoặc giao cho team <select name="team"><option value="">(không)</option>{% for t in teams if not t.archived_at %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}</select></label>
-      <label class="span2">Phụ thuộc (chạy sau khi các task này xong) <select name="parents" multiple size="{{ [open_tasks|length, 5]|min or 1 }}">{% for t in open_tasks %}<option value="{{ t.id }}">{{ t.id }} — {{ t.title|first(60) }}</option>{% endfor %}</select><span class="hint">Giữ Ctrl/⌘ để chọn nhiều</span></label>
+      <label class="span2">Chờ việc khác (bắt đầu sau khi các việc này xong) <select name="parents" multiple size="{{ [open_tasks|length, 5]|min or 1 }}">{% for t in open_tasks %}<option value="{{ t.id }}">{{ t.id }} — {{ t.title|first(60) }}</option>{% endfor %}</select><span class="hint">Giữ Ctrl/⌘ để chọn nhiều</span></label>
       <label>Ưu tiên <input name="priority" type="number" value="0" min="-10" max="10"></label>
     </div>
     <div class="row end"><button class="btn primary" type="submit">Tạo công việc</button></div>

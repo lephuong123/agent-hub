@@ -4,7 +4,7 @@
  * Không DOM, không mạng — kiểm bằng tests/office_roster_check.mjs. */
 
 // thứ tự "cần chú ý" trong một nhóm (ý từ agent-dashboard / claw-fleet: nhóm "Needs you" lên đầu)
-const ATTN = { waiting_human: 0, asking: 1, error: 2, waiting: 3, working: 4, queued: 5, idle: 6, paused: 7 };
+const ATTN = { waiting_human: 0, asking: 1, error: 2, waiting: 3, working: 4, with_manager: 4.5, queued: 5, idle: 6, paused: 7 };
 const ROLE_ORDER = { lead: 0, reviewer: 1, verifier: 2, worker: 3 };
 export const ROLE_VI = { lead: 'trưởng nhóm', worker: 'thành viên', reviewer: 'review', verifier: 'kiểm tra' };
 export const SUMMARY = [['working', 'đang làm'], ['need', 'cần bạn'], ['error', 'lỗi'], ['idle', 'rảnh'], ['paused', 'tạm dừng']];
@@ -63,7 +63,7 @@ export function rosterSummary(agents) {
 // nút điều khiển của một hàng — CHỈ mô tả; ghi thật đi qua dock.control → POST /office/do (xác nhận do server soạn)
 export function rowControls(a) {
   const out = [{ name: a.paused ? 'agent_resume' : 'agent_pause', label: a.paused ? '▶ Tiếp tục' : '⏸ Tạm dừng', id: a.id, kind: a.paused ? 'go' : 'pause' }];
-  if (a.run_id) out.push({ name: 'stop', label: '■ Dừng run', id: a.run_id, kind: 'danger' });
+  if (a.run_id) out.push({ name: 'stop', label: '■ Dừng lượt', id: a.run_id, kind: 'danger' });
   return out;
 }
 
@@ -81,7 +81,7 @@ export function agentActions(a, ap, q) {
   else out.push({ act: 'talk', id: a.id, label: '▶ Giao việc', kind: a.paused ? 'ghost' : 'go', sr: 'Giao việc mới cho ' + nm + ' (bắt đầu run mới)' });
   for (const c of rowControls(a)) {
     out.push({ act: 'control', name: c.name, id: c.id, label: c.label, kind: c.kind,
-      sr: c.name === 'stop' ? 'Dừng run đang chạy của ' + nm : c.name === 'agent_resume' ? 'Cho ' + nm + ' hoạt động lại' : 'Tạm dừng ' + nm });
+      sr: c.name === 'stop' ? 'Dừng lượt chạy hiện tại của ' + nm : c.name === 'agent_resume' ? 'Cho ' + nm + ' hoạt động lại' : 'Tạm dừng ' + nm });
   }
   if (!a.is_manager) out.push({ act: 'control', name: 'agent_delete', id: a.id, label: '🗑 Xoá agent…', kind: 'danger', menu: true, detach: !!a.team,
     sr: 'Xoá agent ' + nm + ' (vào thùng rác' + (a.team ? ', gỡ khỏi team' : '') + ')' });

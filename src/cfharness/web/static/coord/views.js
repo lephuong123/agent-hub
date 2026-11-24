@@ -316,7 +316,7 @@ function Item({ it, p, run, last, cont }) {
       const files = it.files || [], fa = it.agent || agent;
       return html`<div class=${"mm mgr" + C + (it.notify ? " notify" : "") + (last ? " last" : "") + (cont ? " cont" : "")} data-run=${it.run_id || undefined}>
         <div class="mm-who"><span class="mm-mark" aria-hidden="true"><${Icon} n="logo" /></span>${it.notify
-          ? html`<${Icon} n="alert" c="sm" />Điều phối viên báo` : it.tick ? "Điều phối viên · nhịp" : "Điều phối viên"}</div>
+          ? html`<${Icon} n="alert" c="sm" />Điều phối viên báo` : it.tick ? "Điều phối viên · kiểm tra định kỳ" : "Điều phối viên"}</div>
         <div class="ti msg tx-msg mm-md"><div class="md" dangerouslySetInnerHTML=${{ __html: it.html || "" }}></div>
           ${it.cut ? html`<p class="tx-cutnote"><${Icon} n="info" c="sm" /><span>${it.cut}${it.run_id ? html` <code>cfharness runs logs ${it.run_id}</code>` : null}</span></p>` : null}</div>
         ${files.length && fa ? html`<div class="mm-files" aria-label="Tệp được nhắc tới">${files.map((f) => html`<${FileChip} key=${f.path} f=${f} agent=${fa} />`)}</div>` : null}
@@ -687,8 +687,8 @@ function Status() {
       <div class="acard-name"><a href=${"/agents/" + encodeURIComponent(m.agent_id || "")}>${m.name || m.agent_id}</a><div class="r">${m.agent_id}</div></div>
       <span class=${"pill " + (m.status_tone || "muted")}><${Icon} n=${m.status_icon || "circle"} c=${m.status_icon === "dot" && m.status_tone === "ok" ? "pulse" : ""} />${m.status_label || ""}</span></div>
     <dl class="kv">
-      <div><dt>Nhịp gần nhất</dt><dd>${m.last_tick ? html`${fmtTs(m.last_tick)} <span class="muted small">(${relText(m.last_tick)})</span>` : "chưa chạy"}</dd></div>
-      <div><dt>Nhịp kế tiếp</dt><dd>${m.next_tick ? fmtTs(m.next_tick) : "khi có sự kiện"}</dd></div>
+      <div><dt>Kiểm tra định kỳ gần nhất</dt><dd>${m.last_tick ? html`${fmtTs(m.last_tick)} <span class="muted small">(${relText(m.last_tick)})</span>` : "chưa chạy"}</dd></div>
+      <div><dt>Kiểm tra định kỳ kế tiếp</dt><dd>${m.next_tick ? fmtTs(m.next_tick) : "khi có sự kiện"}</dd></div>
       <div><dt>Hôm nay</dt><dd>${m.cost_today || "—"}</dd></div>
     </dl></div>`;
 }
@@ -724,8 +724,8 @@ function Side({ p }) {
     <section class="mgr-side-sec">
       <${Status} />
       <div class="btn-row mgr-ctl">
-        <${Act} name="manager_tick" label="Chạy nhịp ngay" cls="btn sm" ic="zap" next=${back} title="manager.tick — gom sự kiện đang chờ và cho điều phối viên xử lý ngay"
-          confirm="Chạy một nhịp của điều phối viên NGAY? Nó xem sự kiện đang chờ + việc còn mở và xử lý (một run thật, tốn tiền)." />
+        <${Act} name="manager_tick" label="Kiểm tra ngay" cls="btn sm" ic="zap" next=${back} title="manager.tick — gom sự kiện đang chờ và cho điều phối viên xử lý ngay"
+          confirm="Cho điều phối viên kiểm tra định kỳ NGAY? Nó xem sự kiện đang chờ + việc còn mở và xử lý (một lượt chạy thật, tốn tiền)." />
         <${Act} name="manager_unset" label="Huỷ chỉ định" fields=${{ current: m.agent_id || "" }} cls="btn sm danger" next="/manager"
           confirm=${"Huỷ chỉ định điều phối viên " + (m.agent_id || "") + "? Agent vẫn còn, chỉ mất vai trò."} />
       </div>

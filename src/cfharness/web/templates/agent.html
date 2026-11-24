@@ -65,7 +65,7 @@
   {% if not runs %}{{ m.empty("Chưa có lượt chạy nào — giao việc ở trên.", "run") }}{% else %}
   <table class="tbl stack"><thead><tr><th>Việc</th><th>Trạng thái</th><th>Bắt đầu</th><th class="num">Chi phí</th></tr></thead><tbody>
   {% for r in runs %}<tr>
-    <td data-label="Việc" class="title-cell"><a class="t" href="/runs/{{ r.id }}">{{ run_title(r, titles) }}</a><span class="s id">{{ r.id }}</span></td><td data-label="Trạng thái">{{ m.run_pill(r.status) }}</td>
+    <td data-label="Việc" class="title-cell"><a class="t" href="/runs/{{ r.id }}" title="Mã lượt chạy: {{ r.id }}">{{ run_title(r, titles) }}</a>{% if run_kind(r.kind) %}<span class="s">{{ run_kind(r.kind) }}</span>{% endif %}</td><td data-label="Trạng thái">{{ m.run_pill(run_state(r, idx)) }}</td>
     <td data-label="Bắt đầu">{{ m.rel(r.started_at or r.queued_at) }}</td><td data-label="Chi phí" class="num">{{ r.cost_usd|usd }}</td></tr>{% endfor %}
   </tbody></table>{% endif %}
 </section>

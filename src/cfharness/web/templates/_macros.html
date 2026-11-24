@@ -19,7 +19,7 @@
 {% macro agent_pill(status) -%}{% set s = agent_status(status) %}{{ status_pill(s[0], s[1], s[2]) }}{%- endmacro %}
 
 {% macro run_pill(status) -%}
-{% set s = run_status(status) %}<span class="pill {{ s[1] }}">{% if status == 'running' %}{{ icon('dot', 'pulse') }}{% elif status == 'waiting_human' %}{{ icon('pause') }}{% elif status == 'completed' %}{{ icon('check') }}{% elif s[1] == 'danger' %}{{ icon('x') }}{% endif %}{{ s[0] }}</span>
+{% set s = run_status(status) %}<span class="pill {{ s[1] }}">{% if status == 'running' %}{{ icon('dot', 'pulse') }}{% elif status == 'waiting_human' %}{{ icon('shield') }}{% elif status == 'asking' %}{{ icon('question') }}{% elif status == 'with_manager' %}{{ icon('chat') }}{% elif status == 'completed' %}{{ icon('check') }}{% elif s[1] == 'danger' %}{{ icon('x') }}{% endif %}{{ s[0] }}</span>
 {%- endmacro %}
 
 {% macro task_pill(status) -%}
@@ -41,12 +41,12 @@
   <div class="xcard-head">
     <span class="xcard-ic">{{ icon('shield') }}</span>
     <div class="xcard-title">
-      <div class="t">{{ a.agent_id }} muốn chạy thao tác phá huỷ <span class="pill {{ 'danger' if a.status == 'waiting_human' else 'warn' }} strong">{{ icon('pause' if a.status == 'waiting_human' else 'clock') }}{{ 'Chờ bạn duyệt' if a.status == 'waiting_human' else 'Xin duyệt' }}</span></div>
-      <div class="m"><a href="/agents/{{ a.agent_id }}">{{ a.agent_id }}</a><span>·</span><span>chờ {{ (a.wait_s or 0)|dur }}</span><span>·</span><a href="/runs/{{ a.run_id }}">xem lượt chạy</a></div>
+      <div class="t">{{ a.agent_id }} muốn chạy thao tác phá huỷ <span class="pill {{ 'danger' if a.status == 'waiting_human' else 'warn' }} strong">{{ icon('shield') }}Chờ duyệt</span></div>
+      <div class="m"><span>đang chặn <a href="/agents/{{ a.agent_id }}">{{ a.agent_id }}</a></span><span>·</span><span>chờ {{ (a.wait_s or 0)|dur }}</span><span>·</span><a href="/runs/{{ a.run_id }}">xem lượt chạy</a></div>
     </div>
   </div>
   {{ action_block(v) }}
-  <p class="xcard-why">Vì sao cần duyệt: {% if a.matched_rule or a.destructive_class %}luật <b>{{ a.matched_rule or a.destructive_class }}</b>{% if a.destructive_class %} (lớp {{ a.destructive_class }}){% endif %}{% endif %}{% if a.reason %} — {{ a.reason }}{% endif %}{% if a.protected_resource_id %} · <b>tài nguyên được bảo vệ</b>{% endif %}</p>
+  <p class="xcard-why">Vì sao cần duyệt: {{ destructive_why(a) }}{% if a.reason %} {{ a.reason }}{% endif %}{% if a.matched_rule or a.destructive_class %} <span class="muted small">(luật {{ a.matched_rule or a.destructive_class }}{% if a.destructive_class and a.matched_rule %}, lớp {{ a.destructive_class }}{% endif %})</span>{% endif %}</p>
   <div class="xcard-actions">
     {{ act("approve", "Cho phép một lần", {"id": a.id}, "btn ok", confirm="Cho phép agent " ~ a.agent_id ~ " thực hiện MỘT lần (" ~ v.length ~ " ký tự):\n\n" ~ v.text, next=next, ic="check") }}
     {% if a.always_offer %}{{ act("approve_always", "Luôn cho phép", {"id": a.id}, "btn", confirm="Cho phép lần này VÀ tạo " ~ a.always_offer.summary ~ "?\n(Bước 2 hiện lại luật trước khi tạo.)", next=next, title="Tạo luật hẹp: không hỏi lại ĐÚNG thao tác này (gỡ ở trang Quyền đã cấp hoặc cfharness guard always rm)") }}{% endif %}
@@ -59,14 +59,15 @@
 {%- endmacro %}
 
 {#- Thẻ câu hỏi của agent (UX). compact: chọn nhanh 1 chạm (câu một lựa chọn) — không có ô nhập (an toàn khi khung tự làm mới). -#}
-{% macro question_card(q, next, compact=False) -%}
+{#- inline=True (trang Cần bạn): câu hỏi chọn một → nút 1 chạm như Tổng quan, form đầy đủ gập sau "Trả lời khác…" (ux-chat-flow P1-8) -#}
+{% macro question_card(q, next, compact=False, inline=False) -%}
 {% set v = question_view(q) %}
 <article class="xcard ask {{ 'done' if not v.pending }}" id="q-{{ q.id }}">
   <div class="xcard-head">
     <span class="xcard-ic">{{ icon('check' if not v.pending else 'question') }}</span>
     <div class="xcard-title">
       <div class="t">{{ q.agent_id }} hỏi {{ 'điều phối viên' if q.status == 'with_manager' else 'bạn' }} <span class="pill {{ v.status_tone }}">{{ v.status_label }}</span></div>
-      <div class="m"><a href="/agents/{{ q.agent_id }}">{{ q.agent_id }}</a>{% if q.task_id %}<span>·</span><a href="/tasks/{{ q.task_id }}">task {{ q.task_id }}</a>{% endif %}{% if q.run_id %}<span>·</span><a href="/runs/{{ q.run_id }}">lượt chạy</a>{% endif %}<span>·</span>{{ rel(q.created_at) }}</div>
+      <div class="m"><a href="/agents/{{ q.agent_id }}">{{ q.agent_id }}</a>{% if q.task_id %}<span>·</span><a href="/tasks/{{ q.task_id }}" title="Mã công việc: {{ q.task_id }}">{{ 'đang chặn công việc' if v.pending else 'công việc' }}</a>{% endif %}{% if q.run_id %}<span>·</span><a href="/runs/{{ q.run_id }}">lượt chạy</a>{% endif %}<span>·</span>{{ rel(q.created_at) }}</div>
     </div>
   </div>
   <div class="q-text">{{ q.text }}</div>
@@ -75,7 +76,7 @@
     {% if q.status == 'answered' %}<div class="q-answer">{{ icon('check') }}<div class="pre"><b>{{ v.answered_by }}</b> đã trả lời: {{ v.pick|join('; ') }}{% if v.answer_text %}{{ ' — ' if v.pick }}{{ v.answer_text }}{% endif %}</div></div>{% endif %}
   {% elif q.status == 'with_manager' %}
     {% if v.options %}<ol class="q-opts" start="1">{% for o in v.options %}<li class="q-opt"><span class="q-opt-k">{{ o.key }}</span><span class="q-opt-body"><span class="q-opt-l">{{ o.label }}</span>{% if o.description %}<span class="q-opt-d">{{ o.description }}</span>{% endif %}</span></li>{% endfor %}</ol>{% endif %}
-    <p class="xcard-why">Agent trong task hỏi điều phối viên trước; nếu không chốt được (hoặc quá hạn) câu hỏi sẽ chuyển lên bạn.</p>
+    <p class="xcard-why">Agent đang làm việc hỏi điều phối viên trước; nếu không chốt được (hoặc quá hạn) câu hỏi sẽ chuyển lên bạn.</p>
     <div class="xcard-actions">{{ act("question_take", "Tự trả lời", {"id": q.id}, "btn", next=next ~ "#q-" ~ q.id, ic="edit", title="Lấy câu hỏi khỏi điều phối viên để bạn trả lời") }}</div>
   {% elif compact and v.single_quick %}
     <div class="q-quick">{% for o in v.options %}{{ answer_btn(q, o, next) }}{% endfor %}</div>
@@ -83,6 +84,10 @@
   {% elif compact %}
     <div class="xcard-actions"><a class="btn primary" href="/inbox#q-{{ q.id }}">{{ icon('question') }}Trả lời</a></div>
   {% else %}
+  {% if inline and v.single_quick %}
+    <div class="q-quick">{% for o in v.options %}{{ answer_btn(q, o, next ~ "#q-" ~ q.id) }}{% endfor %}</div>
+  <details class="q-more"><summary class="btn sm ghost">{{ icon('edit') }}Trả lời khác…</summary>
+  {% endif %}
   <form method="post" action="/do/question_answer" class="q-form">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ q.id }}"><input type="hidden" name="next" value="{{ next }}">
     {% if v.options %}
@@ -94,9 +99,10 @@
     <div class="xcard-actions">
       <button class="btn primary" type="submit">{{ icon('send') }}<span>Gửi câu trả lời</span></button>
       <span class="spacer"></span>
-      {{ act("question_cancel", "Huỷ câu hỏi", {"id": q.id}, "btn ghost sm", confirm="Huỷ câu hỏi này? Agent sẽ không nhận được câu trả lời (task vẫn bị chặn tới khi bạn gỡ).", next=next) }}
+      {{ act("question_cancel", "Huỷ câu hỏi", {"id": q.id}, "btn ghost sm", confirm="Huỷ câu hỏi này? Agent sẽ không nhận được câu trả lời (việc vẫn bị chặn tới khi bạn gỡ).", next=next) }}
     </div>
   </form>
+  {% if inline and v.single_quick %}</details>{% endif %}
   {% endif %}
 </article>
 {%- endmacro %}

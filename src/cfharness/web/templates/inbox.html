@@ -3,17 +3,12 @@
 {% block title %}Cần bạn{% endblock %}
 {% block content %}
 <div class="page-head">
-  <div class="ph-title"><h1>Cần bạn</h1><span class="sub">Mọi việc đang chờ bạn quyết: câu hỏi của agent, thao tác phá huỷ cần duyệt, task bị chặn.</span></div>
+  <div class="ph-title"><h1>Cần bạn</h1><span class="sub">Việc đang chặn agent xếp trước: thao tác phá huỷ cần duyệt, rồi câu hỏi, rồi việc bị chặn.{% if q_mgr %} Có {{ q_mgr|length }} câu hỏi đang chờ điều phối viên (không tính vào số Cần bạn).{% endif %}</span></div>
   <a class="btn" href="/approvals">{{ m.icon('shield') }}Lịch sử duyệt</a>
 </div>
 {% set total = pend|length + q_open|length %}
 {% if not total and not blocked and not q_mgr and not batches %}
 <section class="card">{{ m.empty("Agent đang tự làm — khi cần bạn duyệt hay trả lời, việc sẽ hiện ở đây (và qua Telegram nếu đã bật).", "check", "ok", "Không có gì cần bạn lúc này") }}</section>
-{% endif %}
-
-{% if q_open %}
-<div class="section-title"><h2>{{ m.icon('question') }} Câu hỏi chờ bạn trả lời <span class="pill ask">{{ q_open|length }}</span></h2></div>
-<div class="need">{% for q in q_open %}{{ m.question_card(q, "/inbox") }}{% endfor %}</div>
 {% endif %}
 
 {% if pend %}
@@ -29,18 +24,23 @@
 <section class="card">{% set hnext = "/inbox" %}{% for b in batches %}{% include "_held_batch.html" %}{% endfor %}</section>
 {% endif %}
 
+{% if q_open %}
+<div class="section-title"><h2>{{ m.icon('question') }} Câu hỏi chờ bạn trả lời <span class="pill ask">{{ q_open|length }}</span></h2></div>
+<div class="need">{% for q in q_open %}{{ m.question_card(q, "/inbox", inline=True) }}{% endfor %}</div>
+{% endif %}
+
 {% if q_mgr %}
 <div class="section-title"><h2>{{ m.icon('chat') }} Đang chờ điều phối viên <span class="pill info">{{ q_mgr|length }}</span></h2></div>
-<p class="muted small">Agent trong task hỏi điều phối viên trước. Không chốt được (hoặc quá hạn) thì câu hỏi tự chuyển lên bạn. Bạn có thể lấy về tự trả lời.</p>
+<p class="muted small">Agent đang làm việc hỏi điều phối viên trước. Không chốt được (hoặc quá hạn) thì câu hỏi tự chuyển lên bạn. Bạn có thể lấy về tự trả lời.</p>
 <div class="need">{% for q in q_mgr %}{{ m.question_card(q, "/inbox") }}{% endfor %}</div>
 {% endif %}
 
 {% if blocked %}
-<div class="section-title"><h2>{{ m.icon('alert') }} Task bị chặn</h2></div>
+<div class="section-title"><h2>{{ m.icon('alert') }} Việc bị chặn</h2></div>
 <section class="card flush">
-  <table class="tbl stack"><thead><tr><th>Task</th><th>Lý do</th><th>Giao cho</th><th></th></tr></thead><tbody>
+  <table class="tbl stack"><thead><tr><th>Việc</th><th>Lý do</th><th>Giao cho</th><th></th></tr></thead><tbody>
   {% for t in blocked %}<tr>
-    <td data-label="Task" class="title-cell"><a class="t" href="/tasks/{{ t.id }}">{{ t.title }}</a><span class="s id">{{ t.id }}</span></td>
+    <td data-label="Việc" class="title-cell"><a class="t" href="/tasks/{{ t.id }}" title="Mã công việc: {{ t.id }}">{{ t.title }}</a></td>
     <td data-label="Lý do" class="small">{{ (t.block_reason or '—')|first(120) }}</td>
     <td data-label="Giao cho">{{ t.assignee_agent_id or t.team_id or '—' }}</td>
     <td class="actions">{% if held_task and held_task.get(t.id) %}<a class="btn sm" href="#held-{{ held_task[t.id] }}">{{ m.icon('alert') }}Xem lô xoá chờ duyệt</a>{% endif %}

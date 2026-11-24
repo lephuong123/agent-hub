@@ -97,7 +97,7 @@ async def test_office_state_shape(env):
     assert r.headers["content-type"].startswith("application/json")
     d = r.json()
     assert set(d) == {"epoch", "last_seq", "hub", "manager_id", "teams", "agents", "task_counts", "tasks", "approvals", "questions", "runs"}
-    assert set(d["hub"]) == {"estop", "running", "queued", "rate_limited", "approvals_waiting_human", "cost_today_usd"}
+    assert set(d["hub"]) == {"estop", "running", "queued", "rate_limited", "approvals_waiting_human", "need", "cost_today_usd"}
     assert set(d["task_counts"]) == {"ready", "running", "review", "blocked"}
     assert set(d["tasks"]) == {"ready", "running", "review", "blocked"} and all(isinstance(v, list) for v in d["tasks"].values())
     assert d["approvals"] == [] and d["questions"] == [] and d["runs"] == []
@@ -137,8 +137,8 @@ def test_build_state_pure_rules():
     }
     teams = [{"id": "t1", "name": "T1", "members": [{"agent_id": "a", "role": "lead"}], "counts": {"ready": 2, "review": 1, "done": 9}},
              {"id": "t2", "name": "T2", "members": [{"agent_id": "a", "role": "worker"}], "counts": {"ready": 1, "blocked": 3}}]
-    d = O.build_state(snap, [{"agent_id": "a"}], teams, "m")
-    assert d["hub"] == {"estop": True, "running": 1, "queued": 2, "rate_limited": True, "approvals_waiting_human": 1, "cost_today_usd": 0.0}
+    d = O.build_state(snap, [{"agent_id": "a", "status": "open"}], teams, "m")
+    assert d["hub"] == {"estop": True, "running": 1, "queued": 2, "rate_limited": True, "approvals_waiting_human": 1, "need": 1, "cost_today_usd": 0.0}
     assert d["task_counts"] == {"ready": 3, "running": 0, "review": 1, "blocked": 3}
     a, m = d["agents"]
     assert a["status"] == "asking" and a["team"] == "t1" and a["team_role"] == "lead" and a["approvals"] == 2

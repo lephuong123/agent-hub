@@ -364,9 +364,9 @@ async def test_overview_card_status_and_quick_send(menv):
     t = r.text
     assert "Điều phối viên" in t and 'action="/manager/send"' in t and 'id="mgr-quick"' in t
     assert f'name="c" value="{j["conversation_id"]}"' in t  # gửi nhanh tiếp tục cuộc trò chuyện web gần nhất
-    assert "Nhịp gần nhất" in t
+    assert "Kiểm tra định kỳ gần nhất" in t
     r = await menv.client.get("/partials/manager?compact=1")
-    assert r.status_code == 200 and "Nhịp kế tiếp" in r.text
+    assert r.status_code == 200 and "Kiểm tra định kỳ kế tiếp" in r.text
     r = await menv.post("/manager/send", {"text": "gửi nhanh từ tổng quan", "c": j["conversation_id"]})
     assert r.status_code == 303 and r.headers["location"].startswith("/manager?c=")
 

@@ -523,7 +523,7 @@ function main() {
     drawHud(b.hud, { hub: state.hub, task_counts: state.task_counts, conn });
     drawKanban(b.kanban, state.task_counts, state.tasks, names);
     drawRuns(b.runs, state.runs || [], names, Date.now());
-    drawNeeds(b.needs, state.approvals || [], state.questions || [], names);
+    drawNeeds(b.needs, state.approvals || [], state.questions || [], names, state.hub && typeof state.hub.need === 'number' ? state.hub.need : null);
     dock.render(state);
   }
   // thẻ đỏ trên đầu agent có approval đang chờ (approval đầu tiên của agent)
@@ -610,7 +610,7 @@ function main() {
     if (!srHud) return;
     const h = (state && state.hub) || {};
     const t = (conn === 'expired' ? 'Phiên đăng nhập đã hết. ' : conn === 'lost' ? 'Mất kết nối, đang thử lại. ' : '') +
-      (h.running || 0) + ' đang chạy, ' + (h.queued || 0) + ' xếp hàng, ' + (h.approvals_waiting_human || 0) + ' chờ bạn duyệt' +
+      (h.running || 0) + ' đang chạy, ' + (h.queued || 0) + ' xếp hàng, ' + (typeof h.need === 'number' ? h.need : (h.approvals_waiting_human || 0)) + ' việc cần bạn' +
       (h.estop ? ', ESTOP đang bật' : '') + (h.rate_limited ? ', đang giới hạn tốc độ' : '') + ', chi phí hôm nay ' + fmtUsd(h.cost_today_usd) + '.';
     if (srHud.textContent !== t) srHud.textContent = t;
   }

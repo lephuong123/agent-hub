@@ -63,7 +63,7 @@ async def test_tasks_page_and_partial_render_same_board(env):
     r = await env.client.get("/partials/tasks")
     assert r.status_code == 200
     part = r.text
-    assert part.lstrip().startswith('<div class="kanban" id="tasks-board"') and "Tạo công việc" not in part and "<html" not in part
+    assert part.lstrip().startswith('<div class="kanban board5" id="tasks-board"') and "Tạo công việc" not in part and "<html" not in part
     assert f'data-id="{a["id"]}"' in part and f'data-id="{b["id"]}" data-status="blocked"' in part
     assert "&lt;b&gt;đậm" in part  # autoescape
     # đổi trạng thái → partial thấy ngay
