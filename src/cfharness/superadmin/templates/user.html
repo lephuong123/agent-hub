@@ -46,7 +46,7 @@
 </dl>
 <div class="row">
   {% if can(sess, "hub") and has_op("hub.restart") %}
-    {{ op_form("hub.restart", "Khởi động lại", {"user": i.os_user, "part": "both"}, confirm="Khởi động lại daemon + web của " ~ i.os_user ~ "?") }}
+    {{ op_form("hub.restart", "Khởi động lại", {"users:multi": i.os_user, "part": "both"}, confirm="Khởi động lại daemon + web của " ~ i.os_user ~ "?") }}
     {{ op_form("hub.doctor", "Chẩn đoán", {"user": i.os_user}) }}
     <a class="btn" href="/users/{{ i.id }}/logs">Log</a>
   {% endif %}
