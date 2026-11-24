@@ -121,6 +121,21 @@
     var on = root.classList.toggle("side-min");
     try { localStorage.setItem("cfh_side", on ? "min" : ""); } catch (_) {}
   });
+  // ------------------------------------------------------------ khu Cài đặt: "← Quay lại" về trang app gần nhất (nhớ theo tab, sessionStorage)
+  // Trang app (có thanh bên chính) ghi đường dẫn; trang trong khu Cài đặt đặt href nút Quay lại theo đó (mặc định /manager — có sẵn trong HTML).
+  // Chỉ lưu pathname (không query: /manager?new=1 sẽ mở hội thoại mới lần nữa).
+  var SET_BACK = "cfh_set_back";
+  if (document.querySelector(".shell > .side")) {
+    try { sessionStorage.setItem(SET_BACK, location.pathname); } catch (_) {}
+  }
+  var setBack = document.getElementById("set-back");
+  if (setBack) {
+    try {
+      var sb = sessionStorage.getItem(SET_BACK);
+      // chỉ đường dẫn nội bộ: "/x…", không "//" hay "/\" (URL ngoài), không khoảng trắng
+      if (sb && sb.charAt(0) === "/" && sb.charAt(1) !== "/" && sb.charAt(1) !== "\\" && !/\s/.test(sb)) setBack.setAttribute("href", sb);
+    } catch (_) {}
+  }
   // ------------------------------------------------------------ nút chuyển 2D/3D (`cfh_view`, docs/dev-notes/office-3d.md)
   // Không JS → nút là link thường tới /office. Có JS: bật → nhớ `cfh_view=3d` + đi /office; tắt → xoá + đang ở /office thì về /manager.
   var VIEW = "cfh_view";

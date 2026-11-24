@@ -170,7 +170,7 @@ function Estop() {
   if (!hub.estop && !hub.admin_estop) return null;
   return html`<div class="coord-estop" role="status"><${Icon} n="stop" c="sm" /><span>${hub.admin_estop
     ? "Hub đang tạm dừng bởi quản trị — không run mới nào được chạy."
-    : "ESTOP đang bật — không run mới nào được chạy (điều phối viên cũng vậy)."}</span>${hub.admin_estop ? null : html`<a href="/settings#estop">Cài đặt ESTOP</a>`}</div>`;
+    : "ESTOP đang bật — không run mới nào được chạy (điều phối viên cũng vậy)."}</span>${hub.admin_estop ? null : html`<a href="/settings/safety#estop">Cài đặt ESTOP</a>`}</div>`;
 }
 
 function Header({ p }) {

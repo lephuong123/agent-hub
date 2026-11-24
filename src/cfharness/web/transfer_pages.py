@@ -94,7 +94,7 @@ async def _ctx(request: Request) -> dict[str, Any]:
 
 
 async def page(request: Request) -> Response:
-    return await render(request, "hub_transfer.html", {"nav": "settings", **await _ctx(request)})
+    return await render(request, "hub_transfer.html", {"nav": "settings_backup", **await _ctx(request)})
 
 
 async def partial(request: Request) -> Response:
@@ -215,7 +215,7 @@ async def import_plan(request: Request) -> Response:
         return flash_redirect(request, "/hub-transfer", "error", err_text(e))
     finally:
         pw = None
-    return await render(request, "hub_import_plan.html", {"nav": "settings", "p": plan, "opts": opts, "uid": uid, "size": _size,
+    return await render(request, "hub_import_plan.html", {"nav": "settings_backup", "p": plan, "opts": opts, "uid": uid, "size": _size,
                                                           "mode_label": MODE_LABEL, "maps_text": "\n".join(opts["maps"])})
 
 

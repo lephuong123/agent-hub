@@ -368,7 +368,7 @@ async def test_revoke_from_settings_kills_session_and_needs_csrf_key(env):
     c = env.client(app)
     _, tok = await trusted_login(env, app, c)
     did = tok.split(".")[0]
-    page = (await c.get("/settings")).text
+    page = (await c.get("/settings/security")).text
     assert "Thiết bị tin cậy" in page and did in page and "thiết bị này" in page and "Đăng xuất và quên thiết bị này" in page
     assert tok.split(".", 1)[1] not in page
     assert (await do(app, c, env.paths, "device_revoke", {"did": did, "confirm": "yes"}, csrf=False)).status_code == 403

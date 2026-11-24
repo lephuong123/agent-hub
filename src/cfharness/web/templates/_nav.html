@@ -1,25 +1,49 @@
-{#- Danh mục điều hướng dùng chung (base.html: thanh bên, tabbar; settings.html: khối "Quản lý"). Import `with context` (cần `badge`).
-    APP_NAV = luồng việc hằng ngày ở thanh bên chính. CFG_PAGES = trang cấu hình/quản trị — KHÔNG ở thanh bên chính, vào qua Cài đặt
-    (URL giữ nguyên). Mục: (nav key, href, icon, nhãn, mô tả ngắn cho lưới Quản lý). -#}
+{#- Danh mục điều hướng dùng chung (base.html: thanh bên chính, tabbar, cột nav khu Cài đặt; settings/index.html: trang danh mục).
+    Import `with context` (cần `badge`).
+    APP_NAV = luồng việc hằng ngày ở thanh bên chính. SET_GROUPS = khu Cài đặt (layout 2 cột riêng): mỗi nhóm (tiêu đề, [mục]); mục =
+    (nav key, href, icon, nhãn, mô tả ngắn, [id neo cũ của /settings#… dẫn về mục này]). Trang cấu hình đã có giữ nguyên URL; thẻ cũ của
+    /settings thành tab /settings/<tab> (nav key `settings_<tab>`). -#}
 {%- set APP_NAV = [("inbox", "/inbox", "inbox", "Cần bạn"), ("tasks", "/tasks", "task", "Công việc")]
   + ([("team_inbox", "/team-inbox", "task", "Việc được giao" ~ (" (" ~ badge.team_inbox ~ ")" if badge.team_inbox else ""))] if badge.team_inbox is number else [])
   + [("runs", "/runs", "run", "Lượt chạy"), ("agents", "/agents", "bot", "Đội ngũ"), ("overview", "/activity", "home", "Hoạt động")] -%}
-{%- set CFG_PAGES = [
-  ("teams", "/teams", "team", "Team", "Nhóm agent: lead, worker, reviewer"),
-  ("schedules", "/schedules", "calendar", "Lịch chạy", "Run và task tự động theo giờ"),
-  ("skills", "/skills", "star", "Skill", "Kỹ năng dùng chung cho agent"),
-  ("memory", "/memory", "graph", "Memory", "Tri thức theo tầng và đồ thị"),
-  ("learnings", "/learnings", "learn", "Tự học", "Bản tin, ledger, đề xuất cải thiện"),
-  ("mcp", "/mcp", "plug", "MCP", "Máy chủ MCP và gán cho agent"),
-  ("systems", "/systems", "power", "Hệ thống ngoài", "App ngoài và job nền"),
-  ("costs", "/costs", "dollar", "Chi phí", "Theo agent, ngày, team"),
-  ("permissions", "/permissions", "shield", "Quyền đã cấp", "Ngoại lệ sandbox, luật luôn cho phép"),
-  ("audit", "/audit", "log", "Nhật ký", "Nhật ký kiểm toán thao tác"),
-  ("logs", "/logs", "terminal", "Nhật ký hệ thống", "Log của daemon"),
-  ("perf", "/perf", "zap", "Hiệu năng", "Thời gian tải trang và RPC"),
-]
-  + ([("admin", "/admin/overview", "terminal", "Tổng quan máy", "Mọi hub trên máy (quản trị)"), ("admin_users", "/admin/users", "team", "Người dùng máy", "Người dùng và chi phí trên máy")] if badge.admin else [])
-  + ([("machine", "/machine", "shield", "Quản trị máy", "Chính sách máy, ESTOP của quản trị")] if badge.machine else []) -%}
-{#- nav key thuộc khu Cài đặt (kể cả trang con của Cài đặt: /update, /support, /hub-transfer dùng nav "settings") -#}
-{%- set CFG_KEYS = ["settings", "teams", "schedules", "skills", "memory", "learnings", "mcp", "systems", "costs", "permissions", "audit", "logs",
-  "perf", "admin", "admin_users", "machine"] -%}
+{%- set SET_GROUPS = [
+  ("Hub", [
+    ("settings_safety", "/settings/safety", "power", "Chung & an toàn", "Dừng khẩn cấp, cổng duyệt", ["estop", "gates"]),
+    ("settings_accounts", "/settings/accounts", "user", "Tài khoản Claude", "Tài khoản, connector, MCP theo tài khoản", ["accounts", "claudeai", "acct-add"]),
+    ("settings_config", "/settings/config", "settings", "Hành vi hub", "Run, phê duyệt, điều phối viên, lưu trữ…", ["config"]),
+    ("settings_notifications", "/settings/notifications", "bell", "Thông báo & kênh", "Slack, Slack 2 chiều, Telegram", ["slack", "slack2", "cfg-notify"]),
+    ("settings_secrets", "/settings/secrets", "key", "Secret", "Token, khoá API cho MCP và thông báo", ["secrets"]),
+    ("settings_filehub", "/settings/filehub", "folder", "Không gian số", "Cổng cfharness, thư mục chung", ["filehub", "filehub-lane"]),
+    ("settings_security", "/settings/security", "lock", "Bảo mật & thiết bị", "Thiết bị tin cậy, khoá bảo mật (chỉ xem)", ["devices", "cfg-security"]),
+    ("permissions", "/permissions", "shield", "Quyền đã cấp", "Ngoại lệ sandbox, luật luôn cho phép", []),
+  ]),
+  ("Đội ngũ & tri thức", [
+    ("teams", "/teams", "team", "Team", "Nhóm agent: lead, worker, reviewer", []),
+    ("schedules", "/schedules", "calendar", "Lịch chạy", "Run và task tự động theo giờ", []),
+    ("skills", "/skills", "star", "Skill", "Kỹ năng dùng chung cho agent", []),
+    ("memory", "/memory", "graph", "Memory", "Tri thức theo tầng và đồ thị", []),
+    ("learnings", "/learnings", "learn", "Tự học", "Bản tin, ledger, đề xuất cải thiện", []),
+    ("mcp", "/mcp", "plug", "MCP", "Máy chủ MCP và gán cho agent", []),
+    ("systems", "/systems", "power", "Hệ thống ngoài", "App ngoài và job nền", []),
+  ]),
+  ("Sử dụng & nhật ký", [
+    ("costs", "/costs", "dollar", "Chi phí", "Theo agent, ngày, team", []),
+    ("audit", "/audit", "log", "Nhật ký", "Nhật ký kiểm toán thao tác", []),
+    ("logs", "/logs", "terminal", "Nhật ký hệ thống", "Log của daemon", []),
+    ("perf", "/perf", "zap", "Hiệu năng", "Thời gian tải trang và RPC", []),
+  ]),
+  ("Máy & bảo trì", [
+    ("settings_system", "/settings/system", "info", "Hệ thống", "Sức khoẻ, phiên bản, cập nhật", ["health", "health-slot", "update", "system"]),
+    ("settings_backup", "/settings/backup", "archive", "Sao lưu & chuyển hub", "Sao lưu, chuyển hub sang máy khác", ["backup", "hub-transfer-link"]),
+    ("settings_support", "/settings/support", "question", "Gói chẩn đoán", "Gói gửi hỗ trợ khi gặp lỗi", ["support"]),
+    ("settings_desktop", "/settings/desktop", "monitor", "Ứng dụng máy tính", "Tải app cho macOS và Windows", ["desktop-app"]),
+  ]),
+] + ([("Quản trị máy", []
+  + ([("machine", "/machine", "shield", "Quản trị máy", "Chính sách máy, ESTOP của quản trị", [])] if badge.machine else [])
+  + ([("admin", "/admin/overview", "terminal", "Tổng quan máy", "Mọi hub trên máy (quản trị)", []),
+      ("admin_users", "/admin/users", "team", "Người dùng máy", "Người dùng và chi phí trên máy", [])] if badge.admin else []))]
+  if badge.machine or badge.admin else []) -%}
+{#- nav key thuộc khu Cài đặt (kể cả trang danh mục /settings và mục Quản trị máy dù badge chưa nạp) -#}
+{%- set CFG_KEYS = ["settings", "settings_safety", "settings_accounts", "settings_config", "settings_notifications", "settings_secrets",
+  "settings_filehub", "settings_security", "settings_system", "settings_backup", "settings_support", "settings_desktop", "permissions",
+  "teams", "schedules", "skills", "memory", "learnings", "mcp", "systems", "costs", "audit", "logs", "perf", "admin", "admin_users", "machine"] -%}

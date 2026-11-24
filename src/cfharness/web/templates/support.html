@@ -3,7 +3,7 @@
 {% block title %}Gói chẩn đoán{% endblock %}
 {% block content %}
 <div class="page-head"><div class="ph-title"><h1>Gói chẩn đoán</h1><span class="sub">Xem trước nội dung gói — sau khi lọc theo thời gian và che secret.</span></div>
-  <a class="btn sm" href="/settings#support">Quay lại Cài đặt</a></div>
+  <a class="btn sm" href="/settings/support">Quay lại Cài đặt</a></div>
 {% if down %}
 <section class="card"><p class="muted">Daemon không trả lời — chạy <code>cfharness support bundle</code> trong terminal (làm được khi daemon dừng).</p></section>
 {% elif error %}
@@ -30,9 +30,9 @@
   <div class="row gap wrap-row">
     {% set fields = {"since": since, "runs": runs} %}
     {% if include_raw %}
-      {{ m.act("support_create_raw", "Tạo gói (kèm raw transcript)…", fields, "btn danger", next="/settings#support", ic="plus") }}
+      {{ m.act("support_create_raw", "Tạo gói (kèm raw transcript)…", fields, "btn danger", next="/settings/support", ic="plus") }}
     {% else %}
-      {{ m.act("support_create", "Tạo gói…", fields, "btn primary", next="/settings#support", ic="plus") }}
+      {{ m.act("support_create", "Tạo gói…", fields, "btn primary", next="/settings/support", ic="plus") }}
     {% endif %}
   </div>
 </section>

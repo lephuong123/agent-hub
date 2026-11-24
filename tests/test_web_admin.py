@@ -49,6 +49,9 @@ async def test_admin_users_pages_and_estop_action(hub_home, shared, as_admin):
         await env.login()
         html = (await env.client.get("/costs")).text
         assert 'href="/admin/users"' in html and 'href="/machine"' in html
+        # khu Cài đặt: nhóm "Quản trị máy" (cột nav + trang danh mục) chỉ hiện với quản trị
+        idx = (await env.client.get("/settings")).text
+        assert ">Quản trị máy</div>" in idx and 'href="/admin/overview"' in idx and 'href="/admin/users"' in idx
         page = (await env.client.get("/admin/users")).text
         assert f"/admin/users/{ME}" in page and "<script>alert" not in page and "Người dùng máy" in page
         up = (await env.client.get(f"/admin/users/{ME}")).text
@@ -85,13 +88,17 @@ async def test_machine_page_user_side(hub_home, shared):
         html = (await env.client.get("/costs")).text
         # VIS-02/04: user thường — không menu quản trị, không trang /machine (minh bạch tắt mặc định), banner trung tính
         assert 'href="/machine"' not in html and 'href="/admin/users"' not in html
-        assert "Hub đang tạm dừng" in html and "security" not in html and "boss" not in html
+        shown = html.replace('href="/settings/security"', "")  # mục "Bảo mật & thiết bị" của cột Cài đặt — không phải mã lý do
+        assert "Hub đang tạm dừng" in html and "security" not in shown and "boss" not in html
         nf = await env.client.get("/khong-co-trang-nay")
         for path in ("/admin/users", "/admin/overview", "/admin/alerts", "/admin/audit", f"/admin/users/{ME}", "/machine"):
             r = await env.client.get(path)
             assert r.status_code == 404 and r.text == nf.text, path  # giống hệt route không tồn tại
         settings = (await env.client.get("/settings")).text
         assert "Hub đang tạm dừng" in settings and "Tắt ESTOP" not in settings and "/machine" not in settings
+        assert ">Quản trị máy</div>" not in settings and 'href="/admin/overview"' not in settings  # user thường: không nhóm Quản trị máy
+        safety = (await env.client.get("/settings/safety")).text
+        assert "Hub đang tạm dừng" in safety and "Tắt ESTOP" not in safety and "/machine" not in safety
         # VIS-07: bật trang minh bạch → user thấy "Quản trị máy" và dữ liệu về mình
         (shared / "control" / "visibility.json").write_text(json.dumps({"schema": 1, "activity": False, "transparency": True}))
         env.app.state.web._admin_nav = None

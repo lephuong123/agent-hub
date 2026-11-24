@@ -52,7 +52,7 @@ async def partial_update(request: Request) -> Response:
 
 
 async def update_page(request: Request) -> Response:
-    return await render(request, "update.html", {"nav": "settings"})
+    return await render(request, "update.html", {"nav": "settings_system"})
 
 
 def _start_confirm(f: Any) -> str:

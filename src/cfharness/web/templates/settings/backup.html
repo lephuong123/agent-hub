@@ -1,0 +1,12 @@
+{% extends "settings/_layout.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Sao lưu & chuyển hub · Cài đặt{% endblock %}
+{% block h1 %}Sao lưu &amp; chuyển hub{% endblock %}
+{% block sub %}Bản sao lưu HUB_HOME và chuyển toàn bộ hub sang máy khác.{% endblock %}
+{% block body %}
+<div id="backup" hx-get="/partials/backup" hx-trigger="load" hx-swap="outerHTML"></div>
+<section class="card" id="hub-transfer-link">
+  <div class="card-head"><h2>{{ m.icon('arrow-right') }} Chuyển hub sang máy khác</h2><a class="btn sm" href="/hub-transfer">Mở{{ m.icon('chev-right') }}</a></div>
+  <p class="small muted">Xuất TOÀN BỘ hub thành một file <code>.cfhx</code> (agent, tri thức, lịch, lịch sử run, session Claude, secret mã hoá) để tải về, hoặc tải gói từ máy khác lên và nhập vào đây.</p>
+</section>
+{% endblock %}

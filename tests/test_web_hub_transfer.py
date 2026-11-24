@@ -431,7 +431,7 @@ def test_import_busy_hold_and_cleanup(hub_home, monkeypatch):
 
 async def test_settings_link_and_3d_free_plain_page(env):
     await env.login()
-    s = (await env.client.get("/settings")).text
+    s = (await env.client.get("/settings/backup")).text
     assert 'href="/hub-transfer"' in s
     page = (await env.client.get("/hub-transfer")).text
     assert 'id="hub-upload"' in page and "transfer.js" in page and "<script>" not in page  # không script inline (CSP)

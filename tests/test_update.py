@@ -175,7 +175,7 @@ async def test_web_update_card_button_confirm_and_audit(hub_home):
     try:
         spawned = patch_updater(env.hub.updater)
         await env.login()
-        html = (await env.client.get("/settings")).text
+        html = (await env.client.get("/settings/system")).text
         assert 'hx-get="/partials/update"' in html
         card = (await env.client.get("/partials/update")).text
         assert f"có bản mới {NEWER}" in card and 'action="/do/update_start"' in card and f"Cập nhật lên {NEWER}" in card

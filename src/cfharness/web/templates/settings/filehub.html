@@ -1,0 +1,8 @@
+{% extends "settings/_layout.html" %}
+{% block title %}Không gian số · Cài đặt{% endblock %}
+{% block h1 %}Không gian số{% endblock %}
+{% block sub %}Cổng cfharness tới Không gian số: khoá cổng, thư mục chung, lô xoá đang giữ.{% endblock %}
+{% block body %}
+<span id="filehub"></span>
+<div id="filehub-lane" hx-get="/partials/filehub/lane" hx-trigger="load" hx-swap="outerHTML"></div>
+{% endblock %}

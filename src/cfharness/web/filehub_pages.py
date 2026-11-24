@@ -57,7 +57,7 @@ async def filehub_open(request: Request) -> Response:
     return RedirectResponse(url, status_code=303)
 
 
-NEXT_LANE = "/settings#filehub-lane"  # thao tác của thẻ quay về đúng thẻ
+NEXT_LANE = "/settings/filehub"  # thao tác của thẻ quay về đúng thẻ
 
 
 def _name(f: Any, key: str = "name", default: str | None = None) -> str:
