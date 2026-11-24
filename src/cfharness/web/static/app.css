@@ -1468,3 +1468,41 @@ a.outcome-denied { color: var(--danger); font-weight: 600; }
 .audit-activity { overflow-x: auto; }
 .audit-activity table { min-width: 520px; }
 .audit-activity td.muted { color: var(--muted); }
+
+/* ============================================================ trạng thái & từ ngữ thống nhất (ux-chat-flow P1-5..P1-8) */
+/* đầu trang run: id/mô hình/loại gập trong "Chi tiết kỹ thuật" */
+.tech-more { display: inline; }
+.tech-more > summary { list-style: none; cursor: pointer; }
+.tech-more > summary::-webkit-details-marker { display: none; }
+.tech-more[open] > summary { background: var(--surface-3); }
+.tech-more .id { font-family: var(--mono, ui-monospace, monospace); font-weight: 500; }
+/* bảng Công việc: 5 cột (gộp "Chưa bắt đầu"), cột rỗng thu thành dải hẹp có số đếm — cột "Xong" luôn trong màn hình rộng */
+.kanban.board5 { display: flex; align-items: stretch; gap: var(--s3); overflow-x: auto; }
+.kanban.board5 .col { flex: 1 1 0; min-width: 200px; }
+.kanban.board5 .col.is-empty { flex: 0 0 46px; min-width: 46px; padding: 10px 4px; }
+.kanban.board5 .col.is-empty h3 { flex-direction: column-reverse; align-items: center; justify-content: flex-end; gap: 10px; margin: 0; white-space: nowrap; }
+.kanban.board5 .col.is-empty .pill { writing-mode: vertical-rl; height: auto; min-height: 0; background: transparent; padding: 0; color: var(--muted); line-height: 1.2; }
+.kanban.board5 .col-n { color: var(--muted); font-size: var(--fs-xs); font-weight: 600; }
+.kanban.board5 .tcard .meta .pill { font-size: var(--fs-xs); height: auto; padding: 0 6px; }
+.kanban.board-empty { display: block; }
+.board-none { display: flex; flex-direction: column; align-items: center; gap: var(--s2); padding-bottom: var(--s4);
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-lg); }
+@media (max-width: 760px) {
+  /* điện thoại: danh sách nhóm theo trạng thái — cần chú ý trước, Xong cuối (ẩn bớt), nhóm rỗng chỉ còn một dòng tiêu đề */
+  .kanban.board5 { flex-direction: column; overflow-x: visible; }
+  .kanban.board5 .col, .kanban.board5 .col.is-empty { flex: 0 0 auto; min-width: 0; min-height: 0; padding: 10px; }
+  .kanban.board5 .col.is-empty h3 { flex-direction: row; margin: 0 2px; justify-content: space-between; }
+  .kanban.board5 .col.is-empty .pill { writing-mode: horizontal-tb; padding: 0; }
+  .kanban.board5 .col-blocked { order: 1; } .kanban.board5 .col-running { order: 2; } .kanban.board5 .col-review { order: 3; }
+  .kanban.board5 .col-todo { order: 4; } .kanban.board5 .col-done { order: 5; }
+  .kanban.board5 .col.is-empty { order: 6; }
+  .kanban.board5 .col-done:not(:target) .tcard:nth-of-type(n+4) { display: none; }
+  .kanban.board5 .col-done:target .done-more { display: none; }
+}
+.done-more { display: none; }
+@media (max-width: 760px) { .done-more { display: inline-block; padding: 6px 2px; } }
+/* Cần bạn: câu hỏi gọn — nút 1 chạm, form đầy đủ gập sau "Trả lời khác…" */
+.q-more { margin-top: var(--s2); }
+.q-more > summary { list-style: none; display: inline-flex; width: auto; }
+.q-more > summary::-webkit-details-marker { display: none; }
+.q-more[open] > summary { margin-bottom: var(--s2); }

@@ -25,14 +25,16 @@ __all__ = [
     "run_title", "question_view", "QUESTION_STATUS", "avatar_tone", "iso_ts",
     "tool_view", "merge_tool", "Transcript", "mark_final", "same_text", "url_host", "code_html", "highlight",
     "group_items", "group_view", "group_dom", "todo_view", "todo_item", "cut_note", "vi_num", "block_seq", "page_blocks", "day_label",
+    "need_index", "display_state", "run_state", "agent_state", "mark_agents", "need_count", "BOARD_COLUMNS", "board_columns", "run_kind", "destructive_why",
 ]
 
 # (icon trong /static/icons.svg, nhãn, tông màu CSS)
 AGENT_STATUS: dict[str, tuple[str, str, str]] = {
     "working": ("dot", "Đang làm", "ok"),
     "waiting": ("shield", "Chờ duyệt", "warn"),
-    "waiting_human": ("pause", "Chờ bạn duyệt", "danger"),
+    "waiting_human": ("shield", "Chờ duyệt", "danger"),
     "asking": ("question", "Chờ bạn trả lời", "ask"),
+    "with_manager": ("chat", "Chờ điều phối viên", "info"),
     "idle": ("circle", "Rảnh", "muted"),
     "error": ("x", "Lỗi", "danger"),
     "paused": ("pause", "Tạm dừng", "muted"),
@@ -40,7 +42,9 @@ AGENT_STATUS: dict[str, tuple[str, str, str]] = {
 RUN_STATUS: dict[str, tuple[str, str]] = {
     "queued": ("Đang xếp hàng", "info"),
     "running": ("Đang chạy", "ok"),
-    "waiting_human": ("Chờ bạn duyệt", "danger"),
+    "waiting_human": ("Chờ duyệt", "danger"),
+    "asking": ("Chờ bạn trả lời", "ask"),
+    "with_manager": ("Chờ điều phối viên", "info"),
     "completed": ("Xong", "ok"),
     "failed": ("Lỗi", "danger"),
     "cancelled": ("Đã dừng", "muted"),
@@ -51,10 +55,10 @@ RUN_STATUS: dict[str, tuple[str, str]] = {
     "rate_limited": ("Bị giới hạn tốc độ", "warn"),
     "blocked": ("Bị chặn", "danger"),
     "protocol_violation": ("Sai giao thức", "danger"),
-    "resumed": ("Đã tiếp tục ở run khác", "muted"),
+    "resumed": ("Đã tiếp tục ở lượt khác", "muted"),
 }
 TASK_STATUS: dict[str, tuple[str, str]] = {
-    "triage": ("Chờ phân loại", "warn"),
+    "triage": ("Mới", "warn"),
     "todo": ("Cần làm", "info"),
     "ready": ("Sẵn sàng", "info"),
     "running": ("Đang làm", "ok"),
@@ -89,6 +93,129 @@ def run_status(s: str | None) -> tuple[str, str]:
 
 def is_live_run(run: dict[str, Any] | None) -> bool:
     return bool(run) and run.get("status") in LIVE_RUN  # type: ignore[union-attr]
+
+
+# ============================================================================ trạng thái HIỂN THỊ thống nhất (ux-chat-flow P1-5)
+# Một nguồn cho mọi bề mặt (/runs, đầu trang run, /agents, thẻ agent ở Hoạt động, panel điều phối viên, `/office/state`):
+# trạng thái gốc (agent: `tui.snapshot`; run: `runs.status`) + việc đang chờ (approval, câu hỏi) → khoá trong AGENT_STATUS / RUN_STATUS.
+# Thứ tự ưu tiên: Chờ duyệt > Chờ bạn trả lời > (đang làm / xếp hàng / rảnh…) ; "Chờ điều phối viên" chỉ thay trạng thái rảnh/lỗi.
+AP_PENDING = ("open", "waiting_human")
+_AP_RANK = {"waiting_human": 2, "open": 1}
+_Q_RANK = {"open": 2, "with_manager": 1}
+
+
+def need_index(approvals: Any = None, questions: Any = None) -> dict[str, dict[str, str]]:
+    """approval/câu hỏi đang chờ → chỉ mục theo run và theo agent: `{"ap_run", "ap_agent", "q_run", "q_agent"}` (id → trạng thái nặng nhất)."""
+    idx: dict[str, dict[str, str]] = {"ap_run": {}, "ap_agent": {}, "q_run": {}, "q_agent": {}}
+
+    def put(d: dict[str, str], k: Any, v: str, rank: dict[str, int]) -> None:
+        if k and rank.get(v, 0) > rank.get(d.get(k, ""), 0):
+            d[str(k)] = v
+
+    for a in approvals or []:
+        if isinstance(a, dict) and a.get("status", "open") in AP_PENDING:
+            st = a.get("status") or "open"
+            put(idx["ap_run"], a.get("run_id"), st, _AP_RANK)
+            put(idx["ap_agent"], a.get("agent_id"), st, _AP_RANK)
+    for q in questions or []:
+        if isinstance(q, dict) and q.get("status") in _Q_RANK:
+            put(idx["q_run"], q.get("run_id"), q["status"], _Q_RANK)
+            put(idx["q_agent"], q.get("agent_id"), q["status"], _Q_RANK)
+    return idx
+
+
+def display_state(kind: str, status: str | None, *, approval: str | None = None, question: str | None = None) -> str:
+    """Khoá trạng thái hiển thị (hàm thuần, dùng chung). `kind` = "run" | "agent"; `approval` = trạng thái approval đang chờ
+    (open | waiting_human) của run/agent đó; `question` = trạng thái câu hỏi đang chờ (open | with_manager).
+    Run đã kết thúc giữ nguyên trạng thái kết thúc (Xong/Lỗi…) — việc chờ chỉ đè lên run còn sống."""
+    s = status or ""
+    if kind == "run":
+        if s not in LIVE_RUN:
+            return s
+        if approval or s == "waiting_human":
+            return "waiting_human"
+        if question in ("open", "with_manager"):
+            return "asking" if question == "open" else "with_manager"
+        return s
+    if s == "paused":
+        return s
+    if approval == "waiting_human" or s == "waiting_human":
+        return "waiting_human"
+    if approval or s == "waiting":
+        return "waiting"
+    if question == "open":
+        return "asking"
+    if question == "with_manager" and s in ("idle", "error", ""):
+        return "with_manager"
+    return s or "idle"
+
+
+def run_state(run: dict[str, Any], idx: dict[str, dict[str, str]] | None = None) -> str:
+    idx = idx or {}
+    rid = run.get("id")
+    return display_state("run", run.get("status"), approval=(idx.get("ap_run") or {}).get(rid), question=(idx.get("q_run") or {}).get(rid))
+
+
+def agent_state(row: dict[str, Any], idx: dict[str, dict[str, str]] | None = None) -> str:
+    idx = idx or {}
+    aid = row.get("id")
+    return display_state("agent", row.get("status"), approval=(idx.get("ap_agent") or {}).get(aid), question=(idx.get("q_agent") or {}).get(aid))
+
+
+def mark_agents(rows: list[dict[str, Any]], approvals: Any = None, questions: Any = None) -> list[dict[str, Any]]:
+    """Ghi đè `status` của các dòng agent bằng trạng thái hiển thị (tại chỗ; trả lại chính list)."""
+    idx = need_index(approvals, questions)
+    for r in rows or []:
+        if isinstance(r, dict):
+            r["status"] = agent_state(r, idx)
+    return rows
+
+
+# lớp thao tác phá huỷ (guard, `destructive_class`) → lời thường cho thẻ duyệt; tên luật/lớp vẫn hiện sau (nhỏ) để tra cứu
+DESTRUCTIVE_VI = {"file": "xoá hoặc ghi đè tệp/thư mục", "fs_delete": "xoá tệp/thư mục", "git": "thay đổi lịch sử git hoặc đẩy code",
+                  "db": "thay đổi dữ liệu trong cơ sở dữ liệu", "system": "thay đổi hệ thống của máy", "mcp": "thao tác qua công cụ bên ngoài (MCP)",
+                  "network": "gửi dữ liệu ra mạng", "hub": "đụng vào hub (cấu hình, dữ liệu, khoá)", "policy": "đổi quyền hoặc chính sách",
+                  "guard": "đổi cơ chế bảo vệ"}
+
+
+def destructive_why(a: dict[str, Any]) -> str:
+    """Câu "vì sao cần duyệt" bằng lời thường (theo lớp thao tác); không rõ lớp → câu chung."""
+    k = str(a.get("destructive_class") or "")
+    base = DESTRUCTIVE_VI.get(k) or DESTRUCTIVE_VI.get(k.split("_", 1)[0]) or ""
+    if a.get("protected_resource_id"):
+        return "Thao tác đụng vào tài nguyên được bảo vệ" + (f" ({base})" if base else "") + " — có thể mất dữ liệu."
+    return f"Agent định {base} — có thể mất dữ liệu." if base else "Thao tác có thể làm mất dữ liệu hoặc khó hoàn tác."
+
+
+def need_count(approvals: Any = None, questions: Any = None) -> int:
+    """Số việc "Cần bạn" — MỘT định nghĩa cho huy hiệu menu, trang Cần bạn và chế độ 3D: approval đang chờ (open + waiting_human)
+    + câu hỏi đang chờ BẠN (`open`). Câu hỏi còn ở điều phối viên (`with_manager`) KHÔNG tính — hiện riêng "N đang chờ điều phối viên"."""
+    n = sum(1 for a in approvals or [] if isinstance(a, dict) and a.get("status", "open") in AP_PENDING)
+    return n + sum(1 for q in questions or [] if isinstance(q, dict) and q.get("status") == "open")
+
+
+# ============================================================================ bảng Công việc (ux-chat-flow P1-6)
+# Cột hiển thị: gộp triage/todo/ready thành "Chưa bắt đầu" để cột "Xong" không trôi khỏi màn hình rộng; cột rỗng thu hẹp (CSS).
+# `m` = thứ tự trên mobile (danh sách nhóm theo trạng thái: cần chú ý trước, Xong cuối).
+BOARD_COLUMNS: tuple[dict[str, Any], ...] = (
+    {"key": "todo", "label": "Chưa bắt đầu", "tone": "info", "statuses": ("triage", "todo", "ready"), "m": 4},
+    {"key": "running", "label": "Đang làm", "tone": "ok", "statuses": ("running",), "m": 2},
+    {"key": "review", "label": "Đang review", "tone": "info", "statuses": ("review",), "m": 3},
+    {"key": "blocked", "label": "Bị chặn", "tone": "danger", "statuses": ("blocked",), "m": 1},
+    {"key": "done", "label": "Xong", "tone": "muted", "statuses": ("done",), "m": 5},
+)
+_SUB_ORDER = {"triage": 0, "todo": 1, "ready": 2}
+
+
+def board_columns(cols: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """`{status: [task]}` → cột hiển thị `[{key, label, tone, m, tasks, n}]`. Cột gộp xếp Mới → Cần làm → Sẵn sàng (giữ thứ tự gốc trong nhóm)."""
+    out = []
+    for c in BOARD_COLUMNS:
+        ts = [t for st in c["statuses"] for t in cols.get(st) or []]
+        if len(c["statuses"]) > 1:
+            ts = sorted(ts, key=lambda t: _SUB_ORDER.get(t.get("status") or "", 9))
+        out.append({**c, "tasks": ts, "n": len(ts)})
+    return out
 
 
 def tokens_of(usage: Any) -> int:
@@ -423,7 +550,7 @@ def transcript_item(ev: dict[str, Any]) -> dict[str, Any] | None:
     if t == "run.queued":
         budget = p.get("max_budget_usd")
         return {**base, "kind": "prompt", "dom": f"ev-prompt-{ev.get('seq')}", "text": p.get("prompt_preview") or "",
-                "meta": f"{p.get('kind') or 'adhoc'} · ngân sách {'$' + str(budget) if budget else '—'}" + (" · tiếp tục phiên cũ" if p.get("resume") else "")}
+                "meta": " · ".join(x for x in (run_kind(p.get("kind")), f"ngân sách ${budget}" if budget else "", "tiếp tục phiên cũ" if p.get("resume") else "") if x)}
     if t == "run.started":  # P0-8: thành dòng meta nhỏ dưới yêu cầu (Transcript.feed); không có yêu cầu → dòng riêng
         mcp = [str(m.get("name")) for m in p.get("mcp_servers") or [] if isinstance(m, dict)]
         return {**base, "kind": "start", "text": f"Bắt đầu · model {p.get('model') or '?'} · quyền {p.get('permission_mode') or '?'}", "mcp": mcp}
@@ -950,16 +1077,48 @@ def activity_item(ev: dict[str, Any]) -> dict[str, Any] | None:
 _HUB_HEAD = __import__("re").compile(r"^\s*\[cfharness[^\]]*\]\s*")
 
 
+# Prompt do HUB sinh (tiếng Anh, gửi cho agent) → nhãn tiếng Việt cho người. (mẫu regex, nhãn) — khớp ở đầu prompt.
+_SYS_TITLES: tuple[tuple[Any, str], ...] = tuple((_re.compile(p, _re.I), lbl) for p, lbl in (
+    (r"^\[cfharness\] Answer to your question \S+ from the coordinator", "Tiếp tục sau khi điều phối viên trả lời"),
+    (r"^\[cfharness\] Answer to your question", "Tiếp tục sau khi bạn trả lời"),
+    (r"^\[cfharness\] A human has now APPROVED", "Tiếp tục sau khi bạn duyệt"),
+    (r"^\[cfharness\] Your previous turn ended early", "Tự tiếp tục sau sự cố tạm thời"),
+    (r"^\[cfharness heartbeat", "Điều phối viên · kiểm tra định kỳ"),
+    (r"^\[cfharness (?:curation|curator|cross-agent merge)", "Tự học · tổng hợp kinh nghiệm"),
+    (r"^\[cfharness eval", "Đánh giá chất lượng"),
+))
+_TASK_LINE = _re.compile(r"^## Task: *(.+)$", _re.M)
+# loại run → chữ cho người (run "adhoc" = giao trực tiếp, không cần nhãn)
+RUN_KIND = {"task": "theo công việc", "lead": "lập kế hoạch", "review": "review", "manager": "", "chat": "trò chuyện",
+            "tick": "kiểm tra định kỳ", "schedule": "lịch chạy", "curator": "tự học", "graph_extract": "tự học", "failure_obs": "tự học",
+            "eval": "đánh giá", "eval_judge": "đánh giá", "root": "gốc"}
+
+
+def run_kind(kind: str | None) -> str:
+    """Nhãn loại run; "" cho run giao trực tiếp (adhoc) — không hiện."""
+    k = kind or ""
+    return "" if k in ("", "adhoc") else RUN_KIND.get(k, k)
+
+
 def run_title(run: dict[str, Any], titles: dict[str, str] | None = None, n: int = 110) -> str:
-    """Tiêu đề người đọc được: tiêu đề task nếu run thuộc task; không thì dòng đầu prompt (bỏ tiêu đề `[cfharness …]`)."""
+    """Tiêu đề người đọc được: tiêu đề task nếu run thuộc task; prompt hệ thống của hub (trả lời câu hỏi, giao task, nhịp…) →
+    nhãn tiếng Việt; không thì dòng đầu prompt (bỏ tiêu đề `[cfharness …]`). KHÔNG bao giờ trả prompt nội bộ tiếng Anh của hub."""
     tid = run.get("task_id")
     if tid and titles and titles.get(tid):
         return first_line(titles[tid], n)
+    pr = str(run.get("prompt") or "").lstrip()
+    for rx, lbl in _SYS_TITLES:
+        if rx.match(pr):
+            return lbl
     if run.get("kind") == "manager":
-        pr = str(run.get("prompt") or "")
-        return "Điều phối viên · nhịp kiểm tra" if pr.lstrip().startswith("[cfharness heartbeat") else "Điều phối viên · trả lời tin nhắn"
-    s = _HUB_HEAD.sub("", str(run.get("prompt") or ""))
-    return first_line(s, n) or "—"
+        return "Điều phối viên · trả lời tin nhắn"
+    if pr.startswith("[cfharness task"):  # prompt giao task: lấy tiêu đề task trong prompt
+        m = _TASK_LINE.search(pr)
+        return first_line(m.group(1), n) if m else "Việc được giao"
+    if pr.startswith("[cfharness"):
+        s = _HUB_HEAD.sub("", pr)
+        return "Việc hệ thống" if s.startswith(("You ", "Your ", "The ", "A ")) else (first_line(s, n) or "—")
+    return first_line(pr, n) or "—"
 
 
 QUESTION_STATUS = {"with_manager": ("Đang chờ điều phối viên", "info"), "open": ("Chờ bạn trả lời", "ask"), "answered": ("Đã trả lời", "ok"),

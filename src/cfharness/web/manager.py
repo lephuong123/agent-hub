@@ -113,6 +113,10 @@ async def mgr_state(request: Request, *, with_row: bool = True) -> dict[str, Any
         raise
     aid = g.get("agent_id")
     row = await _agent_row(request, aid) if aid and with_row else None
+    if row:  # trạng thái hiển thị thống nhất (present.display_state): điều phối viên đang hỏi bạn → "Chờ bạn trả lời", không "Rảnh"
+        from .app import questions
+
+        P.mark_agents([row], None, await questions(request, "pending", agent_id=aid))
     return {"available": True, "agent_id": aid, "row": row, "last_tick": g.get("last_tick"), "next_tick": g.get("next_tick"),
             "tick": g.get("tick") or {}, "conversations": [P.mgr_conv(c) for c in g.get("conversations") or [] if isinstance(c, dict)]}
 

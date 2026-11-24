@@ -39,7 +39,7 @@ from . import present as P
 from .app import ACTIONS, GRANT_FOR, _stream, err_text, heavy_approval, plan_action, post_guard, questions, render, rpc, with_wait
 
 NO_STORE = {"Cache-Control": "no-store"}
-STATUSES = ("working", "waiting", "waiting_human", "asking", "idle", "error", "paused")
+STATUSES = ("working", "waiting", "waiting_human", "asking", "with_manager", "idle", "error", "paused")
 TASK_KEYS = ("ready", "running", "review", "blocked")
 TASK_MAX = 80
 PREVIEW_MAX = 120  # preview approval / chữ câu hỏi
@@ -171,10 +171,12 @@ def build_state(snap: dict[str, Any], qs: list[dict[str, Any]], teams: list[dict
                 tasks: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Thuần: gộp kết quả RPC thành JSON `/office/state` (chỉ các khoá trong hợp đồng; chữ tự do đã cắt)."""
     h = snap.get("hub") or {}
-    asking = {q.get("agent_id") for q in qs or [] if isinstance(q, dict)}
+    # trạng thái hiển thị + số "Cần bạn" dùng CHUNG với 2D (present.display_state / need_count): câu hỏi còn ở điều phối viên
+    # không tính là cần bạn; agent hỏi điều phối viên hiện "Chờ điều phối viên"
+    idx = P.need_index(snap.get("approvals"), qs)
     q_count: dict[str, int] = {}
     for q in qs or []:
-        if isinstance(q, dict) and q.get("agent_id"):
+        if isinstance(q, dict) and q.get("agent_id") and q.get("status") == "open":
             q_count[q["agent_id"]] = q_count.get(q["agent_id"], 0) + 1
     membership: dict[str, tuple[str, str]] = {}
     task_counts = dict.fromkeys(TASK_KEYS, 0)
@@ -196,8 +198,8 @@ def build_state(snap: dict[str, Any], qs: list[dict[str, Any]], teams: list[dict
         if not aid:
             continue
         status = r.get("status") if r.get("status") in STATUSES else "idle"
-        if aid in asking and status in ("idle", "error"):  # như overview_data: chờ người trả lời câu hỏi
-            status = "asking"
+        status = P.agent_state({"id": r.get("id"), "status": status}, idx)
+        status = status if status in STATUSES else "idle"
         team, team_role = membership.get(aid, (None, None))
         agents.append({
             "id": aid,
@@ -229,6 +231,7 @@ def build_state(snap: dict[str, Any], qs: list[dict[str, Any]], teams: list[dict
             "queued": int(h.get("queued") or 0),
             "rate_limited": _rate_limited(h.get("rate_limit")),
             "approvals_waiting_human": int(h.get("approvals_waiting_human") or 0),
+            "need": P.need_count(snap.get("approvals"), qs),  # = huy hiệu "Cần bạn" của menu 2D
             "cost_today_usd": _num(h.get("cost_today_usd")),
         },
         "manager_id": safe_id(manager_id),
