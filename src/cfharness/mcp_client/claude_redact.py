@@ -7,7 +7,7 @@ in lại giá trị (vd header) ra stdout → event/log/DB. Module này đọc c
 
 - Nguồn: cấu hình mặc định (`claude_source.claude_json_path(None)` + `remote_settings_path(None)`) và MỌI thư mục tài khoản token
   `HUB_HOME/claude-config/a_xxxxxxxx/`.
-- Chọn giá trị theo cùng heuristic tách secret của `importer` (`_Extractor`: khoá nhạy cảm, `Bearer …`, entropy cao — env, header,
+- Chọn giá trị theo cùng heuristic `secret_values` (`_Extractor`: khoá nhạy cảm, `Bearer …`, entropy cao — env, header,
   args, query của url) + mật khẩu userinfo của url. Ngắn hơn `redact.MIN_VALUE_LEN` thì bỏ (redact tự lọc).
 - Làm mới rẻ: chỉ đọc lại file khi `(mtime_ns, size)` đổi (`refresh`), gọi lúc `Hub.start` và mỗi lần run khởi động.
 - KHÔNG BAO GIỜ log/trả về giá trị — `refresh` chỉ trả số file đã đọc lại.
@@ -31,7 +31,7 @@ MAX_BYTES = 16 * 1024 * 1024
 
 def entry_secret_values(entry: Any) -> list[str]:
     """Giá trị trông như secret trong MỘT entry mcpServers (hàm thuần). Không bao giờ log kết quả."""
-    from .importer import _Extractor
+    from .secret_values import _Extractor
 
     if not isinstance(entry, dict):
         return []

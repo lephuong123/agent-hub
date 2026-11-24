@@ -1,5 +1,10 @@
 # Web — quản lý MCP kiểu "connectors" (wave 1, nhánh `feat/web-mcp-manage`)
 
+> **Cập nhật v0.2.32:** hub thôi tự giữ cấu hình MCP bên thứ ba (docs/dev-notes/plan-mcp-claude-native.md, PR6). Đã gỡ: danh mục +
+> cài (`/mcp/browse*`, `mcp_client/catalog.py`, RPC `mcp.catalog`), form thêm tay / nhập từ Claude Code, nút «Kiểm tra» (`mcp.probe`),
+> phần sửa lệnh/URL/env/header ở `/mcp/{name}` (form chỉ còn chính sách: tin cậy, include/exclude/require_approval, mô tả, timeout).
+> Thêm server: Cài đặt › Tài khoản Claude › «MCP của tài khoản». Phần dưới là lịch sử thiết kế wave 1.
+
 Mục tiêu: trang MCP trên web làm được những gì CLI `cfharness mcp edit|annotate|agent-config` làm, cộng duyệt danh mục và cài.
 Code: `web/mcp_pages.py` (route + action), `mcp_client/catalog.py` (danh mục), RPC `mcp.catalog` (`mcp_server/rpc.py`).
 Test: `tests/test_web_mcp.py`, `tests/test_mcp_catalog.py` (không mạng thật, không chạy server MCP, không gọi `claude`).

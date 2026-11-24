@@ -168,7 +168,7 @@ async def test_totp_login_secure_cookie_origin_and_replay(env):
     assert r.status_code == 403
     code = _code(env.paths)
     r = await c.post("/login", data={"code": code}, headers=ORIG_HDR)
-    assert r.status_code == 303 and r.headers["location"].startswith("/#k=")
+    assert r.status_code == 303 and r.headers["location"].startswith("/manager#k=")
     sc = r.headers["set-cookie"]
     assert COOKIE in sc and "secure" in sc.lower() and "httponly" in sc.lower() and "samesite=strict" in sc.lower()
     # dùng lại cùng mã (trong cửa sổ) → từ chối

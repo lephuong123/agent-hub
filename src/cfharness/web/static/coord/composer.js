@@ -131,7 +131,7 @@ export function Composer({ p }) {
           onKeyDown=${(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fin.current.click(); } }}><${Icon} n="clip" /><span class="sr-only">Đính kèm tệp</span></label>
         <button type="button" class="btn ghost sm icon voice-mic" id="mgr-mic" data-voice-for="mgr-text" hidden aria-pressed="false" aria-label="Nhập bằng giọng nói"
           title="Nói để nhập (tiếng Việt) — bấm để bật/tắt, giữ để nói-thả; hoặc giữ Space khi ô trống"><${Icon} n="mic" /></button>
-        <span class="composer-hint">Enter để gửi · Shift+Enter xuống dòng · Esc dừng · giữ Space (ô trống) để nói · kéo–thả hoặc dán ảnh để đính kèm</span>
+        <span class="composer-hint" title="Enter để gửi · Shift+Enter xuống dòng · Esc dừng · giữ Space (ô trống) để nói · kéo–thả hoặc dán ảnh để đính kèm">Enter gửi · Shift+Enter xuống dòng · Esc dừng</span>
         <button type="button" class="btn ghost sm icon voice-wave" id="mgr-voice" hidden aria-pressed="false" aria-label="Trò chuyện bằng giọng nói"
           title="Trò chuyện bằng giọng nói — nói, điều phối viên trả lời và đọc to"><${Icon} n="wave" /></button>
         <button class=${"btn primary send" + (canStop ? " stop" : "")} type="submit" id="mgr-send" title=${canStop ? "Dừng trả lời (Esc)" : "Gửi"} aria-label=${canStop ? "Dừng trả lời" : "Gửi"}

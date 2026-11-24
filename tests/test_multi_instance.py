@@ -285,7 +285,7 @@ async def test_two_hubs_same_host_do_not_share_session_cookie(tmp_path):
         app = create_app(hp, auth=auth, port=port)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=f"http://cfharness.localhost:{port}") as c:
             r = await c.get("/login?t=" + auth.mint())
-            assert r.status_code == 303 and r.headers["location"].startswith("/#k=")  # khoá phiên vẫn ngoài cookie
+            assert r.status_code == 303 and r.headers["location"].startswith("/manager#k=")  # khoá phiên vẫn ngoài cookie
             sc = r.headers["set-cookie"]
             assert sc.startswith(cookie_name(hp) + "=") and "httponly" in sc.lower()
             names.append(cookie_name(hp))
@@ -298,10 +298,11 @@ def test_removed_oauth_keys_in_old_config_are_harmless(tmp_path):
 
     hp = P.HubPaths(tmp_path / "hub")
     hp.ensure()
-    hp.config.write_text("mcp:\n  oauth_proxy:\n    enabled: true\n    port: 0\nmcp_client:\n  oauth_callback_port: 33418\n", encoding="utf-8")
+    hp.config.write_text("mcp:\n  probe_timeout_s: 45\n  oauth_proxy:\n    enabled: true\n    port: 0\nmcp_client:\n  oauth_callback_port: 33418\n",
+                         encoding="utf-8")
     cfg = HubConfig(hp.config)
-    assert "oauth_proxy" not in DEFAULTS["mcp"] and "mcp_client" not in DEFAULTS
-    assert cfg.get("mcp.probe_timeout_s") == 30 and cfg.get("mcp.oauth_proxy.enabled") is True  # đọc được, không ai dùng
+    assert "oauth_proxy" not in DEFAULTS["mcp"] and "mcp_client" not in DEFAULTS and "probe_timeout_s" not in DEFAULTS["mcp"]
+    assert cfg.get("mcp.probe_timeout_s") == 45 and cfg.get("mcp.oauth_proxy.enabled") is True  # đọc được, không ai dùng
 
 
 # ============================================================================ 6. biến môi trường chỉ-cho-test

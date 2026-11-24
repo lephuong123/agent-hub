@@ -158,7 +158,7 @@ async def mcp_ctx(request: Request, account_id: str) -> dict[str, Any] | None:
         servers.append({**s, "status_label": label, "status_tone": tone, "oauth": s.get("transport") in ("http", "sse")})
     logins = [lg for lg in st.get("logins") or [] if isinstance(lg, dict) and str(lg.get("url") or "").startswith("https://")]
     return {"servers": servers, "login": logins[0] if logins else None, "checked_at": st.get("checked_at"), "error": st.get("error"),
-            "secrets_ok": account_id != "machine"}
+            "secrets_ok": True}  # header lưu trong cấu hình claude của tài khoản — agent bị chặn đọc (claude_files, luật claude_credentials)
 
 
 async def claudeai_ctx(request: Request) -> dict[str, Any] | None:

@@ -46,7 +46,7 @@ DELEGABLE = ("file", "git", "mcp", "db", "system")
 HINTS = {
     "ssrf_private_resolved": "host dev trỏ về IP nội bộ → /trust-host {agent} <host>",
     "mcp_destructive_hint": "tool MCP bị server tự gắn destructive → /mcp-safe <server> <tool-glob>",
-    "mcp_unknown_tool": "tool MCP chưa probe → cfharness mcp probe <server>, hoặc /mcp-safe",
+    "mcp_unknown_tool": "tool MCP chưa gắn nhãn → cfharness mcp annotate <server> <tool> --read-only|--destructive, hoặc /mcp-safe",
     "delete_not_run_created": "xoá thư mục tạm/do task tạo → đã tự cho phép khi guard.task_created_deletes bật (balanced)",
     "code_delete_api": "script của repo bị coi là xoá file → đã tự cho phép khi script đã commit (guard.trusted_repo_scripts)",
     "write_outside_workspace": "ghi ngoài workspace → task đặt extra_write_roots; worktree do task tạo đã tự cho phép (balanced)",

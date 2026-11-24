@@ -112,7 +112,7 @@ MACHINE_STATE = ("repo_locks", "repo_locks_shared", "browser_locks", "rate_limit
                  "accounts.claudeai",  # phiên claude.ai theo tài khoản — thư mục claude-config/ không bao giờ đi theo gói (gắn với máy)
                  "mcp.claude_seen",  # server MCP lạ đã gặp ở run bỏ strict, theo thư mục cấu hình claude của MÁY này (runs._remember_claude_seen)
                  "mcp.claude_status",  # trạng thái MCP do claude quản lý theo tài khoản (mcp_client/claude_admin.py) — token ở Keychain máy cũ
-                 # PR4: server đang chờ đăng nhập claude để xoá token OAuth hub (mcp_client/migrate.py) — lượt đăng nhập là của máy cũ;
+                 # `mcp.migrations`: hàng chờ xoá token OAuth hub sau khi chuyển (bản ≤ v0.2.30) — của máy cũ;
                  # danh sách MCP nguồn claude cần thêm/đăng nhập lại của lần nhập trước (MCP_CLAUDE_STATE)
                  "mcp.migrations", "import_mcp_claude",
                  "audit_watch.active",  # L5: cảnh báo audit đang bật của máy nguồn (máy đích tự học lại); `audit.archive_cutoff` ĐI CÙNG DB (khớp audit-archive/)

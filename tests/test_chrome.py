@@ -116,29 +116,35 @@ def _spec_for(hub, aid):
     return hub.runs._prepare_spec(run, hub.store.get_agent(aid))
 
 
-def _add_playwright(hub):
-    hub.mcp.add({"name": "playwright", "transport": "stdio", "command": "npx", "args": ["@playwright/mcp@latest"], "trust": "trusted"})
+def _add_playwright(hub, claude_mcp):
+    # MCP bên thứ ba do claude giữ (v0.2.32): server trong cấu hình claude của tài khoản + dòng chính sách trong registry
+    claude_mcp("playwright", {"command": "npx", "args": ["@playwright/mcp@latest"]})
+    hub.mcp.add({"name": "playwright", "transport": "stdio", "trust": "trusted"})
 
 
-async def test_prepare_spec_chrome_drops_playwright_auto_keeps(hub):
-    _add_playwright(hub)
+def _pw_dropped(spec) -> bool:
+    """Playwright bị gỡ khỏi ngữ cảnh run (claude vẫn nạp server, `--disallowedTools` + guard chặn gọi)."""
+    return "mcp__playwright__*" in (spec.tool_policy.get("disallowed_tools") or []) and "playwright" not in spec.allowed_mcp_servers
+
+
+async def test_prepare_spec_chrome_drops_playwright_auto_keeps(hub, claude_mcp):
+    _add_playwright(hub, claude_mcp)
     _agent(hub, "c", "chrome", ["playwright"])
     _agent(hub, "u", "auto", ["playwright"])
     _agent(hub, "n", "none", ["playwright"])
     _agent(hub, "d", None, ["playwright"])  # không đặt → mặc định hub (auto)
     sc, su, sn = _spec_for(hub, "c"), _spec_for(hub, "u"), _spec_for(hub, "n")
-    servers = lambda s: set(json.loads(Path(s.mcp_config_path).read_text(encoding="utf-8"))["mcpServers"])  # noqa: E731
-    assert "playwright" not in servers(sc) and "playwright" not in sc.allowed_mcp_servers
+    assert _pw_dropped(sc)
     assert CHROME_SERVER in sc.allowed_mcp_servers  # server dynamic của --chrome không phải isolation.violation
-    assert "playwright" in servers(su) and CHROME_SERVER in su.allowed_mcp_servers
-    assert "playwright" in servers(sn) and CHROME_SERVER not in sn.allowed_mcp_servers
+    assert not _pw_dropped(su) and CHROME_SERVER in su.allowed_mcp_servers
+    assert not _pw_dropped(sn) and CHROME_SERVER not in sn.allowed_mcp_servers
     v = "2.1.310"
     assert "--chrome" in build_argv(sc, hub.config.get("runtime.claude"), v)[0]
     assert "--chrome" in build_argv(su, hub.config.get("runtime.claude"), v)[0]
     argv_n = build_argv(sn, hub.config.get("runtime.claude"), v)[0]
     assert "--chrome" not in argv_n and "--no-chrome" in argv_n
     sd = _spec_for(hub, "d")
-    assert "playwright" in servers(sd) and CHROME_SERVER in sd.allowed_mcp_servers and "--chrome" in build_argv(sd, hub.config.get("runtime.claude"), v)[0]
+    assert not _pw_dropped(sd) and CHROME_SERVER in sd.allowed_mcp_servers and "--chrome" in build_argv(sd, hub.config.get("runtime.claude"), v)[0]
 
 
 async def test_default_mode_auto_for_unset_agents_explicit_wins(hub):
@@ -169,8 +175,8 @@ async def test_prompt_block_auto_and_chrome(hub):
     assert "untrusted data" in prompt_block("auto") and prompt_block("none") == prompt_block("playwright") == ""
 
 
-async def test_kill_switch(hub):
-    _add_playwright(hub)
+async def test_kill_switch(hub, claude_mcp):
+    _add_playwright(hub, claude_mcp)
     _agent(hub, "c", "chrome", ["playwright"])
     with pytest.raises(ValueError):
         hub.config.set("runtime.claude.chrome.enabled", "no")
@@ -182,7 +188,7 @@ async def test_kill_switch(hub):
     argv = build_argv(s, hub.config.get("runtime.claude"), "2.1.310")[0]
     assert "--chrome" not in argv and "--no-chrome" in argv
     assert "claude-in-chrome" not in (s.system_prompt or "")
-    assert "playwright" in json.loads(Path(s.mcp_config_path).read_text(encoding="utf-8"))["mcpServers"]  # chrome tắt → Playwright quay lại
+    assert not _pw_dropped(s)  # chrome tắt → Playwright quay lại
 
 
 async def test_kill_switch_and_not_enabled_agent_block_chrome_tools(hub):

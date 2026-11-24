@@ -1,0 +1,15 @@
+{#- Vùng HỘI THOẠI ở thanh bên mọi trang (trừ /manager — island vẽ danh sách của nó vào #coord-convs). Nạp lười bằng
+    GET /partials/manager/side (manager.partial_side): luồng đang mở + hội thoại web gần đây. Chữ là dữ liệu: autoescape. -#}
+{%- macro conv_row(c, on=False) -%}
+<li><a href="/manager?c={{ c.id|urlencode }}" class="{{ 'on' if on }}" title="{{ c.title or ('Cuộc trò chuyện ' ~ (c.updated_at|ts)) }}"><span class="ct">{% if c.running %}<span class="ws-dot run" aria-hidden="true"></span><span class="sr-only">Đang chạy. </span>{% endif %}{{ c.title or ('Cuộc trò chuyện ' ~ (c.updated_at|ts)) }}{% if c.unread and not on %}<span class="ws-unread">{{ c.unread }}</span>{% endif %}</span><span class="cm">{{ c.updated_at|ago }}{% if c.count %} · {{ c.count }} tin{% endif %}</span></a></li>
+{%- endmacro -%}
+<div class="nav-group ws-head"><span>Hội thoại</span><a class="ws-add" href="/manager?new=1" title="Hội thoại mới" aria-label="Hội thoại mới">＋</a></div>
+{% if active %}
+<div class="side-sub">Luồng đang mở</div>
+<ul class="mgr-convs side-ws">{% for w in active %}<li><a href="/manager?w={{ w.id|urlencode }}" title="{{ (w.label or w.title) ~ (' — ' ~ w.dot_label if w.dot_label else '') }}"><span class="ct"><span class="ws-dot {{ w.dot or 'none' }}" aria-hidden="true"></span>{% if w.dot_label %}<span class="sr-only">{{ w.dot_label }}. </span>{% endif %}{{ w.title or w.label or w.id }}{% if w.unread %}<span class="ws-unread">{{ w.unread }}</span>{% endif %}</span></a></li>{% endfor %}
+{% if more %}<li><a href="/manager" class="side-more"><span class="ct">+{{ more }} luồng khác</span></a></li>{% endif %}</ul>
+{% endif %}
+<div class="side-sub">Gần đây</div>
+<ul class="mgr-convs">{% for c in recent %}{{ conv_row(c) }}{% else %}<li class="muted small side-none">Chưa có hội thoại — <a href="/manager?new=1">bắt đầu trò chuyện</a>.</li>{% endfor %}</ul>
+{% if oob %}<span id="upd-dot" class="menu-dot{{ '' if update_available else ' off' }}" hx-swap-oob="true" title="Có bản cập nhật" aria-hidden="true"></span>
+<span id="upd-item" class="upd-flag{{ '' if update_available else ' off' }}" hx-swap-oob="true">có bản mới</span>{% endif %}

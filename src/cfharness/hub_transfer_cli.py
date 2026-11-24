@@ -402,7 +402,7 @@ def _import(ctx: Any) -> int:
                      + (" + TOTP web" if rs.get("totp") else "") + (" + token MCP HTTP" if rs.get("mcp_tokens") else ""))
     if rs.get("skipped_mode"):
         lines.append(f"Secret bỏ theo chế độ {r['mode']}: {', '.join(rs['skipped_mode'])} — bot Telegram/Slack RIÊNG (`cfharness notify … setup`), "
-                     "MCP OAuth đăng nhập lại (`cfharness mcp login <tên>`)")
+                     "MCP OAuth đăng nhập lại (`cfharness mcp claude login <tên>`)")
     if rs.get("kept_target"):
         lines.append(f"Giữ nguyên của máy này (khác gói): {', '.join(rs['kept_target'])}")
     if r.get("missing_secrets"):
@@ -492,7 +492,6 @@ def cmd_doctor(ctx: Any) -> int:
 
 def _doctor(ctx: Any) -> int:
     from . import hub_doctor as D
-    from .home_migrate import daemon_running
 
     a = ctx.args
     if getattr(a, "cleanup", False):
@@ -500,11 +499,7 @@ def _doctor(ctx: Any) -> int:
     if getattr(a, "older_than", None) is not None:
         print("lỗi: --older-than chỉ dùng cùng --cleanup", file=sys.stderr)
         return 1
-    probe = None
-    if a.probe and daemon_running(ctx.paths.home) is not None:
-        def probe(name: str) -> dict:
-            return ctx.call("mcp.probe", {"name": name, "timeout_s": 20})
-    rep = D.run(ctx.paths, probe=bool(a.probe), mcp_probe=probe)
+    rep = D.run(ctx.paths, probe=bool(a.probe))
     ctx.out(rep, D.text(rep))
     return 0 if rep["ok"] else 1
 

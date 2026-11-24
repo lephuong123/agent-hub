@@ -52,7 +52,7 @@ async def test_office_state_polling_does_not_extend_session(env):
 @need_page
 async def test_office_page_no_inline_script_and_csp_unchanged(env):
     await env.login()
-    ref = await env.client.get("/")
+    ref = await env.client.get("/activity")
     r = await env.client.get("/office")
     assert r.status_code == 200
     assert not re.search(r"<script(?![^>]*\bsrc=)[^>]*>", r.text)
@@ -74,7 +74,7 @@ async def test_office_page_is_standalone_canvas_only(env):
     assert re.search(r'<script type="module" src="/static/office\.js[^"]*"></script>', html)
     assert 'id="office-canvas"' in html and 'data-state="/office/state"' in html and 'data-sse="/sse/office"' in html
     m = re.search(r'<a [^>]*id="office-to-2d"[^>]*>', html)
-    assert m and 'href="/"' in m.group(0)
+    assert m and 'href="/manager"' in m.group(0)
     # phần chữ chỉ cho trình đọc màn hình: nằm trong khối sr-only
     sr = html.index('class="sr-only"')
     for i in ('id="office-list"', 'id="office-hud"', 'id="office-panel"', 'id="office-expired"'):
@@ -321,7 +321,7 @@ def test_mode_switch_static_logic():
     assert early.index('removeItem("cfh_view")') < early.index('location.replace("/office")')
     assert 'localStorage.removeItem(KEY); localStorage.removeItem("cfh_view")' in app_js  # đăng xuất
     assert "[data-view-toggle]" in app_js and '"aria-pressed"' in app_js
-    assert 'view_toggle(\'view-toggle\'' in base and "data-view-toggle" in base and 'href="{{ \'/\' if on3d else \'/office\' }}"' in base
+    assert 'view_toggle(\'view-toggle\'' in base and "data-view-toggle" in base and 'href="{{ \'/manager\' if on3d else \'/office\' }}"' in base
     assert ".view-toggle[aria-pressed=\"true\"]" in css
 
 
@@ -330,7 +330,9 @@ async def test_view_toggle_rendered_as_link_on_2d_pages(env):
     html = (await env.client.get("/agents")).text
     m = re.search(r'<a href="/office" id="view-toggle"[^>]*aria-pressed="false"[^>]*>', html)
     assert m and "data-view-toggle" in m.group(0)
-    assert 'id="view-toggle-m"' in html
+    # màn nhỏ: nút chuyển nằm trong sheet "Thêm" của tabbar (header mobile chỉ còn logo + viết mới)
+    sheet = html.split('class="tab-sheet"', 1)[1].split("</details>", 1)[0]
+    assert re.search(r'<a href="/office" data-view-toggle[^>]*aria-pressed="false"', sheet)
 
 
 # =========================================================================== giai đoạn 2: duyệt + câu hỏi + chat trong 3D

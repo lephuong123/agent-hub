@@ -7,8 +7,6 @@ IDN/punycode, IP literal, cổng, hoa/thường, dấu chấm cuối, `\\`) và 
 from __future__ import annotations
 
 import asyncio
-import json
-from pathlib import Path
 
 import pytest
 
@@ -304,15 +302,16 @@ async def test_chrome_actions_not_set_unchanged(hub):
 
 
 @pytest.mark.parametrize("browser", ["auto", "none", "playwright", None])
-async def test_playwright_dropped_when_set(hub, browser):
-    hub.mcp.add({"name": "pw", "transport": "stdio", "command": "npx", "args": ["@playwright/mcp@latest"], "trust": "trusted"})
+async def test_playwright_dropped_when_set(hub, browser, claude_mcp):
+    claude_mcp("pw", {"command": "npx", "args": ["@playwright/mcp@latest"]})  # nhận Playwright theo lệnh trong cấu hình claude
+    hub.mcp.add({"name": "pw", "transport": "stdio", "trust": "trusted"})
     tp = {"browser": browser} if browser else {}
     hub.agents.create({"id": "p", "name": "p", "mcp_servers": ["pw"], "tool_policy": {**tp, "web_allow_domains": ALLOW}})
     hub.agents.create({"id": "q", "name": "q", "mcp_servers": ["pw"], "tool_policy": tp})
-    servers = lambda s: set(json.loads(Path(s.mcp_config_path).read_text(encoding="utf-8"))["mcpServers"])  # noqa: E731
     sp, sq = _spec_for(hub, "p"), _spec_for(hub, "q")
-    assert "pw" not in servers(sp) and "pw" not in sp.allowed_mcp_servers  # Playwright không áp được luật URL → gỡ
-    assert "pw" in servers(sq)  # chưa đặt = như cũ
+    # Playwright không áp được luật URL → gỡ khỏi ngữ cảnh (server do claude nạp vẫn connect, guard chặn gọi)
+    assert "mcp__pw__*" in sp.tool_policy["disallowed_tools"] and "pw" not in sp.allowed_mcp_servers
+    assert "mcp__pw__*" not in (sq.tool_policy.get("disallowed_tools") or []) and "pw" in sq.allowed_mcp_servers  # chưa đặt = như cũ
 
 
 async def test_playwright_tool_refused(hub):

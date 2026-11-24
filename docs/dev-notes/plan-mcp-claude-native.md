@@ -1,6 +1,7 @@
 # Plan: chuyển xử lý MCP bên thứ ba sang `claude` (MCP do claude quản lý theo tài khoản)
 
-Trạng thái: PLAN (2026-11-20). PR1 (#171), PR2, PR3, PR4 giai đoạn A + B (gỡ code OAuth/proxy, 2026-11-21) đã làm; PR5 chưa làm. Phụ thuộc nhánh connector theo tài khoản (`accounts/claude_config.py`, v0.2.27).
+Trạng thái: PLAN (2026-11-20). PR1 (#171), PR2, PR3, PR4 giai đoạn A + B (gỡ code OAuth/proxy, 2026-11-21) đã làm; PR5 một phần;
+PR6 (gỡ hẳn đường nguồn hub, 2026-11-24, v0.2.32) đã làm. Phụ thuộc nhánh connector theo tài khoản (`accounts/claude_config.py`, v0.2.27).
 
 ## 1. Kết luận phân tích
 
@@ -231,6 +232,25 @@ bằng `--drop-hub-token`.
 phiên bản), config `mcp.oauth_proxy.*` + `mcp_client.oauth_callback_port`, `inject_bearer`/`ensure_fresh_for` trong runs/registry, nhánh OAuth
 của doctor/catalog/`mcp add --oauth`, test OAuth/proxy (~30); chuyển tự động lúc daemon lên (hoặc chặn run) cho server còn sót; CHANGELOG
 "Lưu ý khi cập nhật".
+
+### PR6 — Gỡ hẳn đường "nguồn hub" (2026-11-24, nhánh `chore/mcp-hub-source-removal`, v0.2.32)
+Người dùng chọn chuyển nốt server stdio (`fast-browser`, `playwright`, `video-context` — vốn nhập từ `~/.claude.json`, đã có sẵn trong
+cấu hình claude của tài khoản `machine`) rồi gỡ toàn bộ code + UI MCP nguồn hub:
+- Migration v34 `mcp_client/schema.to_claude_source`: mọi dòng `manual`/`claude-import` → `claude` tại chỗ (giữ tên/trust/tools/annotations/
+  `annotations_cache`; bỏ command/args/env/headers/auth; url → host; url còn `${…}` → bỏ). Dòng trỏ về chính hub → xoá mềm (H-18 — sau
+  khi bỏ lệnh không còn nhận ra được). `McpServerConfig` chỉ còn nguồn claude; đọc dòng cũ thì bỏ trường kiểu hub (`_drop_legacy`).
+- Gỡ: `mcp_client/catalog.py`, `importer.py` (heuristic secret → `secret_values.py` cho `claude_redact`), `probe.py`, `scan.py`,
+  `legacy_oauth.py`, `migrate.py`; RPC `mcp.probe|import|catalog|migrate_to_claude` + stub `mcp.oauth_*`; CLI `mcp import|probe|test|
+  login|logout|migrate-to-claude`, `mcp add -- <lệnh> / --url / --env / --header` (in hướng dẫn `mcp claude add`); web `/mcp/browse*`,
+  `mcp_add|mcp_probe|mcp_import|mcp_migrate_claude`, template `_mcp_migrate|mcp_browse|mcp_install.html`; `runs._agent_mcp_servers`,
+  `_refuse_legacy_oauth_mcp` (mcp.json chỉ còn hub-guard/hub-self); doctor `_mcp` (probe) + `mcp_hub_oauth`; config `mcp.probe_timeout_s`.
+- `mcp.add` = đăng ký server có sẵn trong cấu hình claude (không nói nguồn mà có lệnh/header → lỗi hướng dẫn); `mcp.update` chỉ trust/tools/
+  description/timeout_s. `mcp claude add` cho header/env cả ở cấu hình mặc định (PR1 đã chặn agent đọc `~/.claude.json`).
+- Chrome / allowlist domain: Playwright gán cho agent bị gỡ bằng `--disallowedTools mcp__<x>__*` (nhận theo lệnh trong cấu hình claude —
+  `claude_source.playwright_servers`), không còn bỏ khỏi mcp.json.
+- `cfharness doctor <agent>`: MCP gán có trong cấu hình claude của tài khoản đang dùng + trạng thái lần kiểm gần nhất (thay probe).
+- Lệch: web chưa có form thêm server stdio (CLI `mcp claude add <tên> -- <lệnh>`); `transfer_os.mark_mcp` (đánh dấu lệnh thiếu khi nhập
+  gói cũ) giữ — vô hại với dòng mới (không có lệnh).
 
 ### PR5 — Điều phối viên + doctor
 - `mcp_registry_list` hiện cả `source`; khung `read_only_trusted` áp như server hub (dựa annotation thủ công).

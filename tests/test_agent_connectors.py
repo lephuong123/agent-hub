@@ -58,9 +58,13 @@ def test_tool_policy_connectors_normalized():
             ToolPolicy(connectors=bad)
 
 
-async def _agent_run(d, connectors):
-    d.hub.mcp.add({"name": "docs", "transport": "stdio", "command": "/bin/echo", "trust": "trusted"})
-    d.hub.agents.create({"id": "w1", "name": "w1", "model": "haiku", "mcp_servers": ["docs"],
+async def _agent_run(d, connectors, add_mcp=None):
+    mcp = []
+    if add_mcp is not None:  # MCP bên thứ ba do claude giữ (v0.2.32): server phải có trong cấu hình claude của tài khoản
+        add_mcp("docs")
+        d.hub.mcp.add({"name": "docs", "transport": "stdio", "trust": "trusted"})
+        mcp = ["docs"]
+    d.hub.agents.create({"id": "w1", "name": "w1", "model": "haiku", "mcp_servers": mcp,
                          "tool_policy": {"tools": TOOLS, "connectors": connectors}})
     res = await rpc(d, "run.start", {"agent": "w1", "prompt": "hi"})
     run_id = res.get("run_id") or res.get("id")
@@ -68,8 +72,8 @@ async def _agent_run(d, connectors):
     return [s for s in d.script.specs if s.run_id == run_id][-1], run_id
 
 
-async def test_agent_run_spec_with_connectors(d, user_home):
-    spec, run_id = await _agent_run(d, ["Atlassian", "Slack"])
+async def test_agent_run_spec_with_connectors(d, user_home, claude_mcp):
+    spec, run_id = await _agent_run(d, ["Atlassian", "Slack"], claude_mcp)
     assert spec.isolation_overrides == {"setting_sources": "user", "strict_mcp_config": False}
     assert "claude.ai " in (spec.allowed_mcp_prefixes or [])
     assert "playwright" in spec.allowed_mcp_servers

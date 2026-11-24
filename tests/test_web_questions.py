@@ -132,7 +132,7 @@ async def test_overview_strip_one_click_answers_and_agent_marked_asking(qenv):
     e = qenv
     await e.login()
     q = _ask(e)
-    for path in ("/", "/partials/overview"):
+    for path in ("/activity", "/partials/overview"):
         html = (await e.client.get(path)).text
         card = html.split(f'id="q-{q["id"]}"', 1)[1].split("</article>", 1)[0]
         assert 'action="/do/question_answer"' in card and '<input type="hidden" name="keys" value="1">' in card
@@ -159,8 +159,9 @@ async def test_new_layout_sidebar_groups_and_inbox_nav(qenv):
     await e.login()
     html = (await e.client.get("/approvals")).text
     nav = re.search(r'<nav class="nav".*?</nav>', html, re.S).group(0)
-    for g in ("Làm việc", "Đội ngũ", "Học &amp; chất lượng", "Hệ thống"):
-        assert g in nav
+    assert "Luồng việc" in nav  # chat-first: thanh bên chính chỉ còn nhóm luồng việc (cấu hình vào qua Cài đặt)
+    for g in ("Học &amp; chất lượng", "Hệ thống"):
+        assert g not in nav
     assert re.search(r'href="/inbox" class="on"', nav)  # trang Duyệt thuộc mục "Cần bạn"
     assert 'class="tabbar"' in html and re.search(r"/static/icons\.svg\?v=[0-9a-f]+#i-", html)
     r = await e.client.get("/static/icons.svg")

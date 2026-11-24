@@ -109,6 +109,17 @@ def _entries(servers: dict[str, Any], **extra: Any) -> dict[str, dict[str, Any]]
     return out
 
 
+def playwright_servers(config_dir: Path | None) -> set[str]:
+    """Tên server Playwright trong mcpServers user-scope của `.claude.json` (tên hoặc lệnh/đối số/URL chứa 'playwright' —
+    `browser.is_playwright_server`). Chỉ trả TÊN. Dùng để gỡ Playwright khỏi run chế độ Chrome / allowlist domain (runs.py)."""
+    from ..browser import is_playwright_server
+
+    servers = _json_obj(claude_json_path(config_dir)).get("mcpServers")
+    if not isinstance(servers, dict):
+        return set()
+    return {n for n, e in servers.items() if isinstance(n, str) and isinstance(e, dict) and is_playwright_server(n, e)}
+
+
 def _json_obj(p: Path) -> dict[str, Any]:
     try:
         if p.stat().st_size > MAX_BYTES:
@@ -183,7 +194,7 @@ def register(hub: Any, cfg: dict[str, Any], account_id: Any = None, *, info: dic
     của `.claude.json` của tài khoản (mặc định: đang dùng); transport + host lấy từ đó — bỏ mọi command/url/env/header/auth người
     truyền. Không probe. `reuse`: đã có dòng nguồn claude (kể cả đã xoá mềm → khôi phục) → trả dòng đó (một dòng dùng chung mọi tài
     khoản); không `reuse` → trùng tên = Conflict của registry (như `mcp.add`)."""
-    from ..errors import Conflict, HubError
+    from ..errors import HubError
 
     name = str(cfg.get("name") or "")
     aid, cdir = account_config_dir(hub, str(account_id) if account_id else None)
@@ -198,8 +209,6 @@ def register(hub: Any, cfg: dict[str, Any], account_id: Any = None, *, info: dic
         raise HubError(f"MCP '{name}' trong cấu hình claude trỏ về chính hub — không đăng ký làm MCP của agent (H-18)")
     row = hub.mcp.get_row(name, include_deleted=True) if reuse else None
     if row is not None:
-        if (row.get("config") or {}).get("source") != "claude":
-            raise Conflict(f"MCP server '{name}' đã tồn tại với nguồn hub" + (" (đang xoá mềm)" if row.get("deleted_at") else ""))
         out = hub.mcp.restore(name) if row.get("deleted_at") else hub.mcp.show(name)
         out["account"] = aid
         out["existing"] = True
@@ -213,4 +222,4 @@ def register(hub: Any, cfg: dict[str, Any], account_id: Any = None, *, info: dic
     return out
 
 
-__all__ = ["all_servers", "managed_servers", "remote_settings_path", "account_config_dir", "account_label", "claude_json_path", "default_claude_json", "read_servers", "register", "tool_server_name"]
+__all__ = ["all_servers", "managed_servers", "playwright_servers", "remote_settings_path", "account_config_dir", "account_label", "claude_json_path", "default_claude_json", "read_servers", "register", "tool_server_name"]

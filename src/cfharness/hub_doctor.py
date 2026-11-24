@@ -3,7 +3,7 @@
 
 Kiểm: `claude` trên PATH + phiên bản so `runtime.claude.tested_versions` + đăng nhập (secret `CLAUDE_CODE_OAUTH_TOKEN`/`CLAUDE_ACCT_*`, cờ
 `auth_block`; `--probe` mới chạy `claude auth status` — không bao giờ gọi model), `${NAME}` trong config.yaml + cấu hình MCP có secret/env,
-MCP (đánh dấu thiếu lệnh của lần nhập, OAuth chưa kết nối; `--probe` + daemon chạy → `mcp.probe` từng server), Telegram/Slack bật + có token,
+MCP (server gán thiếu trong cấu hình claude của tài khoản đang dùng / cần đăng nhập theo lần kiểm gần nhất), Telegram/Slack bật + có token,
 thư mục chung Không gian số (filehub: cần dán khoá cổng sau nhập, thư mục đồng bộ cũ cần chuyển, cổng thiếu khoá), repo workspace (có chưa, HEAD khớp
 `repos.json` của gói), agent bị tạm dừng vì thiếu workspace, lịch đang tạm dừng (clone), việc viết lại
 tri thức còn dở (`import_followups`), `imported_from`/`cloned_from`/`migrated_to`, tự khởi động (gợi ý đúng OS), `cfharness[vector]`,
@@ -11,8 +11,7 @@ tri thức còn dở (`import_followups`), `imported_from`/`cloned_from`/`migrat
 quyền file (POSIX), dung lượng HUB_HOME theo mục cấp 1 + thư mục làm việc dọn được (`housekeeping.py` — chỉ báo; dọn = `--cleanup`,
 cần daemon, RPC `hub.cleanup`). Kết quả `{ok, home, checks[{id, check, ok, level ok|info|warning|error, detail, fix?}], summary}`.
 
-RPC `hub.doctor {}` (HUMAN_ONLY: lộ đường dẫn/tên secret/repo của người; chỉ đọc, không audit) — cho web PR6; không probe mạng trong RPC
-(web gọi `mcp.probe` riêng nếu cần).
+RPC `hub.doctor {}` (HUMAN_ONLY: lộ đường dẫn/tên secret/repo của người; chỉ đọc, không audit) — cho web PR6; không probe mạng trong RPC.
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .daemon import Daemon
@@ -82,9 +81,8 @@ def _secret_names(home: Path) -> set[str]:
         return set()
 
 
-def run(paths: "HubPaths", *, probe: bool = False, claude_binary: str | None = None,
-        mcp_probe: Callable[[str], dict[str, Any]] | None = None) -> dict[str, Any]:
-    """Chạy mọi kiểm tra. `mcp_probe(name)` (chỉ khi `probe` và daemon chạy) → kết quả RPC `mcp.probe`."""
+def run(paths: "HubPaths", *, probe: bool = False, claude_binary: str | None = None) -> dict[str, Any]:
+    """Chạy mọi kiểm tra. `probe` = chạy `claude auth status` / kiểm connector (không bao giờ gọi model)."""
     from .config import HubConfig
 
     ck = _Checks()
@@ -101,7 +99,6 @@ def run(paths: "HubPaths", *, probe: bool = False, claude_binary: str | None = N
         secrets = _secret_names(home)
         _claude(ck, cfg, secrets, c, probe=probe, binary=claude_binary, home=home)
         _secret_refs(ck, paths, c, secrets)
-        _mcp(ck, c, secrets, mcp_probe if probe else None)
         _claude_mcp(ck, c, home)
         _channels(ck, cfg, secrets)
         _filehub(ck, cfg, c, home)
@@ -278,50 +275,6 @@ def _secret_refs(ck: _Checks, paths: "HubPaths", c: sqlite3.Connection | None, s
                fix="; ".join(f"cfharness secret set {n}" for n in lost[:6]))
 
 
-def _mcp(ck: _Checks, c: sqlite3.Connection | None, secrets: set[str], probe: Callable[[str], dict[str, Any]] | None) -> None:
-    if c is None or "mcp_servers" not in _tables(c):
-        return
-    rows = c.execute("SELECT name, transport, config, probe_error, last_probe_at FROM mcp_servers WHERE deleted_at IS NULL ORDER BY name").fetchall()
-    if not rows:
-        return
-    from .mcp_client.legacy_oauth import migrate_cmd, needs_migration
-
-    hub_oauth: list[str] = []
-    for r in rows:
-        name = r["name"]
-        try:
-            conf = json.loads(r["config"] or "{}") or {}
-        except ValueError:
-            conf = {}
-        if needs_migration(conf):  # OAuth do hub giữ — đã gỡ từ v0.2.28: run của agent gán server bị từ chối tới khi chuyển
-            hub_oauth.append(name)
-            ck.add(f"mcp:{name}", f"MCP {name}", False, f"{r['transport']} · OAuth do hub giữ (đã gỡ) — cần chuyển sang claude",
-                   fix=migrate_cmd(name))
-            continue
-        perr = str(r["probe_error"] or "")
-        if conf.get("source") == "claude":  # cấu hình + token do claude giữ theo tài khoản — hub không probe (plan-mcp-claude-native)
-            ck.add(f"mcp:{name}", f"MCP {name}", True, f"{r['transport']} · nguồn claude (cấu hình + token theo tài khoản Claude đang dùng)")
-            continue
-        if probe is not None:
-            try:
-                pr = probe(name) or {}
-                ck.add(f"mcp:{name}", f"MCP {name}", bool(pr.get("ok")), f"kết nối được, {len(pr.get('tools') or {})} tool" if pr.get("ok")
-                       else f"không kết nối được: {pr.get('error')}", fix=f"cfharness mcp edit {name}")
-            except Exception as e:  # best-effort: lỗi được báo trong kết quả doctor  # noqa: BLE001
-                ck.add(f"mcp:{name}", f"MCP {name}", False, f"không thử được: {e}", "warning", fix=f"cfharness mcp probe {name}")
-            continue
-        if perr.startswith("[hub]"):
-            ck.add(f"mcp:{name}", f"MCP {name}", False, perr[:200], fix=f"cfharness mcp edit {name}")
-        else:
-            ck.add(f"mcp:{name}", f"MCP {name}", True, f"{r['transport']}" + (f" · lần thử cuối lỗi: {perr[:120]}" if perr else "")
-                   + ("" if r["last_probe_at"] else " · chưa thử (--probe)"))
-    if hub_oauth:  # plan-mcp-claude-native PR4 giai đoạn B: OAuth + proxy của hub đã gỡ (v0.2.28) — server cũ không chạy tới khi chuyển
-        ck.add("mcp_hub_oauth", "MCP OAuth do hub giữ", False,
-               f"cần chuyển sang claude: {', '.join(hub_oauth[:8])} — OAuth + proxy của hub đã gỡ từ v0.2.28, run của agent gán các "
-               "server này bị từ chối", "error",
-               fix="; ".join(migrate_cmd(n) for n in hub_oauth[:3]))
-
-
 def _claude_mcp(ck: _Checks, c: sqlite3.Connection | None, home: Path) -> None:
     """MCP do claude quản lý (plan-mcp-claude-native PR3) của TÀI KHOẢN ĐANG DÙNG: server đã đăng ký nguồn claude mà cấu hình claude của
     tài khoản không có (run của agent gán server đó sẽ hỏng), và server cần đăng nhập theo lần kiểm gần nhất (`hub_state mcp.claude_status`,
@@ -342,17 +295,13 @@ def _claude_mcp(ck: _Checks, c: sqlite3.Connection | None, home: Path) -> None:
         return
     reg: list[str] = []
     if "mcp_servers" in _tables(c):
-        for r in c.execute("SELECT name, config FROM mcp_servers WHERE deleted_at IS NULL ORDER BY name").fetchall():
-            try:
-                if (json.loads(r["config"] or "{}") or {}).get("source") == "claude":
-                    reg.append(r["name"])
-            except ValueError:
-                continue
+        # mọi server đều nguồn claude (dòng nguồn hub kiểu cũ được migration v34 đổi khi daemon mở DB)
+        reg = [r["name"] for r in c.execute("SELECT name FROM mcp_servers WHERE deleted_at IS NULL ORDER BY name").fetchall()]
     missing = [n for n in reg if n not in have]
     if missing:
         ck.add("mcp_claude_missing", "MCP nguồn claude thiếu ở tài khoản đang dùng", False,
                f"tài khoản {label}: thiếu {', '.join(missing[:8])} — run của agent gán các server này sẽ hỏng", "warning",
-               fix="; ".join(f"cfharness mcp claude add {n} --url <URL>{acct}" for n in missing[:3]))
+               fix="; ".join(f"cfharness mcp claude add {n} (--url <URL> | --command <lệnh>){acct}" for n in missing[:3]))
     cache = _state(c, CACHE_KEY)
     entry = cache.get(key) if isinstance(cache, dict) else None
     servers = (entry or {}).get("servers") if isinstance(entry, dict) else None

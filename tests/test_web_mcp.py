@@ -1,7 +1,7 @@
-"""Web MCP mở rộng (`web/mcp_pages.py`): sửa server, điều khiển từng tool, cấu hình MCP theo agent, danh mục + cài.
+"""Web MCP mở rộng (`web/mcp_pages.py`): sửa chính sách server, điều khiển từng tool, cấu hình MCP theo agent.
 
-Daemon in-process thật (fixture của `test_web`); mạng của danh mục bị thay (`catalog._http_get_json/_http_status`), probe bị thay
-(`probe.probe_server`) — không chạy server MCP nào, không gọi `claude`.
+Daemon in-process thật (fixture của `test_web`) — không chạy server MCP nào, không gọi `claude`. MCP bên thứ ba do claude giữ theo tài
+khoản từ v0.2.32: không còn danh mục / cài / probe / sửa cách kết nối trên web.
 """
 
 from __future__ import annotations
@@ -10,63 +10,16 @@ import json
 
 import pytest
 
-from cfharness.mcp_client import catalog as C
-from cfharness.mcp_client import probe as PR
-
 from test_web import ISOLATED, _start, _stop, audit_rows  # noqa: F401
 from cfharness.runtime import FakeRuntime
-
-SECRET = "ghp_SuperSecretValue_1234567890abcdef"
-FIGMA_PKG = {"server": {"name": "io.github.GLips/Figma-Context-MCP", "title": "Figma Context", "description": "Figma data for agents", "version": "0.13.2",
-                        "repository": {"url": "https://github.com/GLips/Figma-Context-MCP"},
-                        "packages": [{"registryType": "npm", "identifier": "figma-developer-mcp", "version": "0.13.2", "transport": {"type": "stdio"},
-                                      "packageArguments": [{"value": "--stdio", "type": "positional"}],
-                                      "environmentVariables": [{"name": "FIGMA_API_KEY", "description": "PAT", "isRequired": True, "isSecret": True},
-                                                               {"name": "FIGMA_REGION", "isRequired": False, "default": "eu"}]}]}}
-OAUTH_REMOTE = {"server": {"name": "com.example/oauth", "title": "OAuth Demo", "description": "remote cần đăng nhập", "version": "1.0.0",
-                           "remotes": [{"type": "streamable-http", "url": "https://mcp.example.com/mcp"}]}}
-GH_REMOTE = {"server": {"name": "io.github.github/github-mcp-server", "title": "GitHub", "description": "gh", "version": "2.0.3",
-                        "remotes": [{"type": "streamable-http", "url": "https://api.githubcopilot.com/mcp/",
-                                     "headers": [{"name": "Authorization", "isSecret": True, "isRequired": True}]}]}}
-REG = {e["server"]["name"]: e for e in (FIGMA_PKG, OAUTH_REMOTE, GH_REMOTE)}
 
 
 @pytest.fixture
 async def env(hub_home, monkeypatch):
-    C.clear_cache()
-    calls: list[str] = []
-
-    def fake_get(url, timeout):
-        calls.append(url)
-        if "/versions/latest" in url:
-            from urllib.parse import unquote
-
-            name = unquote(url.split("/v0/servers/", 1)[1].rsplit("/versions/", 1)[0])
-            if name not in REG:
-                import urllib.error
-
-                raise urllib.error.HTTPError(url, 404, "nf", None, None)  # type: ignore[arg-type]
-            return REG[name]
-        if "cursor=" in url:
-            return {"servers": [GH_REMOTE], "metadata": {"count": 1}}
-        return {"servers": [FIGMA_PKG, OAUTH_REMOTE], "metadata": {"nextCursor": "next:1", "count": 2}}
-
-    monkeypatch.setattr(C, "_http_get_json", fake_get)
-    monkeypatch.setattr(C, "_http_status", lambda url, timeout: 401 if "mcp.example.com" in url else 200)
-
-    async def fake_probe(cfg, resolved, *, timeout_s=None):
-        fake_probe.seen.append(resolved)
-        return {"ok": True, "tools": {"echo": {"name": "echo", "description": "Echo", "readOnlyHint": True}}, "elapsed_ms": 1, "server": None,
-                "error": None, "hint": None}
-
-    fake_probe.seen = []
-    monkeypatch.setattr(PR, "probe_server", fake_probe)
+    monkeypatch.setenv("CFHARNESS_TEST_CLAUDE_HOME", str(hub_home.home / "claude-home"))
     e = await _start(hub_home, FakeRuntime(ISOLATED))
-    e.net_calls = calls
-    e.probes = fake_probe.seen
     yield e
     await _stop(e)
-    C.clear_cache()
 
 
 def _cache(env, name: str, tools: dict) -> None:
@@ -80,147 +33,42 @@ TOOLS = {
 }
 
 
-# ============================================================================ danh mục
-async def test_mcp_page_links_to_browse_and_catalog_lists_cards(env):
+async def test_mcp_list_page_points_to_claude_accounts(env):
+    env.hub.mcp.add({"name": "docs", "transport": "http", "url": "https://docs.example/mcp", "trust": "trusted"})
     await env.login()
     r = await env.client.get("/mcp")
-    assert r.status_code == 200 and 'href="/mcp/browse"' in r.text and "/do/mcp_add" in r.text and "/do/mcp_import" in r.text
-    # chưa gõ gì → danh sách đề xuất (CURATED), không gọi registry
-    n_calls = len(env.net_calls)
-    r = await env.client.get("/mcp/browse")
-    assert r.status_code == 200 and "Đề xuất" in r.text and "playwright" in r.text.lower() and len(env.net_calls) == n_calls
-    r = await env.client.get("/mcp/browse?q=figma")
-    assert r.status_code == 200, r.text
-    assert "Figma Context" in r.text and "OAuth Demo" in r.text and "search=figma" in env.net_calls[-1]
-    assert "/mcp/browse/install?name=io.github.GLips%2FFigma-Context-MCP" in r.text
-    assert "cursor=next%3A1" in r.text  # phân trang theo cursor
-    r = await env.client.get("/mcp/browse?q=figma&cursor=next%3A1")
-    assert "GitHub" in r.text and "cursor=next" in env.net_calls[-1] and "Về trang đầu" in r.text
+    assert r.status_code == 200 and "https://docs.example" in r.text and 'href="/settings#accounts"' in r.text
+    for gone in ("/do/mcp_add", "/do/mcp_import", "/mcp/browse", "mcp_probe", "Kiểm tra"):
+        assert gone not in r.text
+    for path in ("/mcp/browse", "/mcp/browse/install?name=x"):
+        r = await env.client.get(path)
+        assert r.status_code in (404, 303) or "không có MCP server" in r.text
 
 
-async def test_catalog_offline_fallback_shows_curated(env, monkeypatch):
-    def down(url, timeout):
-        raise OSError("không có mạng")
-
-    monkeypatch.setattr(C, "_http_get_json", down)
-    C.clear_cache()
-    await env.login()
-    r = await env.client.get("/mcp/browse?q=playwright")
-    assert r.status_code == 200 and "Playwright" in r.text and "tuyển chọn" in r.text and "không có mạng" in r.text
-
-
-async def test_install_npm_entry_with_secret_env(env):
-    await env.login()
-    r = await env.client.get("/mcp/browse/install?name=io.github.GLips%2FFigma-Context-MCP")
-    assert r.status_code == 200, r.text
-    assert 'type="password" name="e.FIGMA_API_KEY"' in r.text and "npx -y figma-developer-mcp@0.13.2 --stdio" in r.text
-    assert 'value="Figma-Context-MCP"' in r.text and 'value="eu"' in r.text
-    form = {"reg_name": "io.github.GLips/Figma-Context-MCP", "opt": "p0", "name": "figma", "command": "npx -y figma-developer-mcp@0.13.2 --stdio",
-            "e.FIGMA_API_KEY": SECRET, "e.FIGMA_REGION": "eu", "description": "Figma"}
-    # chưa xác nhận → vẽ lại form, KHÔNG có giá trị secret, chưa ghi gì
-    r = await env.post("/mcp/browse/install", form)
-    assert r.status_code == 400 and "Cần xác nhận" in r.text and SECRET not in r.text
-    assert env.hub.mcp.get_row("figma") is None and not env.hub.secrets.exists("MCP_FIGMA_FIGMA_API_KEY")
-    # thiếu trường bắt buộc
-    r = await env.post("/mcp/browse/install", {**form, "e.FIGMA_API_KEY": "", "confirm": "yes"})
-    assert r.status_code == 400 and "thiếu FIGMA_API_KEY" in r.text
-    r = await env.post("/mcp/browse/install", {**form, "confirm": "yes"})
-    assert r.status_code == 303 and r.headers["location"] == "/mcp/figma", r.text
-    row = env.hub.mcp.get_row("figma")
-    cfg = row["config"]
-    assert cfg["command"] == "npx" and cfg["args"] == ["-y", "figma-developer-mcp@0.13.2", "--stdio"]
-    assert cfg["env"] == {"FIGMA_API_KEY": "${MCP_FIGMA_FIGMA_API_KEY}", "FIGMA_REGION": "eu"}
-    assert row["trust"] == "untrusted" and env.hub.secrets.get("MCP_FIGMA_FIGMA_API_KEY") == SECRET
-    assert env.probes and env.probes[-1]["env"]["FIGMA_API_KEY"] == SECRET  # probe sau khi đặt secret
-    assert [a["channel"] for a in audit_rows(env, "mcp.add")] == ["web"] and [a["channel"] for a in audit_rows(env, "secret.set")] == ["web"]
-    dump = json.dumps([dict(r) for r in env.hub.store.conn.execute("SELECT * FROM audit_log")], default=str)
-    assert SECRET not in dump
-    r = await env.client.get("/mcp/figma")
-    assert SECRET not in r.text and "Đã cài MCP figma" in r.text and "Kết nối được" in r.text
-    # cài lại cùng tên secret → phải tích ghi đè
-    r = await env.post("/mcp/browse/install", {**form, "name": "figma", "confirm": "yes"})
-    assert r.status_code == 400 and SECRET not in r.text
-
-
-async def test_install_remote_oauth_badge_and_secret_header(env):
-    await env.login()
-    r = await env.client.get("/mcp/browse/install?name=com.example%2Foauth")
-    assert r.status_code == 200 and "Cần đăng nhập (OAuth)" in r.text and "Tài khoản Claude" in r.text
-    r = await env.client.get("/mcp/browse/install?name=io.github.github%2Fgithub-mcp-server")
-    assert 'type="password" name="h.Authorization"' in r.text and "Cần đăng nhập (OAuth)" not in r.text  # header bắt buộc → không phải OAuth
-    r = await env.post("/mcp/browse/install", {"reg_name": "io.github.github/github-mcp-server", "opt": "r0", "name": "github",
-                                               "url": "https://api.githubcopilot.com/mcp/", "h.Authorization": f"Bearer {SECRET}", "confirm": "yes"})
-    assert r.status_code == 303, r.text
-    cfg = env.hub.mcp.get_row("github")["config"]
-    assert cfg["url"] == "https://api.githubcopilot.com/mcp/" and cfg["headers"] == {"Authorization": "${MCP_GITHUB_AUTHORIZATION}"}
-    assert env.hub.secrets.get("MCP_GITHUB_AUTHORIZATION") == f"Bearer {SECRET}" and env.hub.mcp.get_row("github")["transport"] == "http"
-    # server OAuth: OAuth do hub giữ đã gỡ (v0.2.28) — trang cài hướng sang claude theo tài khoản, KHÔNG tạo dòng nguồn hub
-    n_probes = len(env.probes)
-    r = await env.client.get("/mcp/browse/install?name=com.example%2Foauth")
-    assert r.status_code == 200 and 'id="oauth"' in r.text and "/settings#accounts" in r.text and "mcp claude add" in r.text
-    assert 'action="/mcp/browse/install"' not in r.text  # không có form cài nguồn hub
-    r = await env.post("/mcp/browse/install", {"reg_name": "com.example/oauth", "opt": "r0", "name": "oauthdemo", "url": "https://mcp.example.com/mcp",
-                                               "confirm": "yes"})
-    assert r.status_code == 400 and "thêm vào claude theo tài khoản" in r.text, r.text
-    assert env.hub.mcp.get_row("oauthdemo") is None and len(env.probes) == n_probes
-
-
-async def test_install_requires_session_key(env):
-    await env.login()
-    r = await env.client.post("/mcp/browse/install", data={"csrf": env.csrf, "reg_name": "com.example/oauth", "opt": "r0", "name": "x",
-                                                           "url": "https://mcp.example.com/mcp", "confirm": "yes"})
-    assert r.status_code == 403 and env.hub.mcp.get_row("x") is None
-
-
-# ============================================================================ sửa server
-async def test_edit_server_from_web(env):
-    env.hub.mcp.add({"name": "docs", "transport": "stdio", "command": "node", "args": ["a.js"], "env": {"KEEP": "1", "DROP": "2"},
-                     "description": "cũ"})
+async def test_edit_server_policy_from_web(env):
+    env.hub.mcp.add({"name": "docs", "transport": "stdio", "description": "cũ"})
     await env.login()
     r = await env.client.get("/mcp/docs")
-    assert r.status_code == 200 and 'action="/do/mcp_edit"' in r.text and "KEEP=1" in r.text and 'value="node a.js"' in r.text
-    # không xác nhận → trang xác nhận
-    data = {"name": "docs", "transport": "stdio", "command": "npx -y @x/mcp@1.0 --flag", "env": f"KEEP=1\nAPI_TOKEN={SECRET}",
-            "env_keys_old": "KEEP,DROP", "description": "mới", "trust": "trusted", "include": "", "exclude": "rm_*", "require_approval": "send_*",
+    assert r.status_code == 200 and 'action="/do/mcp_edit"' in r.text and 'name="command"' not in r.text and 'name="url"' not in r.text
+    data = {"name": "docs", "description": "mới", "trust": "trusted", "include": "", "exclude": "rm_*", "require_approval": "send_*",
             "timeout_s": "20", "next": "/mcp/docs"}
-    r = await env.post("/do/mcp_edit", data)
-    assert r.status_code == 200 and "Lưu cấu hình MCP server docs" in r.text and "NGOÀI sandbox" in r.text
+    r = await env.post("/do/mcp_edit", data)  # không xác nhận → trang xác nhận
+    assert r.status_code == 200 and "Lưu chính sách MCP server docs" in r.text
     r = await env.post("/do/mcp_edit", {**data, "confirm": "yes"})
     assert r.status_code == 303 and r.headers["location"] == "/mcp/docs"
     row = env.hub.mcp.get_row("docs")
     cfg = row["config"]
-    assert cfg["command"] == "npx" and cfg["args"] == ["-y", "@x/mcp@1.0", "--flag"] and row["trust"] == "trusted"
-    assert set(cfg["env"]) == {"KEEP", "API_TOKEN"} and cfg["env"]["API_TOKEN"].startswith("${") and cfg["description"] == "mới"
-    assert cfg["tools"]["exclude"] == ["rm_*"] and cfg["tools"]["require_approval"] == ["send_*"] and cfg["timeout_s"] == 20
+    assert row["trust"] == "trusted" and cfg["description"] == "mới" and cfg["timeout_s"] == 20 and "command" not in cfg
+    assert cfg["tools"]["exclude"] == ["rm_*"] and cfg["tools"]["require_approval"] == ["send_*"]
     assert [a["channel"] for a in audit_rows(env, "mcp.update")] == ["web"]
-    r = await env.client.get("/mcp/docs")
-    assert SECRET not in r.text and "secret store" in r.text
-    # đổi sang http: bỏ command/env
-    r = await env.post("/do/mcp_edit", {"name": "docs", "transport": "http", "url": "https://mcp.example.org/mcp", "headers": "X-Team: core",
-                                        "confirm": "yes", "next": "/mcp/docs"})
-    row = env.hub.mcp.get_row("docs")
-    assert row["transport"] == "http" and row["config"]["url"] == "https://mcp.example.org/mcp" and "command" not in row["config"]
-    assert row["config"]["headers"] == {"X-Team": "core"} and row["trust"] == "untrusted"
-
-
-async def test_edit_keeps_masked_value(env):
-    env.hub.mcp.add({"name": "m", "transport": "http", "url": "https://x.example/mcp"})
-    # giá trị rõ ở khoá trông như secret (không thể có qua add — đặt thẳng DB để kiểm lớp che của web)
-    env.hub.store.conn.execute("UPDATE mcp_servers SET config=? WHERE name='m'",
-                               (json.dumps({"transport": "http", "url": "https://x.example/mcp", "headers": {"X-Api-Key": "short"}}),))
-    await env.login()
-    r = await env.client.get("/mcp/m")
-    assert "X-Api-Key: ••••••" in r.text and "short" not in r.text
-    await env.post("/do/mcp_edit", {"name": "m", "transport": "http", "url": "https://x.example/mcp", "headers": "X-Api-Key: ••••••",
-                                    "header_keys_old": "X-Api-Key", "confirm": "yes"})
-    # giá trị cũ được giữ (registry nhân dịp này tách nó vào secret store); chuỗi che không bao giờ được lưu
-    assert env.hub.mcp.get_row("m")["config"]["headers"] == {"X-Api-Key": "${MCP_M_X_API_KEY}"}
-    assert env.hub.secrets.get("MCP_M_X_API_KEY") == "short"
+    # trường kết nối kiểu cũ trong form bị bỏ qua — không bao giờ tới registry
+    await env.post("/do/mcp_edit", {**data, "command": "evil", "url": "https://evil", "confirm": "yes"})
+    assert "command" not in env.hub.mcp.get_row("docs")["config"]
 
 
 # ============================================================================ điều khiển từng tool
 async def test_tool_controls_and_suspicious(env):
-    env.hub.mcp.add({"name": "pw", "transport": "stdio", "command": "node"})
+    env.hub.mcp.add({"name": "pw", "transport": "stdio"})
     _cache(env, "pw", TOOLS)
     await env.login()
     r = await env.client.get("/mcp/pw")
@@ -274,11 +122,9 @@ async def test_tool_controls_and_suspicious(env):
 
 
 # ============================================================================ cấu hình MCP theo agent
-async def test_agent_mcp_config_preview_hides_secrets(env):
-    env.hub.secrets.set("MY_TOKEN", SECRET)
-    env.hub.mcp.add({"name": "gh", "transport": "http", "url": "https://api.example.com/mcp", "headers": {"Authorization": "Bearer ${MY_TOKEN}"},
-                     "trust": "trusted"})
-    env.hub.mcp.add({"name": "lost", "transport": "stdio", "command": "node", "env": {"K": "${NOT_SET_ANYWHERE}"}})
+async def test_agent_mcp_config_preview(env):
+    env.hub.mcp.add({"name": "gh", "transport": "http", "url": "https://api.example.com/mcp", "trust": "trusted"})
+    env.hub.mcp.add({"name": "lost", "transport": "stdio"})
     _cache(env, "gh", {"list": {"name": "list", "readOnlyHint": True}})
     env.hub.agents.create({"id": "ag1", "name": "ag1", "model": "haiku", "mcp_servers": ["gh", "lost"]})
     await env.login()
@@ -286,30 +132,7 @@ async def test_agent_mcp_config_preview_hides_secrets(env):
     assert 'href="/mcp/agent/ag1"' in r.text
     r = await env.client.get("/mcp/agent/ag1")
     assert r.status_code == 200, r.text
-    assert "Bearer ${MY_TOKEN}" in r.text and SECRET not in r.text and "mcp__gh__list" in r.text
-    assert "lost:${NOT_SET_ANYWHERE}" in r.text
+    assert "mcp__gh__list" in r.text and "api.example.com" in r.text
+    assert "lost:missing_in_claude_config" in r.text and "gh:missing_in_claude_config" in r.text  # cấu hình claude (test) trống
     r = await env.client.get("/mcp/gh")
     assert 'href="/mcp/agent/ag1"' in r.text
-
-
-async def test_browse_featured_grouped_by_category(env):
-    await env.login()
-    r = await env.client.get("/mcp/browse")
-    assert r.status_code == 200
-    for cat in C.CATEGORIES:
-        assert cat.replace("&", "&amp;") in r.text
-    assert r.text.index("Công việc") < r.text.index("Chạy trên máy")
-    assert "Notion" in r.text and "OAuth · cần client_id" in r.text and "không cần đăng nhập" in r.text
-
-
-async def test_install_manual_oauth_client_points_to_claude(env):
-    await env.login()
-    r = await env.client.get("/mcp/browse/install?name=com.slack%2Fmcp")
-    assert r.status_code == 200 and 'name="oauth_client_id"' not in r.text and "/mcp/oauth/callback" not in r.text
-    assert "--client-id" in r.text and "/settings#accounts" in r.text
-    base = {"reg_name": "com.slack/mcp", "opt": "r0", "name": "slack", "url": "https://mcp.slack.com/mcp", "confirm": "yes"}
-    r = await env.post("/mcp/browse/install", {**base, "oauth_client_id": "123.456", "oauth_client_secret": SECRET})
-    assert r.status_code == 400 and env.hub.mcp.get_row("slack") is None and SECRET not in r.text
-    assert env.hub.secrets.get("MCP_SLACK_OAUTH_CLIENT_SECRET") is None
-    dump = json.dumps([dict(x) for x in env.hub.store.conn.execute("SELECT * FROM audit_log")], default=str)
-    assert SECRET not in dump

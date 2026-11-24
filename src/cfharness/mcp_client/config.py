@@ -1,24 +1,21 @@
-"""Schema cấu hình một MCP server trong registry (FR-MC-01) — mượn Hermes `mcp_servers`.
+"""Schema cấu hình một MCP server trong registry (FR-MC-01).
+
+MCP bên thứ ba do `claude` quản lý theo tài khoản (cấu hình + token trong `<config_dir>/.claude.json` / Keychain —
+docs/dev-notes/plan-mcp-claude-native.md). Registry của hub chỉ giữ metadata an toàn:
 
 ```yaml
 <tên>:
   transport: stdio | http | sse
-  command: "..."  args: [...]  env: {KEY: "${SECRET}"}       # stdio
-  url: "https://..."  headers: {Authorization: "Bearer ${SECRET}"}   # http/sse
-  tools: {include: ["*_tim*"], exclude: [], require_approval: []}  # glob
+  url: "https://host[:port]"       # CHỈ scheme://host[:port] (host cho sandbox) — http/sse
+  tools: {include: ["*_tim*"], exclude: [], require_approval: [], annotations: {}}  # glob
   trust: trusted | untrusted      # mặc định untrusted; giá trị lạ = untrusted (fail-closed, NFR-11)
-  lazy: false                      # mượn Hermes — KHÔNG áp dụng (claude CLI quản lý kết nối), chỉ lưu
-  supports_parallel_tool_calls: false   # như trên
-  timeout_s: 60                    # timeout probe/kết nối
+  timeout_s: 60
   description: "..."
-  auth: {type: oauth, scopes: [...], client_id: "...", client_secret_ref: "${SECRET}"}   # http/sse — docs/dev-notes/mcp-oauth.md
-  source: manual | claude-import | claude   # nguồn; `hub` = manual. `claude` = cấu hình + token do `claude` giữ (dưới)
+  source: claude
 ```
 
-`source: claude` (docs/dev-notes/plan-mcp-claude-native.md PR2): server do `claude` quản lý trong `<config_dir>/.claude.json` của
-TÀI KHOẢN đang dùng (mcpServers user-scope; token OAuth trong Keychain theo thư mục cấu hình). Registry chỉ giữ metadata an toàn:
-tên, transport, `url` = CHỈ `scheme://host[:port]` (host cho sandbox), trust, tools (include/exclude/require_approval/annotations).
-Không bao giờ có command/args/env/headers/auth — hub không ghi entry vào mcp.json của run, không probe (mcp_client/claude_source.py).
+Hub KHÔNG còn tự giữ cách chạy/kết nối server bên thứ ba (command/args/env/url đầy đủ/headers/OAuth — gỡ ở v0.2.32; migration
+v34 đổi mọi dòng cũ sang nguồn claude). Dòng cũ đọc lại (bản sao lưu/gói hub cũ) được chấp nhận: các trường kiểu hub bị bỏ khi đọc.
 """
 
 from __future__ import annotations
@@ -35,10 +32,9 @@ TRUST_ALIASES = {"full": "trusted", "trust": "trusted", "trusted": "trusted", "u
 # Server nội bộ của hub — không nằm trong registry, không được đặt trùng tên.
 RESERVED_NAMES = frozenset({"hub-guard", "hub-self", "cfharness", "hub-learning"})
 ANNOTATION_OVERRIDE_KEYS = ("destructiveHint", "readOnlyHint")
-# `source`: manual | claude-import = hub giữ cấu hình + secret (nguồn "hub"); claude = `claude` giữ (mcp_client/claude_source.py)
 SOURCE_CLAUDE = "claude"
-SOURCE_VALUES = ("manual", "claude-import", SOURCE_CLAUDE)
-SOURCE_ALIASES = {"hub": "manual"}
+# Trường của dòng nguồn hub kiểu cũ (≤ v0.2.30) — bỏ khi đọc (`McpServerConfig._drop_legacy`); migration v34 đã gỡ khỏi DB.
+LEGACY_HUB_KEYS = ("command", "args", "env", "headers", "auth", "lazy", "supports_parallel_tool_calls")
 
 
 def normalize_trust(value: Any) -> tuple[str, str | None]:
@@ -79,64 +75,34 @@ class ToolFilter(BaseModel):
         return v
 
 
-class OAuthSettings(BaseModel):
-    """`auth: {type: oauth}` của dòng nguồn hub KIỂU CŨ — OAuth của hub đã gỡ từ v0.2.28 (`mcp_client/legacy_oauth.py`): vẫn đọc được để
-    `mcp migrate-to-claude` chuyển sang claude; không tạo mới (registry từ chối), run của agent gán bị từ chối."""
-
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["oauth"] = "oauth"
-    scopes: list[str] = Field(default_factory=list, description="scope xin; rỗng = theo WWW-Authenticate / resource metadata")
-    client_id: str | None = Field(default=None, description="client đăng ký tay (provider không hỗ trợ DCR); rỗng = DCR")
-    client_secret_ref: str | None = Field(default=None, description="tham chiếu ${SECRET} tới client_secret (giá trị rõ tự chuyển vào secret store)")
-
-    @field_validator("scopes")
-    @classmethod
-    def _scopes(cls, v: list[str]) -> list[str]:
-        out = [s.strip() for s in v if s and s.strip()]
-        if any(any(ch.isspace() or ch == '"' for ch in s) for s in out):
-            raise ValueError("scope không được chứa khoảng trắng/dấu nháy")
-        return out
-
-    @field_validator("client_id")
-    @classmethod
-    def _client_id(cls, v: str | None) -> str | None:
-        v = (v or "").strip() or None
-        if v is not None and (len(v) > 512 or any(ord(ch) < 0x21 for ch in v)):
-            raise ValueError("client_id không hợp lệ")
-        return v
-
-
 class McpServerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
     transport: Literal["stdio", "http", "sse"] = "stdio"
-    command: str | None = None
-    args: list[str] = Field(default_factory=list)
-    env: dict[str, str] = Field(default_factory=dict)
     url: str | None = None
-    headers: dict[str, str] = Field(default_factory=dict)
     tools: ToolFilter = Field(default_factory=ToolFilter)
     trust: str = "untrusted"
-    lazy: bool = False
-    supports_parallel_tool_calls: bool = False
     timeout_s: float = Field(default=60, gt=0, le=3600)
     description: str = ""
-    source: str = "manual"  # manual | claude-import (nguồn hub) | claude (cấu hình + token do `claude` giữ); "hub" → manual
-    auth: OAuthSettings | None = None  # OAuth 2.1 (chỉ http/sse) — docs/dev-notes/mcp-oauth.md
+    source: Literal["claude"] = SOURCE_CLAUDE
 
-    @field_validator("source", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def _source(cls, v: Any) -> str:
-        s = str(v or "manual").strip().lower()
-        s = SOURCE_ALIASES.get(s, s)
-        if s not in SOURCE_VALUES:
-            raise ValueError(f"source phải là hub | claude (nhận '{v}')")
-        return s
+    def _drop_legacy(cls, data: Any) -> Any:
+        """Dòng nguồn hub kiểu cũ (manual / claude-import, có command/url đầy đủ/headers/auth): bỏ trường kiểu hub, giữ chính sách.
+        url còn `${…}` (secret của hub) → bỏ (không suy được host)."""
+        if not isinstance(data, dict):
+            return data
+        d = {k: v for k, v in data.items() if k not in LEGACY_HUB_KEYS}
+        d["source"] = SOURCE_CLAUDE
+        if "${" in str(d.get("url") or ""):
+            d.pop("url", None)
+        return d
 
     @property
     def managed_by_claude(self) -> bool:
-        return self.source == SOURCE_CLAUDE
+        return True
 
     @field_validator("name")
     @classmethod
@@ -153,34 +119,8 @@ class McpServerConfig(BaseModel):
         return normalize_trust(v)[0]
 
     @model_validator(mode="after")
-    def _transport_fields(self) -> "McpServerConfig":
-        if self.source == SOURCE_CLAUDE:
-            return self._claude_source_fields()
-        if self.transport == "stdio":
-            if not self.command:
-                raise ValueError("transport stdio cần 'command'")
-            if self.url:
-                raise ValueError("transport stdio không dùng 'url'")
-        else:
-            if not self.url:
-                raise ValueError(f"transport {self.transport} cần 'url'")
-            if not re.match(r"^https?://", self.url):
-                raise ValueError("url phải bắt đầu bằng http:// hoặc https://")
-            if self.command:
-                raise ValueError(f"transport {self.transport} không dùng 'command'")
-        if self.auth is not None:
-            if self.transport == "stdio":
-                raise ValueError("auth.oauth chỉ dùng cho transport http/sse")
-            if any(k.lower() == "authorization" for k in self.headers):
-                raise ValueError("headers.Authorization xung đột với auth.oauth (hub tự chèn token OAuth) — bỏ một trong hai")
-            if self.auth.client_secret_ref and not self.auth.client_id:
-                raise ValueError("auth.client_secret_ref cần auth.client_id")
-        return self
-
-    def _claude_source_fields(self) -> "McpServerConfig":
-        """`source=claude`: hub không giữ cách chạy/kết nối hay secret — chỉ host (sandbox). url bị rút về `scheme://host[:port]`."""
-        if self.command or self.args or self.env or self.headers or self.auth is not None:
-            raise ValueError("source=claude: cấu hình + secret do claude giữ — không đặt command/args/env/headers/auth")
+    def _url_host_only(self) -> "McpServerConfig":
+        """Hub không giữ cách kết nối hay secret — chỉ host (sandbox). url bị rút về `scheme://host[:port]`."""
         if self.url:
             from urllib.parse import urlsplit
 
@@ -199,39 +139,11 @@ class McpServerConfig(BaseModel):
 
     # -- tiện ích
     def stored(self) -> dict[str, Any]:
-        """Dạng lưu registry (bỏ name, bỏ trường rỗng cho gọn)."""
+        """Dạng lưu registry (bỏ name, bỏ url rỗng)."""
         d = self.model_dump(exclude={"name"})
-        if self.source == SOURCE_CLAUDE:
-            for k in ("command", "args", "env", "headers", "auth", "lazy", "supports_parallel_tool_calls"):
-                d.pop(k, None)
-            if not self.url:
-                d.pop("url", None)
-            return d
-        if self.auth is None:
-            d.pop("auth", None)
-        if self.transport == "stdio":
+        if not self.url:
             d.pop("url", None)
-            d.pop("headers", None)
-        else:
-            for k in ("command", "args", "env"):
-                d.pop(k, None)
         return d
-
-    def claude_entry(self) -> dict[str, Any]:
-        """Entry `mcpServers` cho `claude --mcp-config` (CHƯA thay secret)."""
-        if self.source == SOURCE_CLAUDE:  # không bao giờ vào mcp.json của run — claude tự nạp từ cấu hình của tài khoản
-            from ..errors import HubError
-
-            raise HubError(f"MCP '{self.name}' nguồn claude: không có entry mcp.json (claude tự nạp từ cấu hình tài khoản)")
-        if self.transport == "stdio":
-            e: dict[str, Any] = {"type": "stdio", "command": self.command, "args": list(self.args)}
-            if self.env:
-                e["env"] = dict(self.env)
-            return e
-        e = {"type": self.transport, "url": self.url}
-        if self.headers:
-            e["headers"] = dict(self.headers)
-        return e
 
 
 def match_any(name: str, patterns: list[str]) -> bool:

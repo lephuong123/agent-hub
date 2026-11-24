@@ -76,13 +76,14 @@ async def test_menu_first_and_guidance_when_no_manager(menv):
     await menv.login()
     r = await menv.client.get("/manager")
     assert r.status_code == 200
-    nav = re.search(r'<nav class="nav".*?</nav>', r.text, re.S).group(0)
-    assert nav.index('href="/manager"') < nav.index('href="/"')  # "Điều phối" đứng đầu menu
+    side = r.text.split('<aside class="side"', 1)[1]
+    assert side.index('href="/manager?new=1"') < side.index('<nav class="nav"')  # chat-first: "Cuộc trò chuyện mới" trên cùng
+    assert 'href="/"' not in re.search(r'<nav class="nav".*?</nav>', r.text, re.S).group(0)
     assert "Chưa có điều phối viên" in r.text and 'action="/do/manager_set"' in r.text
     assert "cfharness manager set" in r.text
     assert 'data-confirm=' in r.text.split('action="/do/manager_set"', 1)[1][:400]  # có hộp xác nhận
-    # Tổng quan: khung nhỏ hướng dẫn chỉ định
-    r = await menv.client.get("/")
+    # Hoạt động (Tổng quan cũ): khung nhỏ hướng dẫn chỉ định
+    r = await menv.client.get("/activity")
     assert "Điều phối viên" in r.text and "Chỉ định ở trang Điều phối" in r.text
 
 
@@ -262,7 +263,7 @@ async def test_manager_content_is_hardened_markdown_user_text_plain(stubbed):
     e.stub.convs[conv]["messages"].append({"role": "manager", "text": MD_EVIL, "ts": "2099-01-01T00:00:00+00:00", "run_id": run})
     e.hub.publish(make_event("manager.action", "boss", {"tool": "agent_create", "target": "javascript:alert(3)", "summary": XSS}, run_id=run))
     e.hub.publish(make_event("manager.action", "boss", {"tool": "agent_update", "target": "agent:../../logout", "summary": "x"}, run_id=run))
-    for path in (f"/manager?c={conv}", "/"):
+    for path in (f"/manager?c={conv}", "/activity"):
         t = (await e.client.get(path)).text
         # thẻ <a> THÔ của agent không lọt qua (URL trần trong chữ đã escape được linkify thành link cứng hoá class="ext" — hợp lệ)
         assert "<script>alert" not in t and "<img src=x" not in t and '<a href="http://evil">' not in t
@@ -360,7 +361,7 @@ async def test_overview_card_status_and_quick_send(menv):
     await menv.login()
     await designate(menv)
     j = await send(menv, "chào")
-    r = await menv.client.get("/")
+    r = await menv.client.get("/activity")
     t = r.text
     assert "Điều phối viên" in t and 'action="/manager/send"' in t and 'id="mgr-quick"' in t
     assert f'name="c" value="{j["conversation_id"]}"' in t  # gửi nhanh tiếp tục cuộc trò chuyện web gần nhất
@@ -379,7 +380,7 @@ async def test_page_explains_when_daemon_has_no_manager_rpc(hub_home):
         await e.login()
         r = await e.client.get("/manager")
         assert r.status_code == 200 and "chưa có chức năng điều phối viên" in r.text
-        assert (await e.client.get("/")).status_code == 200
+        assert (await e.client.get("/activity")).status_code == 200
     finally:
         await _stop(e)
 

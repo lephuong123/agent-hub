@@ -17,7 +17,9 @@ luồng v2 `/sse/manager/v2` (`web/manager_feed.py`).
   tệp văn bản UTF-8 hoặc tài liệu PDF/Office (nhận theo nội dung, `manager/doc_extract.py`) → `files`; nhị phân khác → báo lỗi,
   KHÔNG gửi gì. Giới hạn = của daemon (`manager/service.py`), daemon kiểm lại.
 - `POST /manager/stop` (P0-6): dừng lượt trả lời đang chạy (chỉ run của điều phối viên thuộc hội thoại điều phối) — `run.stop`, audit kênh `web`.
-- `GET /partials/manager[?compact=1]`: khung trạng thái điều phối viên (htmx làm mới — thẻ ở trang Tổng quan).
+- `GET /partials/manager[?compact=1]`: khung trạng thái điều phối viên (htmx làm mới — thẻ ở trang Hoạt động).
+- `GET /partials/manager/side`: vùng HỘI THOẠI ở thanh bên của mọi trang (trừ `/manager` — island tự vẽ): luồng đang mở + hội thoại web
+  gần đây. Nạp lười (htmx `load`), cache ngắn `SIDE_TTL_S` trên WebState (bỏ khi người POST). Kèm chấm "có bản cập nhật" (oob).
 Chữ của điều phối viên là DỮ LIỆU: hiển thị qua `present.md()` đã cứng hoá (không HTML thô, không `<img>`, link ngoài có `rel` + tên
 miền; link nội bộ chỉ từ `mgr_target`) — đó là đầu ra DUY NHẤT được `|safe`/innerHTML. Tin của người vẫn là chữ thô `pre-wrap` (test XSS).
 """
@@ -339,8 +341,13 @@ def question_from_event(ev: dict[str, Any]) -> dict[str, Any]:
 
 
 async def setup_page(request: Request, ctx: dict[str, Any]) -> Response:
-    """Phần chỉ định điều phối viên (chưa có điều phối viên / daemon chưa có `manager.*`) — island chỉ vẽ trang chat (`coord.coord_page`)."""
-    return await render(request, "manager.html", ctx)
+    """Phần chỉ định điều phối viên (chưa có điều phối viên / daemon chưa có `manager.*`) — island chỉ vẽ trang chat (`coord.coord_page`).
+    Hub vừa cài, chưa có gì (`hub.transfer_status.fresh`) → thẻ "Nhập hub từ máy khác" (trước đây chỉ ở trang chủ cũ `/`)."""
+    try:
+        fresh = bool(((await rpc(request, "hub.transfer_status")) or {}).get("fresh"))
+    except (RpcError, DaemonUnavailable, OSError):
+        fresh = False
+    return await render(request, "manager.html", {**ctx, "fresh": fresh})
 
 
 async def manager_page(request: Request) -> Response:
@@ -460,6 +467,61 @@ async def page_ctx(request: Request) -> dict[str, Any]:
                                  for c in ws_convs if c.get("channel") == CHANNEL],
                 "cur_title": (cur_conv or {}).get("title"), "ws_id": ws_id, "conv_qs": conv_qs, "msgs": msgs})
     return ctx
+
+
+SIDE_TTL_S = 8.0  # thanh bên hội thoại: chuyển trang liên tục không hỏi lại daemon (POST của người → làm mới ngay qua badge_gen)
+SIDE_RECENT = 12  # số hội thoại "Gần đây" ở thanh bên
+SIDE_WS = 8  # số luồng đang mở hiện ở thanh bên (còn lại: "Xem tất cả" ở /manager)
+UPDATE_TTL_S = 600.0  # chấm "có bản cập nhật" ở menu người dùng — daemon tự cache `update.check` 10 phút
+
+
+async def side_data(request: Request) -> dict[str, Any]:
+    """Luồng đang mở + hội thoại web gần đây cho thanh bên (cache SIDE_TTL_S theo WebState + `badge_gen`). Daemon cũ chưa có
+    `workstream.*` → chỉ hội thoại web; daemon dừng → rỗng (thanh bên vẫn vẽ)."""
+    import time
+
+    st = ws(request)
+    now = time.monotonic()
+    hit = getattr(st, "_side_cache", None)
+    if hit and hit[1] == st.badge_gen and now - hit[0] < SIDE_TTL_S:
+        return hit[2]
+    gen = st.badge_gen
+    try:
+        wsd = await _workstreams(request)
+        raw = wsd.get("convs") or {}
+        recent = (_web_from(wsd) if wsd.get("enabled") else await _web_convs(request))[:SIDE_RECENT]
+    except (DaemonUnavailable, OSError):
+        return {"active": [], "recent": [], "more": 0}
+    for c in recent:
+        r = raw.get(c["id"]) or {}
+        c["unread"], c["running"] = int(r.get("unread") or 0), bool(r.get("running"))
+    active = sorted(wsd.get("active") or [], key=lambda w: str(w.get("last_activity") or w.get("created_at") or ""), reverse=True)
+    out = {"active": active[:SIDE_WS], "more": max(0, len(active) - SIDE_WS), "recent": recent}
+    st._side_cache = (now, gen, out)  # type: ignore[attr-defined]
+    return out
+
+
+async def update_flag(request: Request) -> bool:
+    """Có bản phát hành mới? (`update.check` không ép làm mới — daemon cache) — cache UPDATE_TTL_S trên WebState; `render` đọc giá trị
+    đã cache (`cached_update_flag`) nên không trang nào chờ mạng."""
+    import time
+
+    st = ws(request)
+    hit = getattr(st, "_upd_flag", None)
+    if hit and time.monotonic() - hit[0] < UPDATE_TTL_S:
+        return bool(hit[1])
+    try:
+        chk = await rpc(request, "update.check") or {}
+        flag = bool(chk.get("update_available"))
+    except (RpcError, DaemonUnavailable, OSError):
+        flag = False
+    st._upd_flag = (time.monotonic(), flag)  # type: ignore[attr-defined]
+    return flag
+
+
+async def partial_side(request: Request) -> Response:
+    data, upd = await gather_ordered(side_data(request), update_flag(request))
+    return ws(request).templates.TemplateResponse(request, "_side_convs.html", {**data, "update_available": upd, "oob": True})
 
 
 async def partial_status(request: Request) -> Response:
@@ -662,6 +724,7 @@ def routes() -> list[Any]:
         Route("/manager/stop", manager_stop, methods=["POST"]),
         Route("/manager/read", manager_read, methods=["POST"]),
         Route("/partials/manager", partial_status),
+        Route("/partials/manager/side", partial_side),
     ]
 
 
