@@ -476,7 +476,7 @@ class Feed:
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:  # daemon tắt / mất kết nối → thử lại có giãn cách
-                    log.debug("feed điều phối: subscription lỗi %s", e)
+                    log.debug("feed điều phối: subscription lỗi %s", type(e).__name__, exc_info=True)
                 if self.idle():
                     break
                 await asyncio.sleep(backoff)
@@ -528,7 +528,7 @@ class Feed:
         finally:
             try:
                 sub.close()
-            except Exception:  # pragma: no cover
+            except Exception:  # best-effort: đóng subscription đã đứt, lỗi đóng không có gì để xử lý  # pragma: no cover
                 pass
             self._sub = None
 
@@ -630,7 +630,7 @@ class Feed:
         if self._sub is not None:
             try:
                 self._sub.close()
-            except Exception:  # pragma: no cover
+            except Exception:  # best-effort: đóng subscription khi dừng feed, lỗi đóng bỏ qua  # pragma: no cover
                 pass
         if self._reaper is not None:
             self._reaper.cancel()
@@ -640,7 +640,7 @@ class Feed:
                 t.cancel()
                 try:
                     await t
-                except (asyncio.CancelledError, Exception):
+                except (asyncio.CancelledError, Exception):  # best-effort: chờ task vừa huỷ kết thúc, lỗi của nó đã log trong task
                     pass
 
 
@@ -703,7 +703,7 @@ async def stream(feed: Feed, watch: Watch, last: tuple[str, int] | None, *, hear
                 try:
                     await feed.ensure()
                 except Exception:
-                    pass
+                    log.debug("feed điều phối: khởi động lại feed lỗi", exc_info=True)
     finally:
         feed.clients -= 1
         watch.live -= 1
@@ -801,7 +801,7 @@ async def api_act(request: Request) -> Response:
     if key and (200 <= resp.status_code < 300 or resp.status_code == 409):  # chỉ kết quả CUỐI; 4xx (CSRF, thiếu tham số) thử lại được
         try:
             body = json.loads(bytes(resp.body))
-        except Exception:  # pragma: no cover
+        except Exception:  # best-effort: thân không phải JSON → không lưu kết quả idempotency  # pragma: no cover
             body = None
         if isinstance(body, dict) and "need" not in body:
             feed.idem_put(key, resp.status_code, body)
