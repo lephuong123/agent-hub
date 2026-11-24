@@ -32,7 +32,7 @@ from . import present as P
 from .app import rpc, session_of
 
 LOGIN_KEY = "claude_login"
-NEXT = "/settings#accounts"
+NEXT = "/settings/accounts"
 LOGIN_TTL_S = 600.0
 LABEL_MAX = 60
 KIND_LABEL = {"machine": "Đăng nhập của máy", "custom": "Token tự đặt"}

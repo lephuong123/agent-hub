@@ -223,20 +223,20 @@ async def test_web_lane_card_texts_test_button_and_redirect(web, lane):
     await e.login()
     card = (await e.client.get("/partials/filehub/lane")).text
     assert 'placeholder="http://127.0.0.1:8223"' in card and 'value="http://127.0.0.1:8223"' not in card  # chỉ cần dán khoá; trống = tự thử 8223 rồi 8233
-    r = await e.post("/do/filehub_lane_setup", {"url": lane.url, "next": "/settings#filehub-lane"})
+    r = await e.post("/do/filehub_lane_setup", {"url": lane.url, "next": "/settings/filehub"})
     assert r.status_code == 200 and "Nhập lại giá trị ở trang Cài đặt" not in r.text
-    r = await e.post("/do/filehub_lane_setup", {"url": lane.url, "confirm": "yes", "confirm2": "yes", "key": KEY, "next": "/settings#filehub-lane"})
-    assert r.status_code == 303 and r.headers["location"].endswith("#filehub-lane")
+    r = await e.post("/do/filehub_lane_setup", {"url": lane.url, "confirm": "yes", "confirm2": "yes", "key": KEY, "next": "/settings/filehub"})
+    assert r.status_code == 303 and r.headers["location"] == "/settings/filehub"
     assert _folder(e, "chung")["mode"] == "lane"
     card = (await e.client.get("/partials/filehub/lane")).text
     assert "filehub:chung" in card and "còn 180 ngày" in card and "180.0" not in card
     assert re.search(r"hết hạn \d{2}/\d{2}/\d{4}", card) and "Z (" not in card
     assert 'action="/do/filehub_lane_test"' in card
-    r = await e.post("/do/filehub_lane_test", {"server": "qltm", "next": "/settings#filehub-lane"})
-    assert r.status_code == 303 and r.headers["location"].endswith("#filehub-lane")
+    r = await e.post("/do/filehub_lane_test", {"server": "qltm", "next": "/settings/filehub"})
+    assert r.status_code == 303 and r.headers["location"] == "/settings/filehub"
     # khoá bị thu hồi → chữ tiếng Việt + việc cần làm, không "còn … ngày", không mã thô
     lane.revoke()
-    r = await e.post("/do/filehub_lane_test", {"server": "qltm", "next": "/settings#filehub-lane"})
+    r = await e.post("/do/filehub_lane_test", {"server": "qltm", "next": "/settings/filehub"})
     card = (await e.client.get("/partials/filehub/lane")).text
     assert "tạo khoá mới" in card and "còn 1" not in card and ">auth_failed<" not in card
     # thẻ "Không gian số" (đồng bộ cũ) không còn nói "chưa thiết lập" khi đã dùng cổng
@@ -266,7 +266,7 @@ async def test_web_held_deletes_list_paths_on_card_and_confirm(web, monkeypatch)
     try:
         card = (await e.client.get("/partials/filehub/lane")).text
         assert "Báo cáo/000.txt" in card and "Báo cáo/049.txt" in card and "và 10 mục nữa" in card
-        r = await e.post("/do/filehub_lane_deletes", {"root_id": "r_chung", "next": "/settings#filehub-lane"})
+        r = await e.post("/do/filehub_lane_deletes", {"root_id": "r_chung", "next": "/settings/filehub"})
         assert r.status_code == 200 and "Báo cáo/000.txt" in r.text and "và 10 mục nữa" in r.text
     finally:
         lane.workdirs.pop("t1", None)

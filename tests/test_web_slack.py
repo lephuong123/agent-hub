@@ -102,7 +102,7 @@ def test_manifest_2way_and_slash_validation():
 # =========================================================================== trang
 async def test_settings_shows_2way_block_and_keeps_webhook_wizard(env):
     await env.login()
-    r = await get(env, "/settings")
+    r = await get(env, "/settings/notifications")
     assert r.status_code == 200
     html = r.text
     assert 'id="slack2"' in html and "Slack 2 chiều" in html and "chưa bật" in html
@@ -116,7 +116,7 @@ async def test_settings_shows_2way_block_and_keeps_webhook_wizard(env):
         assert 'type="password"' in tag and 'autocomplete="off"' in tag and f'pattern="{pref}' in tag and "required" in tag
     # lệnh slash lấy từ cấu hình
     env.hub.config.set("notify.slack.slash_command", "/cfh-phuong")
-    m = create_link((await get(env, "/settings")).text)
+    m = create_link((await get(env, "/settings/notifications")).text)
     assert m["features"]["slash_commands"][0]["command"] == "/cfh-phuong"
     # partial yêu cầu đăng nhập
     env.client.cookies.clear()
@@ -125,7 +125,7 @@ async def test_settings_shows_2way_block_and_keeps_webhook_wizard(env):
 
 async def test_setup_rejected_without_csrf_or_session_key(env):
     await env.login()
-    tok = {"bot_token": BOT_TOKEN, "app_token": APP_TOKEN, "confirm": "yes", "next": "/settings#slack2"}
+    tok = {"bot_token": BOT_TOKEN, "app_token": APP_TOKEN, "confirm": "yes", "next": "/settings/notifications#slack2"}
     r = await env.client.post("/do/slack2_setup", data={**tok, "k": env.key})  # thiếu CSRF
     assert r.status_code == 403
     r = await env.client.post("/do/slack2_setup", data={**tok, "csrf": "sai", "k": env.key})
@@ -143,67 +143,67 @@ async def test_setup_pair_allow_test_revoke_disable(env, sk, caplog):
     caplog.set_level(logging.DEBUG)
     await env.login()
     # dạng token sai → không gọi RPC, thông điệp không chứa giá trị đã dán
-    r = await post(env, "/do/slack2_setup", {"bot_token": "xoxp-userTokenNotBot0123456789", "app_token": APP_TOKEN, "confirm": "yes", "next": "/settings#slack2"})
+    r = await post(env, "/do/slack2_setup", {"bot_token": "xoxp-userTokenNotBot0123456789", "app_token": APP_TOKEN, "confirm": "yes", "next": "/settings/notifications#slack2"})
     assert r.status_code == 303 and env.calls == []
-    page = (await get(env, "/settings")).text
+    page = (await get(env, "/settings/notifications")).text
     assert "bot token phải có dạng xoxb-" in page and "userTokenNotBot" not in page
     # thiếu xác nhận → trang xác nhận KHÔNG mang token
-    r = await post(env, "/do/slack2_setup", {"bot_token": BOT_TOKEN, "app_token": APP_TOKEN, "next": "/settings#slack2"})
+    r = await post(env, "/do/slack2_setup", {"bot_token": BOT_TOKEN, "app_token": APP_TOKEN, "next": "/settings/notifications#slack2"})
     assert r.status_code == 200 and "GHI ĐÈ" in r.text and env.calls == []
     # dán token + xác nhận → slack.setup
-    r = await post(env, "/do/slack2_setup", {"bot_token": BOT_TOKEN, "app_token": APP_TOKEN, "confirm": "yes", "next": "/settings#slack2"})
-    assert r.status_code == 303 and r.headers["location"] == "/settings#slack2", r.text
+    r = await post(env, "/do/slack2_setup", {"bot_token": BOT_TOKEN, "app_token": APP_TOKEN, "confirm": "yes", "next": "/settings/notifications#slack2"})
+    assert r.status_code == 303 and r.headers["location"] == "/settings/notifications#slack2", r.text
     assert names(env) == ["slack.setup"] and env.calls[0][1]["has_tokens"] and env.calls[0][1]["_audit"]["channel"] == "web"
     assert env.hub.secrets.get("SLACK_BOT_TOKEN") == BOT_TOKEN and env.hub.config.get("notify.slack.team_id") == TEAM
     assert env.hub.config.get("notify.slack.interactive") is True
     assert [(a["channel"], a["actor"]) for a in audit_rows(env, "slack.setup")] == [("web", "user")]
     code = env.hub.slack.pairing["code"]
-    html = (await get(env, "/settings")).text
+    html = (await get(env, "/settings/notifications")).text
     assert f"ghepnoi {code}" in html and 'hx-get="/partials/slack/pending"' in html and 'hx-trigger="every 3s"' in html
     # bot nối Socket Mode → người nhắn mã trong DM → hiện ở danh sách chờ (poll)
     assert await until(lambda: env.hub.slack.info.get("polling") and sk.connected())
-    assert "Socket Mode đã nối" in (await get(env, "/settings")).text
+    assert "Socket Mode đã nối" in (await get(env, "/settings/notifications")).text
     sk.user_message(DM_BOSS, BOSS, f"ghepnoi {code}")
     assert await until(lambda: env.hub.slack.pending(None))
     part = (await get(env, "/partials/slack/pending")).text
     assert BOSS in part and DM_BOSS in part and 'action="/do/slack2_allow"' in part and "every 3s" in part
     assert "slack.pending" in names(env) and audit_rows(env, "slack.pending") == []  # poll là đọc — không ghi audit
     # xác nhận người → slack.allow
-    r = await post(env, "/do/slack2_allow", {"chat_id": DM_BOSS, "user_id": BOSS, "name": "Boss", "next": "/settings#slack2"})
+    r = await post(env, "/do/slack2_allow", {"chat_id": DM_BOSS, "user_id": BOSS, "name": "Boss", "next": "/settings/notifications#slack2"})
     assert r.status_code == 200 and "điều khiển cfharness" in r.text  # hộp xác nhận phía server khi không có JS
-    r = await post(env, "/do/slack2_allow", {"chat_id": DM_BOSS, "user_id": BOSS, "name": "Boss", "confirm": "yes", "next": "/settings#slack2"})
+    r = await post(env, "/do/slack2_allow", {"chat_id": DM_BOSS, "user_id": BOSS, "name": "Boss", "confirm": "yes", "next": "/settings/notifications#slack2"})
     assert r.status_code == 303
     assert ("slack.allow", {"chat_id": DM_BOSS, "user_id": BOSS, "has_tokens": False, "_audit": {"channel": "web", "actor": "user"}}) in env.calls
     assert DM_BOSS in env.hub.config.get("notify.slack.allowed_chat_ids") and BOSS in env.hub.config.get("notify.slack.allowed_user_ids")
     assert audit_rows(env, "slack.allow")[-1]["channel"] == "web"
-    html = (await get(env, "/settings")).text
+    html = (await get(env, "/settings/notifications")).text
     assert 'action="/do/slack2_revoke"' in html and DM_BOSS in html and "ghepnoi " + code not in html  # mã đã dùng
     # id sai dạng → không gọi RPC
     n = len(env.calls)
-    await post(env, "/do/slack2_allow", {"chat_id": "x; rm", "user_id": BOSS, "confirm": "yes", "next": "/settings#slack2"})
+    await post(env, "/do/slack2_allow", {"chat_id": "x; rm", "user_id": BOSS, "confirm": "yes", "next": "/settings/notifications#slack2"})
     assert len(env.calls) == n
     # gửi thử → slack.test → tin tới DM
     before = len(sk.sent(DM_BOSS))
-    r = await post(env, "/do/slack2_test", {"next": "/settings#slack2"})
+    r = await post(env, "/do/slack2_test", {"next": "/settings/notifications#slack2"})
     assert r.status_code == 303 and names(env)[-1] == "slack.test"
     assert await until(lambda: len(sk.sent(DM_BOSS)) > before)
     assert audit_rows(env, "slack.test")[-1]["channel"] == "web"
     # mã ghép nối mới (không dán lại token)
-    r = await post(env, "/do/slack2_pair", {"next": "/settings#slack2"})
+    r = await post(env, "/do/slack2_pair", {"next": "/settings/notifications#slack2"})
     assert r.status_code == 303 and env.calls[-1][0] == "slack.setup" and not env.calls[-1][1]["has_tokens"]
-    assert f"ghepnoi {env.hub.slack.pairing['code']}" in (await get(env, "/settings")).text
+    assert f"ghepnoi {env.hub.slack.pairing['code']}" in (await get(env, "/settings/notifications")).text
     # gỡ DM → slack.revoke
-    r = await post(env, "/do/slack2_revoke", {"chat_id": DM_BOSS, "confirm": "yes", "next": "/settings#slack2"})
+    r = await post(env, "/do/slack2_revoke", {"chat_id": DM_BOSS, "confirm": "yes", "next": "/settings/notifications#slack2"})
     assert r.status_code == 303 and names(env)[-1] == "slack.revoke"
     assert DM_BOSS not in env.hub.config.get("notify.slack.allowed_chat_ids")
     assert audit_rows(env, "slack.revoke")[-1]["channel"] == "web"
     # tắt (giữ token) → slack.disable; bật lại không cần token
-    r = await post(env, "/do/slack2_disable", {"confirm": "yes", "next": "/settings#slack2"})
+    r = await post(env, "/do/slack2_disable", {"confirm": "yes", "next": "/settings/notifications#slack2"})
     assert r.status_code == 303 and env.calls[-1] == ("slack.disable", {"forget_token": False, "has_tokens": False, "_audit": {"channel": "web", "actor": "user"}})
     assert env.hub.config.get("notify.slack.interactive") is False and env.hub.secrets.get("SLACK_BOT_TOKEN") == BOT_TOKEN
-    assert "Bật lại" in (await get(env, "/settings")).text
+    assert "Bật lại" in (await get(env, "/settings/notifications")).text
     # tắt + xoá token
-    r = await post(env, "/do/slack2_disable", {"forget": "1", "confirm": "yes", "next": "/settings#slack2"})
+    r = await post(env, "/do/slack2_disable", {"forget": "1", "confirm": "yes", "next": "/settings/notifications#slack2"})
     assert r.status_code == 303 and env.calls[-1][1]["forget_token"] is True
     assert env.hub.secrets.get("SLACK_BOT_TOKEN") is None and env.hub.secrets.get("SLACK_APP_TOKEN") is None
     assert audit_rows(env, "slack.disable")[-1]["channel"] == "web"

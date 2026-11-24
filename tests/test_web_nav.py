@@ -50,25 +50,34 @@ async def test_main_sidebar_is_workflow_only(env):  # noqa: F811
     assert 'hx-get="/partials/manager/side"' in html
 
 
-async def test_config_page_shows_temporary_settings_item(env):  # noqa: F811
+async def test_config_page_renders_in_settings_shell(env):  # noqa: F811
     await env.login()
     html = (await env.client.get("/mcp")).text
-    nav = _nav(html)
-    assert 'nav-cfg-head"><a href="/settings">Cài đặt</a>' in nav
-    assert re.search(r'<a href="/mcp" class="on nav-cfg"[^>]*aria-current="page"', nav)
-    assert re.search(r'<a class="item on" href="/settings">', html)  # menu người dùng đánh dấu Cài đặt
-    # trang làm việc: không có mục tạm
-    assert "nav-cfg" not in _nav((await env.client.get("/tasks")).text)
+    assert '<div class="shell set">' in html and '<nav class="nav" aria-label="Điều hướng chính">' not in html  # thanh bên chính ẩn
+    m = re.search(r'<nav class="snav" aria-label="Điều hướng Cài đặt">(.*?)</nav>', html, re.S)
+    assert m
+    assert re.search(r'<a href="/mcp" class="on"[^>]*aria-current="page"', m.group(1))
+    assert 'id="set-back"' in html and 'href="/manager"' in html.split('id="set-back"', 1)[0][-80:]
+    assert 'action="/do/estop"' in html.split('class="side-foot sset-foot"', 1)[1]  # Dừng khẩn cấp vẫn ở chân cột
+    assert 'class="set-mback" href="/settings"' in html  # điện thoại: nút ← Cài đặt
+    # trang làm việc: thanh bên chính, không cột Cài đặt
+    tasks = (await env.client.get("/tasks")).text
+    assert '<div class="shell">' in tasks and "snav" not in tasks
+    # Đội ngũ (/agents) ở thanh bên chính, không vào khu Cài đặt
+    assert '<div class="shell">' in (await env.client.get("/agents")).text
 
 
-async def test_settings_has_manage_grid(env):  # noqa: F811
+async def test_settings_index_is_catalog(env):  # noqa: F811
     await env.login()
     html = (await env.client.get("/settings")).text
-    m = re.search(r'<section class="card" id="manage".*?</section>', html, re.S)
+    m = re.search(r'<div class="set-page" id="set-index">(.*?)</main>', html, re.S)
     assert m
-    for href in ("/teams", "/schedules", "/skills", "/memory", "/learnings", "/mcp", "/systems", "/costs", "/audit", "/logs", "/permissions"):
+    for href in ("/settings/safety", "/settings/accounts", "/settings/config", "/settings/notifications", "/settings/secrets",
+                 "/settings/filehub", "/settings/security", "/settings/system", "/settings/backup", "/settings/support",
+                 "/settings/desktop", "/teams", "/schedules", "/skills", "/memory", "/learnings", "/mcp", "/systems", "/costs",
+                 "/audit", "/logs", "/permissions"):
         assert f'href="{href}"' in m.group(0), href
-    assert 'id="estop"' in html and 'id="desktop-app"' in html  # các thẻ cũ + neo cũ vẫn còn (chưa tách tab)
+    assert 'href="/agents"' not in m.group(0)
 
 
 async def test_estop_button_always_visible(env):  # noqa: F811
@@ -93,7 +102,7 @@ async def test_user_menu_and_mobile_tabbar(env):  # noqa: F811
     await env.login()
     html = (await env.client.get("/inbox")).text
     menu = html.split('class="menu-pop side-menu-pop"', 1)[1].split("</details>", 1)[0]
-    for item in ('href="/settings"', 'href="/costs"', 'href="/update"', 'href="/settings#desktop-app"', 'action="/logout"'):
+    for item in ('href="/settings"', 'href="/costs"', 'href="/update"', 'href="/settings/desktop"', 'action="/logout"'):
         assert item in menu, item
     assert 'href="/machine"' not in menu  # không phải máy có quản trị
     tab = _tabbar(html)

@@ -2,9 +2,9 @@
 {% import "_macros.html" as m with context %}
 {% block title %}MCP{% endblock %}
 {% block content %}
-<div class="page-head"><h1>MCP server</h1><a class="btn primary" href="/settings#accounts">{{ m.icon('plus') }}<span>Thêm MCP</span></a></div>
+<div class="page-head"><h1>MCP server</h1><a class="btn primary" href="/settings/accounts">{{ m.icon('plus') }}<span>Thêm MCP</span></a></div>
 <p class="muted">MCP dùng cho agent. Cấu hình kết nối và đăng nhập do claude giữ theo tài khoản — thêm, đăng nhập, gỡ ở
-  <a href="/settings#accounts">Cài đặt › Tài khoản Claude › MCP của tài khoản</a> (nút «Đăng ký cho hub»). Ở đây: tin cậy, chặn/cho phép từng tool.
+  <a href="/settings/accounts">Cài đặt › Tài khoản Claude › MCP của tài khoản</a> (nút «Đăng ký cho hub»). Ở đây: tin cậy, chặn/cho phép từng tool.
   Gán cho agent bằng ô tích ở trang sửa agent.</p>
 <section class="card">
   {% if not servers %}{{ m.empty("Chưa có MCP server nào. Thêm ở Cài đặt › Tài khoản Claude › MCP của tài khoản.") }}{% else %}

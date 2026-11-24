@@ -294,12 +294,12 @@ async def test_web_backup_card_and_create_action(hub_home):
     env = await _start(hub_home, FakeRuntime(ISOLATED))
     try:
         await env.login()
-        assert 'hx-get="/partials/backup"' in (await env.client.get("/settings")).text
+        assert 'hx-get="/partials/backup"' in (await env.client.get("/settings/backup")).text
         card = (await env.client.get("/partials/backup")).text
         assert "Sao lưu" in card and 'action="/do/backup_create"' in card and "Chưa có bản sao lưu" in card
-        r = await env.post("/do/backup_create", {"next": "/settings#backup"})
+        r = await env.post("/do/backup_create", {"next": "/settings/backup"})
         assert r.status_code == 200 and "Tạo bản sao lưu HUB_HOME ngay?" in r.text and not B.list_backups(hub_home)
-        r = await env.post("/do/backup_create", {"confirm": "yes", "next": "/settings#backup"})
+        r = await env.post("/do/backup_create", {"confirm": "yes", "next": "/settings/backup"})
         assert r.status_code == 303
         (b,) = B.list_backups(hub_home)
         assert audit_rows(env, "backup.create")[-1]["channel"] == "web"

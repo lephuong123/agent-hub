@@ -37,7 +37,7 @@ async def test_mcp_list_page_points_to_claude_accounts(env):
     env.hub.mcp.add({"name": "docs", "transport": "http", "url": "https://docs.example/mcp", "trust": "trusted"})
     await env.login()
     r = await env.client.get("/mcp")
-    assert r.status_code == 200 and "https://docs.example" in r.text and 'href="/settings#accounts"' in r.text
+    assert r.status_code == 200 and "https://docs.example" in r.text and 'href="/settings/accounts"' in r.text
     for gone in ("/do/mcp_add", "/do/mcp_import", "/mcp/browse", "mcp_probe", "Kiểm tra"):
         assert gone not in r.text
     for path in ("/mcp/browse", "/mcp/browse/install?name=x"):

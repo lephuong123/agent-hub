@@ -131,15 +131,15 @@ async def test_web_card_held_batch_after_run_end_and_explicit_ops(web, monkeypat
     assert 'action="/do/filehub_lane_deletes"' in card and "Cho xoá" in card and "Không xoá" in card
     assert "di chuyển" in card and "Ghi chép/a.md" in card  # thay đổi khác: nêu thao tác
     # xác nhận "Cho xoá": nêu XOÁ + số + đường dẫn
-    r = await e.post("/do/filehub_lane_deletes", {"root_id": "r_chung", "n": "3", "next": "/settings#filehub-lane"})
+    r = await e.post("/do/filehub_lane_deletes", {"root_id": "r_chung", "n": "3", "next": "/settings/filehub"})
     assert r.status_code == 200 and "Xoá 3 tệp trên Không gian số" in r.text and "nhap-06.txt" in r.text
-    r = await e.post("/do/filehub_lane_deletes", {"root_id": "r_chung", "n": "3", "discard": "1", "next": "/settings#filehub-lane"})
+    r = await e.post("/do/filehub_lane_deletes", {"root_id": "r_chung", "n": "3", "discard": "1", "next": "/settings/filehub"})
     assert "Không xoá — giữ 3 tệp" in r.text and "bỏ thay đổi của agent" in r.text
     # xác nhận "Đẩy lại": liệt kê thao tác từng mục, nói rõ lô xoá KHÔNG đi kèm
-    r = await e.post("/do/filehub_lane_orphan", {"tree": "r_t1", "action": "push", "next": "/settings#filehub-lane"})
+    r = await e.post("/do/filehub_lane_orphan", {"tree": "r_t1", "action": "push", "next": "/settings/filehub"})
     assert r.status_code == 200 and "Di chuyển Ghi chép/a.md → Ghi chép/b.md" in r.text
     assert "3 mục xoá" in r.text and "Đẩy lại các thay đổi còn kẹt lên Không gian số?" not in r.text
-    r = await e.post("/do/filehub_lane_orphan", {"tree": "r_t1", "action": "drop", "next": "/settings#filehub-lane"})
+    r = await e.post("/do/filehub_lane_orphan", {"tree": "r_t1", "action": "drop", "next": "/settings/filehub"})
     assert "tệp trên Không gian số giữ nguyên" in r.text and "Ghi chép/b.md" in r.text
 
 

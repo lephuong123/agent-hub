@@ -428,7 +428,7 @@ async def test_cloud_download_toggle_and_size_cap(env, ws):
 
 async def test_settings_page_files_group_and_public_can_only_tighten(env):
     await env.login()
-    r = await env.client.get("/settings")
+    r = await env.client.get("/settings/config")
     assert r.status_code == 200 and "files.open_extensions" in r.text and "Xem / mở file" in r.text and "<textarea" in r.text
     cloud = {"x-forwarded-for": "203.0.113.9"}
 

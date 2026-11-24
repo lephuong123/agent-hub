@@ -53,7 +53,7 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
         "backup.create", lambda f: {"label": str(f.get("label") or "").strip() or None}, ok,
         confirm="Tạo bản sao lưu HUB_HOME ngay?\nhub.db + cấu hình + chính sách + tri thức agent (không gồm secret, đăng nhập web, runs, checkpoints).\n"
                 "Hub vẫn chạy bình thường trong lúc sao lưu.",
-        goto=lambda r, f: "/settings#backup")
+        goto=lambda r, f: "/settings/backup")
 
 
 def routes() -> list[Any]:

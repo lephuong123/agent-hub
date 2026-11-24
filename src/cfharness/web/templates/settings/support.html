@@ -1,0 +1,7 @@
+{% extends "settings/_layout.html" %}
+{% block title %}Gói chẩn đoán · Cài đặt{% endblock %}
+{% block h1 %}Gói chẩn đoán{% endblock %}
+{% block sub %}Gom nhật ký và thông tin hệ thống (đã che secret) thành một gói gửi hỗ trợ khi gặp lỗi.{% endblock %}
+{% block body %}
+<div id="support" hx-get="/partials/support" hx-trigger="load" hx-swap="outerHTML"></div>
+{% endblock %}

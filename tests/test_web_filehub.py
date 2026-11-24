@@ -49,16 +49,16 @@ async def test_rename_remove_lane_folder_over_public_link(env, lane):
     assert [f["name"] for f in e.hub.filehub.lane_folders()] == ["chung"]
     card = (await e.client.get("/partials/filehub/lane", headers=PROXY)).text
     assert 'action="/do/filehub_rename"' in card and 'action="/do/filehub_remove"' in card and "filehub:chung" in card
-    r = await e.post("/do/filehub_rename", {"name": "chung", "new_name": "../x", "confirm": "yes", "next": "/settings#filehub-lane"}, headers=PROXY)
+    r = await e.post("/do/filehub_rename", {"name": "chung", "new_name": "../x", "confirm": "yes", "next": "/settings/filehub"}, headers=PROXY)
     assert [f["name"] for f in e.hub.filehub.lane_folders()] == ["chung"]
-    r = await e.post("/do/filehub_rename", {"name": "chung", "new_name": "Dự án", "confirm": "yes", "next": "/settings#filehub-lane"},
+    r = await e.post("/do/filehub_rename", {"name": "chung", "new_name": "Dự án", "confirm": "yes", "next": "/settings/filehub"},
                      headers=PROXY)
     assert r.status_code == 303 and [f["name"] for f in e.hub.filehub.lane_folders()] == ["Dự án"]
     assert e.hub.filehub.lane_target("filehub:chung/Báo cáo")["folder"] == "Dự án"  # tên cũ = bí danh
     assert audit_rows(e, "filehub.rename")[-1]["channel"] == "web"
-    r = await e.post("/do/filehub_remove", {"name": "Dự án", "confirm": "yes", "next": "/settings#filehub-lane"}, headers=PROXY)
+    r = await e.post("/do/filehub_remove", {"name": "Dự án", "confirm": "yes", "next": "/settings/filehub"}, headers=PROXY)
     assert r.status_code == 200 and e.hub.filehub.lane_folders()  # bước 2 bắt buộc
-    r = await e.post("/do/filehub_remove", {"name": "Dự án", "confirm": "yes", "confirm2": "yes", "next": "/settings#filehub-lane"}, headers=PROXY)
+    r = await e.post("/do/filehub_remove", {"name": "Dự án", "confirm": "yes", "confirm2": "yes", "next": "/settings/filehub"}, headers=PROXY)
     assert r.status_code == 303 and not e.hub.filehub.lane_folders() and audit_rows(e, "filehub.remove")[-1]["channel"] == "web"
 
 
@@ -122,11 +122,11 @@ async def test_lane_held_mass_delete_buttons(env, monkeypatch):
         card = (await e.client.get("/partials/filehub/lane")).text
         assert "30 mục xoá đang chờ duyệt" in card and "<b>Báo cáo</b>" not in card
         assert card.count('action="/do/filehub_lane_deletes"') == 2
-        r = await e.post("/do/filehub_lane_deletes", {"root_id": "r_chung", "next": "/settings#filehub-lane"})
+        r = await e.post("/do/filehub_lane_deletes", {"root_id": "r_chung", "next": "/settings/filehub"})
         assert r.status_code == 200 and "tệp trên Không gian số (vào thùng rác" in r.text and not calls  # xác nhận trước
-        r = await e.post("/do/filehub_lane_deletes", {"root_id": "r_chung", "confirm": "yes", "next": "/settings#filehub-lane"})
+        r = await e.post("/do/filehub_lane_deletes", {"root_id": "r_chung", "confirm": "yes", "next": "/settings/filehub"})
         assert r.status_code == 303 and calls == [("r_chung", False)]
-        r = await e.post("/do/filehub_lane_deletes", {"root_id": "r_chung", "discard": "1", "confirm": "yes", "next": "/settings#filehub-lane"})
+        r = await e.post("/do/filehub_lane_deletes", {"root_id": "r_chung", "discard": "1", "confirm": "yes", "next": "/settings/filehub"})
         assert r.status_code == 303 and calls[-1] == ("r_chung", True)
         rows = audit_rows(e, "filehub.resume")
         assert rows[-1]["channel"] == "web"

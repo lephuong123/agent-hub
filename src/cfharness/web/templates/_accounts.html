@@ -13,7 +13,7 @@
     <span>{% if acct_auth_block %}<code>claude</code> lỗi đăng nhập — run đang bị chặn.{% else %}Tài khoản đang dùng hết hạn mức{% if acct_gate_until %} tới {{ acct_gate_until }}{% endif %} — việc mới đang chờ.{% endif %}</span>
     {% if acct_switch %}
     <form method="post" action="/do/account_use" class="row gap wrap-row" data-confirm="Chuyển sang tài khoản đã chọn? Run mới dùng tài khoản này; run đang chạy giữ tài khoản cũ.">
-      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/settings#accounts">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/settings/accounts">
       <select name="id" aria-label="Tài khoản Claude">{% for a in acct_switch %}<option value="{{ a.id }}">{{ a.label or a.id }} ({{ a.chip }})</option>{% endfor %}</select>
       <button class="btn sm primary" type="submit">{{ m.icon('refresh') }}<span>Đổi sang tài khoản…</span></button>
     </form>
@@ -29,25 +29,25 @@
           {% if mc.error %}<p class="small danger-t">{{ mc.error }}</p>{% endif %}
           {% if mc.servers %}<ul class="plain mcp-list">{% for s in mc.servers %}<li id="acct-mcp-{{ a.id }}-{{ s.name }}"><b>{{ s.name }}</b> <span class="muted">{{ s.transport }}{% if s.host %} · {{ s.host }}{% endif %}</span> <span class="pill {{ s.status_tone }}">{{ s.status_label }}</span>{% if s.hub %} <span class="muted">(trỏ về chính hub — không đăng ký được)</span>{% elif not s.registered %} <span class="muted">(chưa đăng ký cho hub)</span>{% endif %}
             <span class="row gap wrap-row">{% if not s.registered and not s.hub %}<form method="post" action="/do/mcp_claude_register" class="inline row gap" data-confirm="Đăng ký MCP {{ s.name }} cho hub? Agent được gán sẽ dùng server này qua claude của tài khoản đang dùng.">
-              <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="account_id" value="{{ a.id }}"><input type="hidden" name="mcp_name" value="{{ s.name }}"><input type="hidden" name="name" value="{{ a.label or a.id }}"><input type="hidden" name="next" value="/settings#acct-mcp-{{ a.id }}">
+              <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="account_id" value="{{ a.id }}"><input type="hidden" name="mcp_name" value="{{ s.name }}"><input type="hidden" name="name" value="{{ a.label or a.id }}"><input type="hidden" name="next" value="/settings/accounts#acct-mcp-{{ a.id }}">
               <label class="small" title="Tin cậy: tool ghi chạy không hỏi (vẫn ghi audit). Không tích: tool ghi phải chờ duyệt."><input type="checkbox" name="trust" value="trusted"> Tin cậy</label>
-              <button class="btn sm primary" type="submit"><span>Đăng ký cho hub</span></button></form>{% endif %}{% if s.oauth and not mc.login %}{{ m.act("mcp_claude_login_start", "Đăng nhập", {"account_id": a.id, "mcp_name": s.name, "name": a.label or a.id}, "btn sm" ~ (" primary" if s.status == 'needs_auth' else ""), next="/settings#acct-mcp-" ~ a.id) }}{{ m.act("mcp_claude_logout", "Đăng xuất", {"account_id": a.id, "mcp_name": s.name, "name": a.label or a.id}, "btn sm ghost", confirm="Đăng xuất MCP " ~ s.name ~ " của tài khoản " ~ (a.label or a.id) ~ "?", next="/settings#acct-mcp-" ~ a.id) }}{% endif %}{{ m.act("mcp_claude_rm", "Gỡ", {"account_id": a.id, "mcp_name": s.name, "name": a.label or a.id}, "btn sm ghost", confirm="Gỡ MCP " ~ s.name ~ " khỏi tài khoản " ~ (a.label or a.id) ~ "?", next="/settings#acct-mcp-" ~ a.id) }}</span></li>{% endfor %}</ul>
+              <button class="btn sm primary" type="submit"><span>Đăng ký cho hub</span></button></form>{% endif %}{% if s.oauth and not mc.login %}{{ m.act("mcp_claude_login_start", "Đăng nhập", {"account_id": a.id, "mcp_name": s.name, "name": a.label or a.id}, "btn sm" ~ (" primary" if s.status == 'needs_auth' else ""), next="/settings/accounts#acct-mcp-" ~ a.id) }}{{ m.act("mcp_claude_logout", "Đăng xuất", {"account_id": a.id, "mcp_name": s.name, "name": a.label or a.id}, "btn sm ghost", confirm="Đăng xuất MCP " ~ s.name ~ " của tài khoản " ~ (a.label or a.id) ~ "?", next="/settings/accounts#acct-mcp-" ~ a.id) }}{% endif %}{{ m.act("mcp_claude_rm", "Gỡ", {"account_id": a.id, "mcp_name": s.name, "name": a.label or a.id}, "btn sm ghost", confirm="Gỡ MCP " ~ s.name ~ " khỏi tài khoản " ~ (a.label or a.id) ~ "?", next="/settings/accounts#acct-mcp-" ~ a.id) }}</span></li>{% endfor %}</ul>
           {% else %}<p class="muted small">Chưa có MCP nào trong cấu hình claude của tài khoản này.</p>{% endif %}
           {% if mc.login %}<div class="acct-login" id="acct-mcp-login-{{ a.id }}">
             <p class="small"><b>Đăng nhập MCP «{{ mc.login.name }}»:</b> mở trang đăng nhập (tab mới), đồng ý cấp quyền. Trình duyệt chuyển tới một địa chỉ <code>localhost:…/callback</code>
               (có thể báo không mở được trang) — chép NGUYÊN địa chỉ trên thanh trình duyệt rồi dán vào đây.</p>
             <p><a class="btn primary" href="{{ mc.login.url }}" target="_blank" rel="noopener noreferrer">{{ m.icon('external') }}<span>Mở trang đăng nhập</span></a></p>
             <form method="post" action="/do/mcp_claude_login_finish" class="form" autocomplete="off">
-              <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="login_id" value="{{ mc.login.login_id }}"><input type="hidden" name="next" value="/settings#acct-mcp-{{ a.id }}">
+              <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="login_id" value="{{ mc.login.login_id }}"><input type="hidden" name="next" value="/settings/accounts#acct-mcp-{{ a.id }}">
               <label>URL chuyển hướng <input name="redirect_url" type="password" required autocomplete="off" spellcheck="false" placeholder="localhost:…/callback?code=…"></label>
               <div class="row end gap"><button class="btn" type="submit">Hoàn tất đăng nhập</button></div>
             </form>
-            {{ m.act("mcp_claude_login_cancel", "Huỷ", {"login_id": mc.login.login_id}, "btn sm ghost", next="/settings#acct-mcp-" ~ a.id) }}
+            {{ m.act("mcp_claude_login_cancel", "Huỷ", {"login_id": mc.login.login_id}, "btn sm ghost", next="/settings/accounts#acct-mcp-" ~ a.id) }}
           </div>{% endif %}
-          <div class="row gap wrap-row">{{ m.act("mcp_claude_check", "Kiểm tra MCP", {"account_id": a.id, "name": a.label or a.id}, "btn sm", next="/settings#acct-mcp-" ~ a.id) }}{% if mc.checked_at %}<span class="muted small">kiểm lúc {{ m.rel(mc.checked_at) }}</span>{% endif %}</div>
+          <div class="row gap wrap-row">{{ m.act("mcp_claude_check", "Kiểm tra MCP", {"account_id": a.id, "name": a.label or a.id}, "btn sm", next="/settings/accounts#acct-mcp-" ~ a.id) }}{% if mc.checked_at %}<span class="muted small">kiểm lúc {{ m.rel(mc.checked_at) }}</span>{% endif %}</div>
           <details class="acct-mcp-add"><summary class="btn sm ghost">Thêm MCP</summary>
             <form method="post" action="/do/mcp_claude_add" class="form" autocomplete="off">
-              <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="account_id" value="{{ a.id }}"><input type="hidden" name="name" value="{{ a.label or a.id }}"><input type="hidden" name="next" value="/settings#acct-mcp-{{ a.id }}">
+              <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="account_id" value="{{ a.id }}"><input type="hidden" name="name" value="{{ a.label or a.id }}"><input type="hidden" name="next" value="/settings/accounts#acct-mcp-{{ a.id }}">
               <div class="fgrid">
                 <label>Tên <input name="mcp_name" required maxlength="63" autocomplete="off" placeholder="vd atlassian"></label>
                 <label>URL <input name="url" required type="url" autocomplete="off" spellcheck="false" placeholder="vd mcp.example.com/mcp (https)"></label>
@@ -65,13 +65,13 @@
       <td data-label="Dùng lần cuối">{{ m.rel(a.last_used_at) }}</td>
       <td data-label="Chi phí hôm nay">{{ (a.cost_today_usd or 0)|cost }}</td>
       <td class="actions"><div class="row gap wrap-row">
-        {% if a.can_use %}{{ m.act("account_use", "Dùng", {"id": a.id, "name": a.label or a.id}, "btn sm primary", confirm="Chuyển sang tài khoản " ~ (a.label or a.id) ~ "? Run mới dùng tài khoản này; run đang chạy giữ tài khoản cũ.", next="/settings#accounts") }}{% endif %}
-        {% if a.kind != 'custom' %}{{ m.act("account_check", "Kiểm tra", {"id": a.id, "name": a.label or a.id}, "btn sm", next="/settings#accounts") }}{% endif %}
-        {% if claudeai and a.cai and not claudeai.login %}{{ m.act("claudeai_login_start", "Gắn connector" if not a.cai.logged_in else "Đổi tài khoản connector", {"id": a.id, "name": a.label or a.id}, "btn sm" ~ (" primary" if a.cai.logged_in is sameas false else ""), next="/settings#accounts") }}{% if a.cai.logged_in %}{{ m.act("claudeai_logout", "Gỡ connector", {"id": a.id, "name": a.label or a.id}, "btn sm ghost", confirm="Gỡ connector của tài khoản " ~ (a.label or a.id) ~ "? Khi tài khoản này đang dùng, agent không dùng được connector cho tới khi gắn lại.", next="/settings#accounts") }}{% endif %}{% endif %}
-        {% if a.can_rm %}{{ m.act("account_rm", "Xoá", {"id": a.id, "name": a.label or a.id}, "btn sm ghost", confirm="Xoá tài khoản " ~ (a.label or a.id) ~ "? Token bị xoá khỏi secret store.", next="/settings#accounts") }}{% endif %}
+        {% if a.can_use %}{{ m.act("account_use", "Dùng", {"id": a.id, "name": a.label or a.id}, "btn sm primary", confirm="Chuyển sang tài khoản " ~ (a.label or a.id) ~ "? Run mới dùng tài khoản này; run đang chạy giữ tài khoản cũ.", next="/settings/accounts") }}{% endif %}
+        {% if a.kind != 'custom' %}{{ m.act("account_check", "Kiểm tra", {"id": a.id, "name": a.label or a.id}, "btn sm", next="/settings/accounts") }}{% endif %}
+        {% if claudeai and a.cai and not claudeai.login %}{{ m.act("claudeai_login_start", "Gắn connector" if not a.cai.logged_in else "Đổi tài khoản connector", {"id": a.id, "name": a.label or a.id}, "btn sm" ~ (" primary" if a.cai.logged_in is sameas false else ""), next="/settings/accounts") }}{% if a.cai.logged_in %}{{ m.act("claudeai_logout", "Gỡ connector", {"id": a.id, "name": a.label or a.id}, "btn sm ghost", confirm="Gỡ connector của tài khoản " ~ (a.label or a.id) ~ "? Khi tài khoản này đang dùng, agent không dùng được connector cho tới khi gắn lại.", next="/settings/accounts") }}{% endif %}{% endif %}
+        {% if a.can_rm %}{{ m.act("account_rm", "Xoá", {"id": a.id, "name": a.label or a.id}, "btn sm ghost", confirm="Xoá tài khoản " ~ (a.label or a.id) ~ "? Token bị xoá khỏi secret store.", next="/settings/accounts") }}{% endif %}
         {% if a.can_rename %}<details class="acct-rename"><summary class="btn sm ghost">Đổi tên</summary>
           <form method="post" action="/do/account_rename" class="row gap" autocomplete="off">
-            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ a.id }}"><input type="hidden" name="next" value="/settings#accounts">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ a.id }}"><input type="hidden" name="next" value="/settings/accounts">
             <input name="label" value="{{ a.label }}" required maxlength="60" aria-label="Tên mới">
             <button class="btn sm" type="submit">Lưu</button></form></details>{% endif %}
       </div></td></tr>
@@ -86,11 +86,11 @@
       copy code rồi dán vào đây. Khi tài khoản này đang dùng, agent dùng mọi connector đã Connect trên claude.ai của nó (Google Drive, Gmail…).</p>
     <p><a class="btn primary" href="{{ claudeai.login.url }}" target="_blank" rel="noopener noreferrer">{{ m.icon('external') }}<span>Mở trang đăng nhập</span></a></p>
     <form method="post" action="/do/claudeai_login_finish" class="form" autocomplete="off">
-      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="login_id" value="{{ claudeai.login.login_id }}"><input type="hidden" name="next" value="/settings#accounts">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="login_id" value="{{ claudeai.login.login_id }}"><input type="hidden" name="next" value="/settings/accounts">
       <label>Code <input name="code" type="password" required autocomplete="off" spellcheck="false" placeholder="dán code sau khi đăng nhập"></label>
       <div class="row end gap"><button class="btn" type="submit">Gắn connector</button></div>
     </form>
-    {{ m.act("claudeai_login_cancel", "Bỏ qua", {"login_id": claudeai.login.login_id}, "btn sm ghost", next="/settings#accounts") }}
+    {{ m.act("claudeai_login_cancel", "Bỏ qua", {"login_id": claudeai.login.login_id}, "btn sm ghost", next="/settings/accounts") }}
   </div>
   {% endif %}
   {% if claudeai.connectors_auth == 'token' or not claudeai.connectors_auto %}<p class="banner warn small">{{ m.icon('alert') }} Agent không tự dùng connector: đã tắt bằng cấu hình (<code>connectors.auto</code> / <code>runtime.claude.connectors_auth</code>).</p>{% endif %}
@@ -103,19 +103,19 @@
       copy code hiện ra rồi dán vào đây.</p>
     <p><a class="btn primary" href="{{ acct_login.url }}" target="_blank" rel="noopener noreferrer">{{ m.icon('external') }}<span>Mở trang đăng nhập</span></a></p>
     <form method="post" action="/do/account_login_finish" class="form" autocomplete="off">
-      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="login_id" value="{{ acct_login.login_id }}"><input type="hidden" name="next" value="/settings#accounts">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="login_id" value="{{ acct_login.login_id }}"><input type="hidden" name="next" value="/settings/accounts">
       <label>Code <input name="code" type="password" required autocomplete="off" spellcheck="false" placeholder="dán code sau khi đăng nhập"></label>
       <div class="row end gap">
         <button class="btn" type="submit">Hoàn tất</button>
       </div>
     </form>
-    {{ m.act("account_login_cancel", "Huỷ", {"login_id": acct_login.login_id}, "btn sm ghost", next="/settings#accounts") }}
+    {{ m.act("account_login_cancel", "Huỷ", {"login_id": acct_login.login_id}, "btn sm ghost", next="/settings/accounts") }}
   </div>
   {% else %}
   <details class="cfg-group" name="acct-add" open>
     <summary>Đăng nhập (khuyên dùng)</summary>
     <form method="post" action="/do/account_login_start" class="form" autocomplete="off">
-      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/settings#accounts">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/settings/accounts">
       <label>Tên tài khoản <input name="label" required maxlength="60" placeholder="VD: Công ty, Cá nhân" autocomplete="off"></label>
       <p class="muted small">Bước 1/2: hub mở lượt đăng nhập (<code>claude setup-token</code>) và đưa bạn link trang đăng nhập. Xong sẽ hỏi gắn connector (đăng nhập thêm một lần).</p>
       <div class="row end"><button class="btn" type="submit">Tiếp tục</button></div>
@@ -124,7 +124,7 @@
   <details class="cfg-group" name="acct-add">
     <summary>Dán token</summary>
     <form method="post" action="/do/account_add_token" class="form" autocomplete="off">
-      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/settings#accounts">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/settings/accounts">
       <div class="fgrid">
         <label>Tên tài khoản <input name="label" required maxlength="60" autocomplete="off"></label>
         <label>Token <input name="token" type="password" required autocomplete="off" spellcheck="false" placeholder="sk-ant-oat01-…"></label>

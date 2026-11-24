@@ -3,7 +3,7 @@
 {% block title %}Quyền đã cấp{% endblock %}
 {% block content %}
 <div class="page-head"><div class="ph-title"><h1>Quyền đã cấp</h1><span class="sub">Mọi chỗ bạn đã nới rào chắn cho agent — xem và gỡ ở một nơi. Gỡ quyền có hiệu lực ngay với guard; ngoại lệ sandbox áp từ run kế tiếp.</span></div></div>
-<div class="banner info">{{ m.icon('shield') }}<span>Cổng duyệt: <b>{{ {'human': 'người duyệt', 'manager': 'điều phối viên duyệt', 'off': 'TẮT'}.get(gates, gates) }}</b>{% if profile %} · hồ sơ phê duyệt <b>{{ profile }}</b>{% endif %} · đổi ở <a href="/settings">Cài đặt</a>. Chỉ người (web/CLI/chat của bạn) thay đổi được các quyền dưới đây — điều phối viên và agent thì không.</span></div>
+<div class="banner info">{{ m.icon('shield') }}<span>Cổng duyệt: <b>{{ {'human': 'người duyệt', 'manager': 'điều phối viên duyệt', 'off': 'TẮT'}.get(gates, gates) }}</b>{% if profile %} · hồ sơ phê duyệt <b>{{ profile }}</b>{% endif %} · đổi ở <a href="/settings/safety#gates">Cài đặt › Chung &amp; an toàn</a>. Chỉ người (web/CLI/chat của bạn) thay đổi được các quyền dưới đây — điều phối viên và agent thì không.</span></div>
 
 <section class="card flush" id="perm-trust">
   <h2 class="pad">{{ m.icon('alert') }} Trust full theo agent</h2>

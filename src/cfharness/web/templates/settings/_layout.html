@@ -1,0 +1,11 @@
+{#- Khung một tab Cài đặt (/settings/<tab>): nội dung tối đa ~720px cạnh cột nav con (base.html, shell "set"). Điện thoại: cột nav ẩn → nút
+    "← Cài đặt" về trang danh sách. Tab con khai báo: block title, h1, sub, body. -#}
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block content %}
+<div class="set-page">
+  <a class="set-mback" href="/settings">{{ m.icon('arrow-left') }}<span>Cài đặt</span></a>
+  <div class="page-head"><div class="ph-title"><h1>{% block h1 %}{% endblock %}</h1><span class="sub">{% block sub %}{% endblock %}</span></div></div>
+  {% block body %}{% endblock %}
+</div>
+{% endblock %}

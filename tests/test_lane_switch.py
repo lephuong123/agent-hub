@@ -90,20 +90,20 @@ async def test_web_lane_card_key_only_at_step2(web, lane):
 
     e = web
     await e.login()
-    assert 'hx-get="/partials/filehub/lane"' in (await e.client.get("/settings")).text
+    assert 'hx-get="/partials/filehub/lane"' in (await e.client.get("/settings/filehub")).text
     card = (await e.client.get("/partials/filehub/lane")).text
     assert "Cổng cfharness" in card and 'action="/do/filehub_lane_setup"' in card and 'name="key"' not in card
     # bước 1: xác nhận (không có ô khoá) → bước 2: ô password trống
-    r = await e.post("/do/filehub_lane_setup", {"server": "qltm", "url": lane.url, "next": "/settings#filehub-lane"})
+    r = await e.post("/do/filehub_lane_setup", {"server": "qltm", "url": lane.url, "next": "/settings/filehub"})
     assert r.status_code == 200 and "Nối hub với cổng cfharness" in r.text
-    r = await e.post("/do/filehub_lane_setup", {"server": "qltm", "url": lane.url, "confirm": "yes", "next": "/settings#filehub-lane"})
+    r = await e.post("/do/filehub_lane_setup", {"server": "qltm", "url": lane.url, "confirm": "yes", "next": "/settings/filehub"})
     assert r.status_code == 200 and 'type="password"' in r.text and 'name="key"' in r.text and KEY not in r.text
     # URL ngoài máy → từ chối ngay ở web
     r = await e.post("/do/filehub_lane_setup", {"server": "qltm", "url": "http://10.0.0.1:8223", "confirm": "yes", "confirm2": "yes", "key": KEY,
-                                                "next": "/settings#filehub-lane"})
+                                                "next": "/settings/filehub"})
     assert not e.hub.secrets.exists("FILEHUB_LANE_QLTM")
     r = await e.post("/do/filehub_lane_setup", {"server": "qltm", "url": lane.url, "confirm": "yes", "confirm2": "yes", "key": KEY,
-                                                "next": "/settings#filehub-lane"})
+                                                "next": "/settings/filehub"})
     assert r.status_code == 303 and e.hub.secrets.get("FILEHUB_LANE_QLTM") == KEY
     row = audit_rows(e, "filehub.lane_setup")[-1]
     assert row["channel"] == "web" and KEY not in json.dumps(row)

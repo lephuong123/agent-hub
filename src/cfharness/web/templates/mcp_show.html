@@ -28,7 +28,7 @@
     <div><dt>Kiểu</dt><dd>{{ s.transport }}</dd></div>
     <div><dt>Tin cậy</dt><dd><span class="pill {{ 'ok' if s.trust == 'trusted' else 'muted' }}">{{ 'tin cậy' if s.trust == 'trusted' else 'cần duyệt' }}</span></dd></div>
     {% if (s.config or {}).url %}<div><dt>Host</dt><dd>{{ s.config.url }}</dd></div>{% endif %}
-    <div><dt>Kết nối</dt><dd>claude theo tài khoản — <a href="/settings#accounts">MCP của tài khoản</a></dd></div>
+    <div><dt>Kết nối</dt><dd>claude theo tài khoản — <a href="/settings/accounts">MCP của tài khoản</a></dd></div>
     <div><dt>Agent dùng</dt><dd>{% for a in s.agents or [] %}<a class="chip" href="/mcp/agent/{{ a }}" title="Xem cấu hình MCP của agent {{ a }}">{{ a }}</a>{% else %}—{% endfor %}</dd></div>
     {% if (s.config or {}).description %}<div class="span2"><dt>Mô tả</dt><dd>{{ s.config.description }}</dd></div>{% endif %}
   </dl>
@@ -78,7 +78,7 @@
 {% if not s.deleted_at %}
 <section class="card" id="edit">
   <h2>Sửa chính sách</h2>
-  <p class="muted xs">Cách kết nối (lệnh, URL, header, đăng nhập) do claude giữ theo tài khoản — sửa ở <a href="/settings#accounts">MCP của tài khoản</a>.</p>
+  <p class="muted xs">Cách kết nối (lệnh, URL, header, đăng nhập) do claude giữ theo tài khoản — sửa ở <a href="/settings/accounts">MCP của tài khoản</a>.</p>
   <form method="post" action="/do/mcp_edit" class="form" data-confirm="Lưu chính sách MCP server {{ s.name }}?">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/mcp/{{ s.name }}#edit">
     <input type="hidden" name="name" value="{{ s.name }}">

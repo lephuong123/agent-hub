@@ -1430,30 +1430,84 @@ async def audit_page(request: Request) -> Response:
     return await render(request, "audit.html", {"nav": "audit", "rows": rows, "q": dict(q), "activity": activity, "older": older, "error": error})
 
 
-async def settings_page(request: Request) -> Response:
-    es = await rpc(request, "estop.get")
-    cfg_view = _settings.view(await rpc(request, "config.get") or {})  # danh mục khoá + kiểu ô (web/settings_schema.py)
-    secrets_ = await rpc(request, "secret.list")
-    names = {s.get("name") for s in secrets_ or []}
-    tg_chats = []
+# ============================================================================ khu Cài đặt (layout 2 cột, tab /settings/<tab>)
+# /settings = trang danh mục (điện thoại: danh sách → vào chi tiết; app.js chuyển link cũ /settings#<id> sang tab mới). Mỗi tab chỉ gọi đúng RPC
+# nó cần. Nhóm cấu hình "notify" nằm ở tab Thông báo & kênh; khoá bảo mật chỉ xem ở tab Bảo mật & thiết bị.
+async def settings_index(request: Request) -> Response:
+    return await render(request, "settings/index.html", {"nav": "settings"})
+
+
+async def _gates_mode(request: Request) -> str:
     try:
-        tg_chats = await rpc(request, "config.get", {"key": "notify.telegram.allowed_chat_ids"}) or []
+        return await rpc(request, "config.get", {"key": "gates.mode"}) or "human"
     except RpcError:
-        pass
-    integ = await rpc(request, "guard.integrity.status")
+        return "human"
+
+
+async def _tab_safety(request: Request) -> dict[str, Any]:
+    return {"estop": await rpc(request, "estop.get"), "gates": await _gates_mode(request)}
+
+
+async def _tab_accounts(request: Request) -> dict[str, Any]:
     status = await rpc(request, "hub.status")
+    return {"status": status, **await _account_pages.accounts_ctx(request, status)}  # khối "Tài khoản Claude" (web/account_pages.py)
+
+
+async def _tab_config(request: Request) -> dict[str, Any]:
+    cfg = _settings.view(await rpc(request, "config.get") or {})  # danh mục khoá + kiểu ô (web/settings_schema.py)
+    return {"groups": [g for g in cfg["groups"] if g["id"] != "notify"]}
+
+
+async def _tab_notifications(request: Request) -> dict[str, Any]:
+    from ..config import get_path
+
+    raw = await rpc(request, "config.get") or {}
+    names = {s.get("name") for s in await rpc(request, "secret.list") or []}
     try:
-        gates = await rpc(request, "config.get", {"key": "gates.mode"}) or "human"
-    except RpcError:
-        gates = "human"
-    st = ws(request)
+        tg_chats = get_path(raw, "notify.telegram.allowed_chat_ids") or []
+    except KeyError:
+        tg_chats = []
     slack2 = await _slack_pages.slack_ctx(request)  # khối "Slack 2 chiều" (web/slack_pages.py)
-    accts = await _account_pages.accounts_ctx(request, status)  # khối "Tài khoản Claude" (web/account_pages.py)
-    return await render(request, "settings.html", {**slack2, **accts, "nav": "settings", "desktop_dl": _desktop.DOWNLOADS, "estop": es, "cfg": cfg_view, "secrets": secrets_, "slack": SLACK_WEBHOOK_SECRET in names or "SLACK_BOT_TOKEN" in names,
-                                                   "slack_webhook": SLACK_WEBHOOK_SECRET in names, "slack_create_url": SLACK_CREATE_URL,
-                                                   "telegram": "TELEGRAM_BOT_TOKEN" in names, "tg_chats": tg_chats, "integ": integ, "status": status, "gates": gates,
-                                                   "web": {"host": st.host, "port": st.port, "sessions": len(st.auth.sessions)},
-                                                   "trusted": _devices_view(request)})
+    return {**slack2, "slack": SLACK_WEBHOOK_SECRET in names or "SLACK_BOT_TOKEN" in names, "slack_webhook": SLACK_WEBHOOK_SECRET in names,
+            "slack_create_url": SLACK_CREATE_URL, "telegram": "TELEGRAM_BOT_TOKEN" in names, "tg_chats": tg_chats,
+            "groups": [g for g in _settings.view(raw)["groups"] if g["id"] == "notify"]}
+
+
+async def _tab_secrets(request: Request) -> dict[str, Any]:
+    return {"secrets": await rpc(request, "secret.list")}
+
+
+async def _tab_security(request: Request) -> dict[str, Any]:
+    return {"trusted": _devices_view(request), "readonly": _settings.view(await rpc(request, "config.get") or {})["readonly"]}
+
+
+async def _tab_system(request: Request) -> dict[str, Any]:
+    st = ws(request)
+    return {"status": await rpc(request, "hub.status"), "integ": await rpc(request, "guard.integrity.status"),
+            "web": {"host": st.host, "port": st.port, "sessions": len(st.auth.sessions)}}
+
+
+async def _tab_static(request: Request) -> dict[str, Any]:
+    return {}  # tab chỉ nạp lười partial (htmx) — không RPC lúc render
+
+
+async def _tab_desktop(request: Request) -> dict[str, Any]:
+    return {"desktop_dl": _desktop.DOWNLOADS}
+
+
+SETTINGS_TABS: dict[str, Callable[[Request], Awaitable[dict[str, Any]]]] = {
+    "safety": _tab_safety, "accounts": _tab_accounts, "config": _tab_config, "notifications": _tab_notifications, "secrets": _tab_secrets,
+    "filehub": _tab_static, "security": _tab_security, "system": _tab_system, "backup": _tab_static, "support": _tab_static,
+    "desktop": _tab_desktop,
+}
+
+
+async def settings_tab(request: Request) -> Response:
+    tab = request.path_params["tab"]
+    fn = SETTINGS_TABS.get(tab)
+    if fn is None:
+        raise HTTPException(404, "Không có mục cài đặt này")
+    return await render(request, f"settings/{tab}.html", {"nav": f"settings_{tab}", **await fn(request)})
 
 
 def _devices_view(request: Request) -> dict[str, Any]:
@@ -2272,7 +2326,8 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/costs", costs_page),
         Route("/audit", audit_page),
         *_debug_routes(),  # /logs "Nhật ký hệ thống" + /trace/{id} — chỉ đọc (web/debug_pages.py, L6)
-        Route("/settings", settings_page),
+        Route("/settings", settings_index),
+        Route("/settings/{tab}", settings_tab),
         Route("/do/{name}", do_action, methods=["POST"]),
         Route("/sse/run/{id}", sse_run),
         Route("/sse/firehose", sse_firehose),
