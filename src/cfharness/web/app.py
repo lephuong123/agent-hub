@@ -1692,18 +1692,10 @@ ACTIONS: dict[str, Action] = {
     "golden_suggestion_reject": Action("golden.suggestion_reject", lambda f: {"id": _req(f, "id")}, lambda r, f: f"Đã bỏ đề xuất {f.get('id')}"),
     "digest_run": Action("digest.run", lambda f: {"no_send": True}, "Đã tạo bản tin học"),
     # ---- MCP
-    "mcp_add": Action("mcp.add", lambda f: {"config": _mcp_config(f), "probe": True}, lambda r, f: _mcp_ok(r),
-                      goto=lambda r, f: "/mcp", danger=True,
-                      confirm=lambda f: _mcp_confirm(f)),
-    "mcp_probe": Action("mcp.probe", lambda f: {"name": _req(f, "name")}, lambda r, f: _probe_msg(r)),
     "mcp_remove": Action("mcp.remove", lambda f: {"name": _req(f, "name"), "force": f.get("force") == "1"}, lambda r, f: f"Đã xoá MCP {f.get('name')} (khôi phục được)",
                          confirm=lambda f: f"Xoá MCP server {f.get('name')}? Agent đang dùng sẽ mất các tool này.", danger=True, goto=lambda r, f: "/mcp"),
     "mcp_restore": Action("mcp.restore", lambda f: {"name": _req(f, "name")}, lambda r, f: f"Đã khôi phục MCP {f.get('name')}",
                           confirm=lambda f: f"Khôi phục MCP server {f.get('name')}? Server MCP chạy NGOÀI sandbox của agent."),
-    "mcp_import": Action("mcp.import", lambda f: {"path": str(f.get("path") or "~/.claude.json").strip() or "~/.claude.json", "probe": True,
-                                                  "overwrite": f.get("overwrite") == "1", **({"select": sel} if (sel := [str(x) for x in f.getlist("select")]) else {})},
-                         lambda r, f: "Đã nhập: " + (", ".join(f"{i.get('name')} ({i.get('status')})" for i in (r or {}).get("items") or []) or "không có gì"),
-                         confirm="Nhập các MCP server đã chọn từ cấu hình Claude Code vào registry của hub?"),
     # ---- an toàn & cài đặt
     "estop": Action("estop.set", lambda f: {"on": f.get("on") == "1", "stop_running": f.get("stop_running") == "1", "reason": f.get("note") or "web"},
                     lambda r, f: "ESTOP đã BẬT — không run mới nào được chạy" if f.get("on") == "1" else "ESTOP đã tắt",
@@ -1737,40 +1729,6 @@ def _answer_params(f: FormData) -> dict[str, Any]:
     return {"id": _req(f, "id"), "keys": keys, "text": text or None, "channel": CHANNEL}
 
 
-def _mcp_config(f: FormData) -> dict[str, Any]:
-    name = _req(f, "name", "tên server")
-    transport = str(f.get("transport") or "stdio")
-    cfg: dict[str, Any] = {"name": name, "transport": transport, "trust": "trusted" if f.get("trust") == "trusted" else "untrusted",
-                           "description": str(f.get("description") or "")}
-    if transport == "stdio":
-        import shlex
-
-        parts = shlex.split(_req(f, "command", "lệnh chạy"))
-        cfg["command"], cfg["args"] = parts[0], parts[1:]
-    else:
-        cfg["url"] = _req(f, "url", "URL")  # server cần OAuth: thêm vào claude theo tài khoản (Cài đặt → Tài khoản Claude), không ở đây
-    env: dict[str, str] = {}
-    for line in str(f.get("env") or "").splitlines():
-        if "=" in line:
-            k, _, v = line.partition("=")
-            if k.strip():
-                env[k.strip()] = v.strip()
-    if env:
-        cfg["env"] = env
-    return cfg
-
-
-def _mcp_confirm(f: FormData) -> str:
-    try:
-        cfg = _mcp_config(f)
-    except ValueError as e:
-        return f"Thêm MCP server? ({e})"
-    what = (cfg.get("command", "") + " " + " ".join(cfg.get("args") or [])).strip() if cfg["transport"] == "stdio" else cfg.get("url", "")
-    trust = "TIN CẬY (tool ghi chạy không cần duyệt)" if cfg["trust"] == "trusted" else "cần duyệt"
-    return (f"Thêm MCP server {cfg['name']} ({trust})?\nHub sẽ CHẠY NGAY để kiểm tra, ngoài sandbox, dưới quyền của bạn:\n{what}"
-            + (f"\nBiến môi trường: {', '.join(cfg['env'])}" if cfg.get("env") else ""))
-
-
 def carry(form: FormData) -> list[tuple[str, str]]:
     """Trường form mang sang trang xác nhận — KHÔNG BAO GIỜ gồm csrf/khoá phiên (khoá không được nằm trong HTML)."""
     return [(k, v) for k, v in form.multi_items() if k not in ("csrf", "confirm", "confirm2", KEY_FIELD) and isinstance(v, str)]
@@ -1783,18 +1741,6 @@ def heavy_approval(ap: dict[str, Any], classes: list[str] | tuple[str, ...]) -> 
     from ..notify.telegram import is_heavy
 
     return is_heavy(ap, tuple(classes or ()) + HEAVY_EXTRA)
-
-
-def _probe_msg(r: Any) -> str:
-    r = r or {}
-    if r.get("ok"):
-        return f"Kết nối được — {len(r.get('tools') or {})} tool ({r.get('elapsed_ms')} ms)"
-    return f"Không kết nối được: {r.get('error') or '?'}"
-
-
-def _mcp_ok(r: Any) -> str:
-    pr = (r or {}).get("probe")
-    return f"Đã thêm MCP {(r or {}).get('name')}" + (f" — {_probe_msg(pr)}" if pr else "")
 
 
 @dataclass
@@ -2278,7 +2224,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/learnings", learnings_page),
         Route("/learnings/{id}", ledger_entry),
         Route("/mcp", mcp_page),
-        *_mcp_routes(),  # /mcp/browse, /mcp/agent/{id}, /mcp/{name} (+ /tool) — web/mcp_pages.py
+        *_mcp_routes(),  # /mcp/agent/{id}, /mcp/{name} (+ /tool) — web/mcp_pages.py
         Route("/costs", costs_page),
         Route("/audit", audit_page),
         *_debug_routes(),  # /logs "Nhật ký hệ thống" + /trace/{id} — chỉ đọc (web/debug_pages.py, L6)
@@ -2319,7 +2265,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
 from . import manager as _mgr  # noqa: E402
 
 _mgr.register_actions(ACTIONS, Action, _req)
-# Trang MCP mở rộng (sửa server, tool, danh mục): thao tác `mcp_edit` + `mcp_migrate_claude` (OAuth kiểu cũ → claude)
+# Trang MCP mở rộng (sửa chính sách server, tool): thao tác `mcp_edit`
 from . import mcp_pages as _mcpp  # noqa: E402
 
 _mcpp.register_actions(ACTIONS, Action, _req)

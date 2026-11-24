@@ -101,8 +101,8 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "gates": None,  # công tắc chung cổng duyệt (= config.set gates.mode) — agent gõ, kể cả chỉ xem, đều chặn
     "secret": {"set", "rm", "remove", "delete"},
     "secrets": {"set", "rm", "remove", "delete"},
-    "mcp": {"add", "edit", "update", "rm", "remove", "restore", "import", "assign", "unassign", "token", "agent-config", "annotate", "login", "logout",
-            "claude-servers", "claude", "migrate-to-claude"},
+    "mcp": {"add", "edit", "update", "rm", "remove", "restore", "assign", "unassign", "token", "agent-config", "annotate",
+            "claude-servers", "claude"},
     "estop": {"on", "off", "set", "clear"},
     "team": {"create", "edit", "update", "archive", "restore", "member", "estop", "rm"},
     "run": {"revert", "takeover"},

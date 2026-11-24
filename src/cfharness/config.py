@@ -297,9 +297,8 @@ DEFAULTS: dict[str, Any] = {
     "mcp": {
         # server MCP nội bộ của hub không ghi audit tool.write (tool điều khiển của guard)
         "audit_ignore_servers": ["hub-guard"],
-        "probe_timeout_s": 30,
-        # `mcp.oauth_proxy.*` + `mcp_client.oauth_callback_port` (OAuth + proxy loopback của hub) đã gỡ từ v0.2.28 — OAuth MCP do claude giữ
-        # theo tài khoản. config.yaml cũ còn các khoá này vẫn đọc bình thường (khoá lạ được bỏ qua).
+        # `mcp.oauth_proxy.*` + `mcp_client.oauth_callback_port` (gỡ v0.2.28), `mcp.probe_timeout_s` (gỡ v0.2.32 — hub không probe MCP
+        # bên thứ ba nữa): config.yaml cũ còn các khoá này vẫn đọc bình thường (khoá lạ được bỏ qua).
     },
     "secrets": {
         # `${VAR}` không có trong secret store thì lấy biến môi trường của daemon (tương thích ~/.claude.json)

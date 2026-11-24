@@ -75,16 +75,12 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "golden.add", "golden.rm", "golden.update", "golden.restore", "golden.dismiss", "golden.from_run",
         "golden.suggestion_approve", "golden.suggestion_reject", "golden.suggest_scan",  # đề xuất golden: hub đề xuất (vòng nền), người quyết
         # secret + registry MCP (server MCP chạy NGOÀI sandbox → thêm server = thoát sandbox)
-        "secret.set", "secret.rm", "mcp.add", "mcp.update", "mcp.remove", "mcp.restore", "mcp.import", "mcp.assign",
-        # OAuth MCP của hub (đã gỡ từ v0.2.28 — stub trả lỗi hướng dẫn một bản; giữ trong HUMAN_ONLY tới khi gỡ hẳn tên)
-        "mcp.oauth_start", "mcp.oauth_callback", "mcp.oauth_disconnect", "mcp.oauth_refresh",
+        "secret.set", "secret.rm", "mcp.add", "mcp.update", "mcp.remove", "mcp.restore", "mcp.assign",
         # MCP do claude quản lý trong cấu hình claude của tài khoản (tên/transport/host) — cấu hình của NGƯỜI, chỉ người xem (plan-mcp-claude-native PR2)
         "mcp.claude_servers",
         # PR3: thêm/gỡ/đăng nhập/đăng xuất MCP trong cấu hình claude của tài khoản = cấp/thu hồi quyền dịch vụ ngoài thay người (mcp_client/claude_admin.py)
         "mcp.claude_add", "mcp.claude_remove", "mcp.claude_login_start", "mcp.claude_login_finish", "mcp.claude_login_cancel",
         "mcp.claude_logout", "mcp.claude_status",
-        # PR4: chuyển server OAuth của hub sang claude (thêm vào cấu hình claude của tài khoản + xoá token hub) — cùng lý do
-        "mcp.migrate_to_claude",
         # thao tác phá huỷ workspace / tiếp quản / team
         "run.revert", "run.takeover", "run.takeover_record",
         "workspace.unlock",  # gỡ khoá repo của run khác = cho hai run ghi chồng (workspace-parallel B3)

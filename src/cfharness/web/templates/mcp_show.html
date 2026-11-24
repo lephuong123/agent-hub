@@ -12,7 +12,7 @@
 {% block content %}
 <nav class="crumbs"><a href="/mcp">MCP</a> › <span>{{ s.name }}</span></nav>
 <div class="page-head"><h1>{{ s.name }}{% if s.deleted_at %} <span class="pill muted">đã xoá</span>{% endif %}</h1>
-  <div class="row gap">{{ m.act("mcp_probe", "Kiểm tra kết nối", {"name": s.name}, "btn", ic="refresh") }}<a class="btn ghost" href="#edit">{{ m.icon('edit') }}<span>Sửa</span></a></div></div>
+  <div class="row gap"><a class="btn ghost" href="#edit">{{ m.icon('edit') }}<span>Sửa</span></a></div></div>
 
 {% if blocked_suspicious %}
 <section class="card attention" id="suspicious">
@@ -22,24 +22,21 @@
   <ul class="small">{% for r in blocked_suspicious %}<li><code>{{ r.name }}</code> — <span class="danger-t">{{ r.suspicious|join('; ') }}</span></li>{% endfor %}</ul>
 </section>
 {% endif %}
-{% include "_mcp_migrate.html" %}
 
 <section class="card">
   <dl class="kv cols">
     <div><dt>Kiểu</dt><dd>{{ s.transport }}</dd></div>
     <div><dt>Tin cậy</dt><dd><span class="pill {{ 'ok' if s.trust == 'trusted' else 'muted' }}">{{ 'tin cậy' if s.trust == 'trusted' else 'cần duyệt' }}</span></dd></div>
-    <div><dt>Nguồn</dt><dd>{{ s.source }}</dd></div>
+    {% if (s.config or {}).url %}<div><dt>Host</dt><dd>{{ s.config.url }}</dd></div>{% endif %}
+    <div><dt>Kết nối</dt><dd>claude theo tài khoản — <a href="/settings#accounts">MCP của tài khoản</a></dd></div>
     <div><dt>Agent dùng</dt><dd>{% for a in s.agents or [] %}<a class="chip" href="/mcp/agent/{{ a }}" title="Xem cấu hình MCP của agent {{ a }}">{{ a }}</a>{% else %}—{% endfor %}</dd></div>
-    <div><dt>Kiểm gần nhất</dt><dd>{% if s.last_probe_at %}{{ m.rel(s.last_probe_at) }}{% else %}chưa{% endif %}</dd></div>
     {% if (s.config or {}).description %}<div class="span2"><dt>Mô tả</dt><dd>{{ s.config.description }}</dd></div>{% endif %}
-    {% if s.missing_secrets %}<div class="span2"><dt>Thiếu secret</dt><dd class="danger-t">{{ s.missing_secrets|join(', ') }} — đặt ở <a href="/settings#secrets">Cài đặt</a></dd></div>{% endif %}
-    {% if s.probe_error %}<div class="span2"><dt>Lỗi kiểm</dt><dd class="danger-t">{{ s.probe_error }}</dd></div>{% endif %}
   </dl>
 </section>
 
 <section class="card" id="tools">
   <h2>Tool ({{ rows|length }})</h2>
-  {% if not rows %}{{ m.empty("Chưa có danh sách tool — bấm 'Kiểm tra kết nối' để hub đọc tools/list (không gọi tool nào).", "plug") }}{% else %}
+  {% if not rows %}{{ m.empty("Hub không kết nối server (claude giữ kết nối) nên không có danh sách tool. Thao tác ghi của server chưa tin cậy sẽ hỏi duyệt; gắn nhãn theo tên/glob ở mục bên dưới hoặc `cfharness mcp annotate`.", "plug") }}{% else %}
   <p class="muted small">Tự chạy = không hỏi (chỉ đọc hoặc server tin cậy). Luôn hỏi duyệt = thao tác phá huỷ hoặc nằm trong require_approval.
     Ghi đè annotations là của bạn (như <code>cfharness mcp annotate</code>); luật tên-xoá, tài nguyên bảo vệ và require_approval vẫn áp dụng.</p>
   <table class="tbl stack mcp-tools"><thead><tr><th>Tool</th><th>Trạng thái</th><th>Chỉ đọc</th><th>Phá huỷ</th><th>Mô tả</th><th></th></tr></thead><tbody>
@@ -80,28 +77,19 @@
 
 {% if not s.deleted_at %}
 <section class="card" id="edit">
-  <h2>Sửa cấu hình</h2>
-  <form method="post" action="/do/mcp_edit" class="form" data-confirm="Lưu cấu hình MCP server {{ s.name }}? Server MCP chạy NGOÀI sandbox của agent, dưới quyền của bạn.">
+  <h2>Sửa chính sách</h2>
+  <p class="muted xs">Cách kết nối (lệnh, URL, header, đăng nhập) do claude giữ theo tài khoản — sửa ở <a href="/settings#accounts">MCP của tài khoản</a>.</p>
+  <form method="post" action="/do/mcp_edit" class="form" data-confirm="Lưu chính sách MCP server {{ s.name }}?">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/mcp/{{ s.name }}#edit">
     <input type="hidden" name="name" value="{{ s.name }}">
-    <input type="hidden" name="env_keys_old" value="{{ f.env_keys_old }}"><input type="hidden" name="header_keys_old" value="{{ f.header_keys_old }}">
-    <label>Kiểu kết nối <select name="transport">{% for t in ["stdio", "http", "sse"] %}<option value="{{ t }}"{{ ' selected' if f.transport == t }}>{{ t }}</option>{% endfor %}</select></label>
-    <label>Lệnh chạy (stdio) <input name="command" value="{{ f.command }}" placeholder="npx -y @playwright/mcp@0.0.82"></label>
-    <label>Biến môi trường (stdio; mỗi dòng TÊN=giá trị; <code>${SECRET}</code> lấy từ secret store)
-      <textarea name="env" rows="3" placeholder="GITHUB_TOKEN=${GITHUB_TOKEN}">{{ f.env }}</textarea></label>
-    <label>URL (http/sse) <input name="url" value="{{ f.url }}" placeholder="https://…/mcp"></label>
-    <label>Header (http/sse; mỗi dòng Tên: giá trị) <textarea name="headers" rows="2" placeholder="Authorization: Bearer ${MY_TOKEN}">{{ f.headers }}</textarea></label>
-    <p class="muted xs">Giá trị trông như secret (token, khoá…) được tự chuyển vào secret store và cấu hình chỉ giữ <code>${TÊN}</code>.
-      {% if masked %}<b>••••••</b> = giá trị đang được che — giữ nguyên nếu không sửa.{% endif %} Xoá một dòng = xoá biến/header đó.</p>
     <label>Mô tả <input name="description" value="{{ f.description }}"></label>
     <div class="grid2">
       <label>Tool được dùng — include (glob, mỗi dòng/phẩy; trống = mọi tool) <textarea name="include" rows="2">{{ f.include }}</textarea></label>
       <label>Tool bị chặn — exclude <textarea name="exclude" rows="2">{{ f.exclude }}</textarea></label>
       <label>Luôn hỏi duyệt — require_approval <textarea name="require_approval" rows="2">{{ f.require_approval }}</textarea></label>
-      <label>Timeout kết nối (giây) <input name="timeout_s" value="{{ f.timeout_s }}" inputmode="decimal"></label>
+      <label>Timeout (giây) <input name="timeout_s" value="{{ f.timeout_s }}" inputmode="decimal"></label>
     </div>
     <label class="check"><input type="checkbox" name="trust" value="trusted"{{ ' checked' if f.trust == 'trusted' }}> Tin cậy (tool ghi chạy không cần duyệt; tool xoá vẫn luôn cần duyệt)</label>
-    <label class="check"><input type="checkbox" name="probe" value="1" checked> Kiểm tra kết nối sau khi lưu</label>
     <div class="row end"><button class="btn primary" type="submit">Lưu</button></div>
   </form>
 </section>

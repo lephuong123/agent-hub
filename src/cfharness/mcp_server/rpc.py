@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Any, Callable
 from ..bus import LEVEL_RANK
 from ..errors import HubError, NotFound
 from ..events import HubEvent, make_event
-from ..mcp_client.legacy_oauth import rpc_stubs as _oauth_stubs
 from ..redact import redact
 
 if TYPE_CHECKING:
@@ -37,14 +36,10 @@ MUTATING = frozenset(
         "agent.create", "agent.update", "agent.delete", "agent.restore", "agent.pause", "agent.resume",
         "run.start", "run.stop", "run.resume", "run.continue",
         "estop.set", "config.set", "auth.reset", "hub.shutdown",
-        "mcp.add", "mcp.update", "mcp.remove", "mcp.restore", "mcp.import", "mcp.assign", "mcp.run", "mcp.agent_create",
-        # OAuth MCP của hub — ĐÃ GỠ từ v0.2.28; stub trả lỗi hướng dẫn chuyển sang claude (legacy_oauth.rpc_stubs) — audit KHÔNG mang code/state
-        "mcp.oauth_start", "mcp.oauth_callback", "mcp.oauth_disconnect", "mcp.oauth_refresh",
+        "mcp.add", "mcp.update", "mcp.remove", "mcp.restore", "mcp.assign", "mcp.run", "mcp.agent_create",
         # MCP do claude quản lý theo tài khoản (plan-mcp-claude-native PR3) — audit chỉ danh sách trắng (CLAUDE_AUDIT_KEYS)
         "mcp.claude_add", "mcp.claude_remove", "mcp.claude_login_start", "mcp.claude_login_finish", "mcp.claude_login_cancel",
         "mcp.claude_logout",
-        # PR4: chuyển server OAuth của hub sang claude theo tài khoản (mcp_client/migrate.py) — audit chỉ MIGRATE_AUDIT_KEYS
-        "mcp.migrate_to_claude",
         "secret.set", "secret.rm",
         "feedback.record",
         # M2
@@ -91,7 +86,6 @@ FAILURE_DROP_KEYS = frozenset({"token", "code", "state", "iss", "password", "sec
                                "redirect_url", "headers", "env"})
 # mcp.claude_*: audit CHỈ các khoá này (url có thể mang token query, header/env/args = secret, URL chuyển hướng mang code dùng một lần)
 CLAUDE_AUDIT_KEYS = ("name", "account_id", "transport", "login_id", "force", "register", "trust")
-MIGRATE_AUDIT_KEYS = ("name", "account_id", "keep_hub_token", "drop_hub_token", "dry_run", "login")
 AUDITED_ATTR = "_cfharness_audited"  # dấu của wrap_with_audit (test "mọi method ghi đều có audit" dò qua chuỗi __wrapped__)
 FEEDBACK_KINDS = {"good": "good", "wrong": "correction", "partial": "correction"}
 TEXT_MAX = 2000
@@ -175,27 +169,25 @@ class IntegrationRpc:
         return out
 
     # ------------------------------------------------------------------ mcp.*
-    async def mcp_add(self, p: dict[str, Any]) -> dict[str, Any]:
-        cfg = dict(_req(p, "config"))
-        if str(cfg.get("source") or "").lower() == "claude":
-            return self._mcp_add_claude(cfg, p.get("account_id"))
-        out = self.hub.mcp.add(cfg)
-        if p.get("probe", True):
-            out["probe"] = await self.hub.mcp.probe(out["name"], timeout_s=self._probe_timeout(p))
-        return out
-
-    async def mcp_update(self, p: dict[str, Any]) -> dict[str, Any]:
-        out = self.hub.mcp.update(_req(p, "name"), p.get("patch") or {})
-        if p.get("probe"):
-            out["probe"] = await self.hub.mcp.probe(out["name"], timeout_s=self._probe_timeout(p))
-        return out
-
-    def _mcp_add_claude(self, cfg: dict[str, Any], account_id: Any) -> dict[str, Any]:
-        """Đăng ký server NGUỒN claude (plan-mcp-claude-native PR2): phải có trong mcpServers user-scope của `.claude.json` của tài
-        khoản (mặc định: đang dùng). transport + host lấy từ đó; không bao giờ đọc/lưu header/env/args. Không probe."""
+    def mcp_add(self, p: dict[str, Any]) -> dict[str, Any]:
+        """Đăng ký cho hub một server CÓ SẴN trong mcpServers user-scope của `.claude.json` của tài khoản (mặc định: đang dùng) —
+        transport + host lấy từ đó. Hub không còn tự giữ cách chạy/kết nối (command/url/header/env) — thêm server mới vào claude bằng
+        `mcp.claude_add`."""
         from ..mcp_client import claude_source as cs
 
-        return cs.register(self.hub, cfg, account_id, reuse=False)
+        cfg = dict(_req(p, "config"))
+        src = str(cfg.get("source") or "").strip().lower()
+        hub_keys = sorted(k for k in ("command", "args", "env", "headers", "auth") if cfg.get(k))
+        # `source: claude` rõ ràng (hợp đồng PR2): mọi trường kết nối người truyền bị bỏ (register lấy transport/host từ cấu hình claude);
+        # không nói nguồn mà có lệnh/header… = người tưởng hub còn tự giữ cấu hình → báo hướng dẫn thay vì lặng lẽ bỏ
+        if src not in ("", "claude") or (src != "claude" and hub_keys):
+            raise HubError("hub không còn tự giữ cấu hình MCP (command/url/header/env/OAuth) — thêm server vào claude theo tài khoản: "
+                           "`cfharness mcp claude add <tên> --url <URL> | --command <lệnh>` (web: Cài đặt › Tài khoản Claude › Thêm MCP)",
+                           code=-32602, data={"fields": hub_keys})
+        return cs.register(self.hub, cfg, p.get("account_id"), reuse=False)
+
+    def mcp_update(self, p: dict[str, Any]) -> dict[str, Any]:
+        return self.hub.mcp.update(_req(p, "name"), p.get("patch") or {})
 
     # ---- PR3: thêm/gỡ/đăng nhập MCP do claude quản lý theo tài khoản (mcp_client/claude_admin.py). Mọi method ∈ HUMAN_ONLY; ghi ∈ MUTATING
     # và audit CHỈ giữ name/account_id/transport/login_id/force (`_audit_params`) — url/header/env/args/URL chuyển hướng không bao giờ vào.
@@ -223,19 +215,6 @@ class IntegrationRpc:
     async def mcp_claude_status(self, p: dict[str, Any]) -> dict[str, Any]:
         return await self.hub.mcp_claude.status(p.get("account_id"), refresh=bool(p.get("refresh")), cached=bool(p.get("cached")))
 
-    async def mcp_migrate_to_claude(self, p: dict[str, Any]) -> dict[str, Any]:
-        """PR4 giai đoạn A: server OAuth của hub → MCP do claude quản lý trong cấu hình của tài khoản `account_id` (mcp_client/migrate.py).
-        `dry_run` = chỉ kiểm + xem trước; `drop_hub_token` = xoá token OAuth hub của server ĐÃ chuyển; `login=false` = không mở lượt đăng nhập."""
-        from ..mcp_client import migrate
-
-        name = _req(p, "name")
-        if p.get("drop_hub_token"):
-            return migrate.drop_hub_token(self.hub, name)
-        if p.get("dry_run"):
-            return migrate.plan(self.hub, name, p.get("account_id"))
-        return await migrate.migrate(self.hub, name, p.get("account_id"), keep_hub_token=bool(p.get("keep_hub_token")),
-                                     start_login=p.get("login", True) is not False)
-
     async def mcp_claude_servers(self, p: dict[str, Any]) -> dict[str, Any]:
         """MCP do claude quản lý trong cấu hình của tài khoản (mặc định: đang dùng) — CHỈ tên/transport/host + đã đăng ký/gán chưa."""
         from ..mcp_client import claude_source as cs
@@ -246,33 +225,11 @@ class IntegrationRpc:
         out = []
         for name in sorted(have):
             r = rows.get(name)
-            src = ((r or {}).get("config") or {}).get("source")
             out.append({"name": name, "transport": have[name]["transport"], "host": have[name].get("host"), "hub": have[name]["hub"],
-                        "registered": r is not None, "registered_source": None if r is None else ("claude" if src == "claude" else "hub"),
+                        "registered": r is not None, "registered_source": None if r is None else "claude",
                         "agents": self.hub.mcp.agents_using(name) if r is not None else []})
         path = cs.claude_json_path(cdir)
         return {"account": aid, "config_path": str(path), "exists": path.exists(), "servers": out}
-
-    def _probe_timeout(self, p: dict[str, Any]) -> float:
-        return float(p.get("timeout_s") or self.hub.config.get("mcp.probe_timeout_s"))
-
-    async def mcp_probe(self, p: dict[str, Any]) -> dict[str, Any]:
-        return await self.hub.mcp.probe(_req(p, "name"), timeout_s=self._probe_timeout(p))
-
-    async def mcp_import(self, p: dict[str, Any]) -> dict[str, Any]:
-        res = self.hub.mcp.import_claude(
-            _req(p, "path"),
-            project=p.get("project"),
-            select=p.get("select"),
-            dry_run=bool(p.get("dry_run")),
-            overwrite=bool(p.get("overwrite")),
-        )
-        if p.get("probe") and not res["dry_run"]:
-            for it in res["items"]:
-                if it.get("status") in ("imported", "overwritten"):
-                    pr = await self.hub.mcp.probe(it["name"], timeout_s=self._probe_timeout(p))
-                    it["probe"] = {k: pr.get(k) for k in ("ok", "error", "elapsed_ms", "warnings")} | {"tools": len(pr.get("tools") or {})}
-        return res
 
     def mcp_assign(self, p: dict[str, Any]) -> dict[str, Any]:
         server, agent_id = _req(p, "server"), _req(p, "agent")
@@ -290,45 +247,25 @@ class IntegrationRpc:
         return self.hub.agents.update(agent_id, {"mcp_servers": new})
 
     def mcp_agent_config(self, p: dict[str, Any]) -> dict[str, Any]:
-        """Cấu hình MCP sẽ dùng khi chạy agent — CHƯA thay secret (không bao giờ trả giá trị secret)."""
+        """MCP agent sẽ dùng khi chạy: server gán (claude nạp từ cấu hình của tài khoản đang dùng — CHỈ tên/transport/host) + luật tool."""
         from ..mcp_client import agent_mcp_tool_rules
+        from ..mcp_client import claude_source as cs
 
         row = self.hub.agents.get_row(_req(p, "agent"))
-        servers = {}
-        missing: list[str] = []
+        _aid, cdir = cs.account_config_dir(self.hub, None)
+        have = cs.all_servers(cdir)
+        servers: dict[str, Any] = {}
+        problems: list[str] = []
         for name in row.get("mcp_servers") or []:
             r = self.hub.mcp.get_row(name)
             if r is None:
-                missing.append(name)
+                problems.append(name)
                 continue
-            cfg = self.hub.mcp.config_of(r)
-            servers[name] = cfg.claude_entry()
-            missing += [f"{name}:${{{s}}}" for s in self.hub.secrets.missing(servers[name])]
-            from ..mcp_client.legacy_oauth import STATUS, needs_migration
-
-            if needs_migration(cfg):
-                missing.append(f"{name}:oauth={STATUS}")
-        return {"mcpServers": servers, "tool_rules": agent_mcp_tool_rules(row), "problems": missing}
-
-    async def mcp_catalog(self, p: dict[str, Any]) -> dict[str, Any]:
-        """Danh mục MCP Registry (CHỈ ĐỌC, không chạy gì): `{search?, limit?, cursor?, offline?}` → `{servers, next_cursor, source, error?}`;
-        `{name, check_auth?}` → `{server: mục | None, options: [...]}` (phương án cài; `check_auth` gọi `initialize` không token
-        tới remote để gắn nhãn cần OAuth). Mạng chạy trong thread, có timeout + cache + danh sách tuyển chọn khi offline."""
-        from ..mcp_client import catalog
-
-        cache_dir = self.hub.paths.home / "cache" / "mcp_catalog"
-        offline = bool(p.get("offline"))
-        if p.get("name"):
-            entry = await asyncio.to_thread(catalog.get, str(p["name"]), cache_dir=cache_dir, offline=offline)
-            if entry is None:
-                raise NotFound(f"không có '{p['name']}' trong MCP Registry")
-            opts = catalog.install_options(entry)
-            if p.get("check_auth") and not offline:
-                for o in opts:
-                    o["needs_oauth"] = await asyncio.to_thread(catalog.check_oauth, o)
-            return {"server": entry, "options": opts, "suggested_name": catalog.suggest_name(entry["name"])}
-        return await asyncio.to_thread(catalog.search, str(p.get("search") or ""), limit=int(p.get("limit") or 20), cursor=p.get("cursor"),
-                                       cache_dir=cache_dir, offline=offline)
+            host = (have.get(name) or {}).get("host") or (r.get("config") or {}).get("url")
+            servers[name] = {"transport": r.get("transport"), "host": host, "source": "claude"}
+            if name not in have:
+                problems.append(f"{name}:missing_in_claude_config")
+        return {"mcpServers": servers, "tool_rules": agent_mcp_tool_rules(row), "problems": problems}
 
     def _idem_get(self, scope: str, key: str | None) -> dict[str, Any] | None:
         if not key:
@@ -612,7 +549,7 @@ class IntegrationRpc:
             "mcp.update": self.mcp_update,
             "mcp.remove": lambda p: h.mcp.remove(_req(p, "name"), force=bool(p.get("force"))),
             "mcp.restore": lambda p: h.mcp.restore(_req(p, "name")),
-            "mcp.list": lambda p: h.mcp.with_oauth(h.mcp.list(include_deleted=bool(p.get("deleted")))),
+            "mcp.list": lambda p: h.mcp.list(include_deleted=bool(p.get("deleted"))),
             "mcp.show": lambda p: h.mcp.show(_req(p, "name")),
             "mcp.claude_servers": self.mcp_claude_servers,
             "mcp.claude_add": self.mcp_claude_add,
@@ -622,12 +559,8 @@ class IntegrationRpc:
             "mcp.claude_login_cancel": self.mcp_claude_login_cancel,
             "mcp.claude_logout": self.mcp_claude_logout,
             "mcp.claude_status": self.mcp_claude_status,
-            "mcp.migrate_to_claude": self.mcp_migrate_to_claude,
-            "mcp.probe": self.mcp_probe,
-            "mcp.import": self.mcp_import,
             "mcp.assign": self.mcp_assign,
             "mcp.agent_config": self.mcp_agent_config,
-            "mcp.catalog": self.mcp_catalog,
             "mcp.run": self.mcp_run,
             "mcp.agent_create": self.mcp_agent_create,
             "mcp.run_status": self.mcp_run_status,
@@ -643,7 +576,6 @@ class IntegrationRpc:
             "audit.activity": self.audit_activity,
             "feedback.record": self.feedback_record,
             "feedback.list": self.feedback_list,
-            **_oauth_stubs(),  # mcp.oauth_* đã gỡ (v0.2.28) — một bản trả lỗi hướng dẫn `mcp migrate-to-claude`
         }
 
 
@@ -700,12 +632,8 @@ def _result_brief(res: Any) -> dict[str, Any]:
 def _audit_params(method: str, p: dict[str, Any]) -> dict[str, Any]:
     """Params đã gỡ giá trị bí mật/nặng (như trước L3) — dùng cho cả dòng thành công lẫn thất bại."""
     params = {k: v for k, v in p.items() if k not in ("value", "soul", "passphrase", "key")}  # passphrase: gói hub (hub_transfer); key: khoá cổng cfharness (filehub lane) — phòng hờ
-    if method.startswith("mcp.oauth_"):  # code/state/iss của callback OAuth là thông tin đăng nhập một lần — không vào audit
-        params = {k: v for k, v in params.items() if k in ("name", "redirect_uri", "error")}
     if method.startswith("mcp.claude_"):
         params = {k: v for k, v in params.items() if k in CLAUDE_AUDIT_KEYS}
-    if method == "mcp.migrate_to_claude":
-        params = {k: v for k, v in params.items() if k in MIGRATE_AUDIT_KEYS}
     if "soul" in p:
         params["soul"] = "(updated)" if p.get("soul") else None
     if "prompt" in params:

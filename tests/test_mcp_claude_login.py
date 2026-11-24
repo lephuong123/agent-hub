@@ -146,18 +146,10 @@ async def test_add_validation_and_cli_error_no_echo(d, tmp_path):
         await rpc(d, "mcp.claude_add", {"account_id": a, "name": "loop", "url": f"http://127.0.0.1:{port}/mcp"})
     with pytest.raises(HubError, match="url"):
         await rpc(d, "mcp.claude_add", {"account_id": a, "name": "x", "transport": "http", "url": "javascript:alert(1)"})
-    # cấu hình mặc định (machine): header/env bí mật bị từ chối (agent chưa bị chặn đọc ~/.claude.json)
-    with pytest.raises(HubError, match="header/env"):
-        await rpc(d, "mcp.claude_add", {"account_id": "machine", "name": "m1", "url": "https://m.example/mcp", "headers": {"X-Key": HDR}})
-    res = await rpc(d, "mcp.claude_add", {"account_id": "machine", "name": "m1", "url": "https://m.example/mcp"})
+    # cấu hình mặc định (machine): header bí mật được (v0.2.32 — agent bị chặn đọc ~/.claude.json, luật claude_credentials)
+    res = await rpc(d, "mcp.claude_add", {"account_id": "machine", "name": "m1", "url": "https://m.example/mcp", "headers": {"X-Key": HDR}})
     assert "m1" in json.loads((_default_home() / ".claude.json").read_text(encoding="utf-8"))["mcpServers"]
-    assert res["account"] == "machine"
-    # trùng tên server nguồn hub → Conflict trước khi chạy claude
-    d.hub.mcp.add({"name": "hubsrv", "transport": "http", "url": "https://h.example/mcp"})
-    n = len(_log(tmp_path))
-    with pytest.raises(HubError, match="nguồn hub"):
-        await rpc(d, "mcp.claude_add", {"account_id": a, "name": "hubsrv", "url": "https://h.example/mcp"})
-    assert len(_log(tmp_path)) == n
+    assert res["account"] == "machine" and HDR not in json.dumps(res)
     # claude báo lỗi và NHẮC LẠI url + header trong stderr → thông báo của hub không chứa chúng
     with pytest.raises(HubError) as ei:
         await rpc(d, "mcp.claude_add", {"account_id": a, "name": "failsrv", "url": f"https://f.example/mcp?k={URL_SECRET}",
@@ -462,7 +454,7 @@ async def test_web_mcp_section_login_flow(env):
     html = (await get(env, "/settings")).text
     row = _mrow(section(html))
     assert "atl" in row and "cần đăng nhập" in row and "/do/mcp_claude_login_start" in row and "/do/mcp_claude_rm" in row
-    assert 'name="header_value"' not in row  # machine: không cho header bí mật
+    assert 'name="header_value"' in row  # machine cũng cho header (agent bị chặn đọc ~/.claude.json — v0.2.32)
     assert all(c[1].get("cached") for c in calls if c[0] == "mcp.claude_status")  # tải trang KHÔNG chạy claude
     r = await post(env, "/do/mcp_claude_login_start", {"account_id": "machine", "mcp_name": "atl", "name": "Máy",
                                                        "next": "/settings#acct-mcp-machine"})
@@ -565,7 +557,6 @@ async def test_web_mcp_register_for_hub_button(env, tmp_path, monkeypatch):
     assert aud and any("web" in json.dumps(a, default=str) for a in aud)
     for b in env.bodies + [json.dumps(aud, default=str)]:
         assert "RegHdr-SECRET" not in b
-    # form agent: server nguồn claude có nhãn `claude`
+    # form agent: server đã đăng ký gán được (mọi MCP đều do claude giữ — không còn nhãn nguồn riêng)
     page = (await get(env, "/agents/new")).text
-    m = re.search(r'value="jira".*?</label>', page, re.S)
-    assert m and ">claude</span>" in m.group(0)
+    assert re.search(r'value="jira".*?</label>', page, re.S)

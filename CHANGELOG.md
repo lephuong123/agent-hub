@@ -16,6 +16,14 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 ### Sửa lỗi
 - Không gian số (cổng cfharness): nhiều run ghi vào CÙNG một thư mục chung giờ chạy song song (trước đây run sau phải chờ run trước xong, kể cả khi sửa tệp khác nhau). Mỗi run vẫn có cây làm việc riêng; hai run cùng sửa một tệp → bản xung đột riêng, không ghi đè. Thay đổi một run vừa đẩy lên được kéo về cây của run kia và agent được báo là "run khác" sửa. Muốn chạy tuần tự như cũ: `cfharness config set filehub.lane.serialize_runs true`.
 
+### MCP: hub thôi tự giữ cấu hình MCP bên thứ ba
+- **MCP bên thứ ba chỉ còn do claude giữ theo tài khoản — hub thôi tự giữ cấu hình MCP.** Gỡ đường "nguồn hub": thêm/sửa lệnh, URL, header, env của server trong hub (`cfharness mcp add -- <lệnh>`, `--url`, `--env`, `--header`), nhập từ `~/.claude.json` (`mcp import`), danh mục MCP Registry + cài (`/mcp/browse`), kiểm kết nối (`mcp probe|test`, nút «Kiểm tra»), OAuth kiểu cũ (`mcp login|logout`, stub `mcp.oauth_*`, thẻ «Chuyển sang claude», `mcp migrate-to-claude`) và mục server bên thứ ba trong `mcp.json` của run. Registry chỉ còn giữ chính sách (tin cậy, include/exclude/luôn hỏi duyệt, ghi đè annotations, mô tả, host); claude nạp server từ cấu hình của tài khoản đang dùng (`--strict-mcp-config` bỏ cho run có MCP, guard bắt buộc). Thêm server: `cfharness mcp claude add <tên> --url … | -- <lệnh>` hoặc Cài đặt › Tài khoản Claude › MCP của tài khoản (rồi «Đăng ký cho hub» / `cfharness mcp add <tên>`). Server có header bí mật thêm được cả ở tài khoản «Đăng nhập của máy» (agent bị chặn đọc `~/.claude.json`). Chế độ Chrome vẫn gỡ Playwright khỏi run (nhận theo lệnh trong cấu hình claude). `cfharness doctor <agent>` kiểm MCP gán có trong cấu hình claude của tài khoản đang dùng thay cho probe.
+
+### Lưu ý khi cập nhật
+- Migration DB v34 đổi MỌI dòng MCP nguồn hub sang nguồn claude tại chỗ: giữ tên (agent đã gán giữ nguyên), tin cậy, tool include/exclude/luôn hỏi duyệt, annotations; bỏ lệnh/URL đầy đủ/header/env/OAuth (secret trong secret store giữ nguyên, vẫn được che). Server trỏ về chính hub bị xoá mềm.
+- Server phải CÓ trong cấu hình claude của tài khoản đang dùng (`cfharness mcp claude status`), nếu không run của agent gán server đó báo lỗi rõ (không chạy thiếu server) và `hub doctor` cảnh báo. Server từng nhập từ `~/.claude.json` thường đã có sẵn; server thêm tay trong hub (lệnh/URL/OAuth) cần thêm lại bằng `cfharness mcp claude add` (+ `cfharness mcp claude login` nếu OAuth).
+- Khoá cấu hình `mcp.probe_timeout_s` không còn dùng (config.yaml cũ vẫn đọc bình thường).
+
 ---
 
 ## v0.2.31 — 2026-11-24

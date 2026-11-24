@@ -298,10 +298,11 @@ def test_removed_oauth_keys_in_old_config_are_harmless(tmp_path):
 
     hp = P.HubPaths(tmp_path / "hub")
     hp.ensure()
-    hp.config.write_text("mcp:\n  oauth_proxy:\n    enabled: true\n    port: 0\nmcp_client:\n  oauth_callback_port: 33418\n", encoding="utf-8")
+    hp.config.write_text("mcp:\n  probe_timeout_s: 45\n  oauth_proxy:\n    enabled: true\n    port: 0\nmcp_client:\n  oauth_callback_port: 33418\n",
+                         encoding="utf-8")
     cfg = HubConfig(hp.config)
-    assert "oauth_proxy" not in DEFAULTS["mcp"] and "mcp_client" not in DEFAULTS
-    assert cfg.get("mcp.probe_timeout_s") == 30 and cfg.get("mcp.oauth_proxy.enabled") is True  # đọc được, không ai dùng
+    assert "oauth_proxy" not in DEFAULTS["mcp"] and "mcp_client" not in DEFAULTS and "probe_timeout_s" not in DEFAULTS["mcp"]
+    assert cfg.get("mcp.probe_timeout_s") == 45 and cfg.get("mcp.oauth_proxy.enabled") is True  # đọc được, không ai dùng
 
 
 # ============================================================================ 6. biến môi trường chỉ-cho-test

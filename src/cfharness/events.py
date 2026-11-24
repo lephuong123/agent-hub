@@ -84,7 +84,7 @@ EVENT_LEVELS: dict[str, str] = {
     "auth.cleared": "summary",  # cờ chặn đăng nhập được gỡ (người: doctor/auth.reset; tự động: kiểm lại thấy đã đăng nhập)
     "account.claudeai_login": "summary",  # đăng nhập/đăng xuất phiên claude.ai (connector) của user OS chạy hub — chỉ {logged_in}
     "connector.unavailable": "summary",  # connector claude.ai người cho phép mà run không nạp / chưa kết nối (claude_adapter)
-    "mcp.unavailable": "summary",  # MCP nguồn claude gán cho agent mà run không nạp / chưa kết nối, vd needs-auth (claude_adapter); nguồn hub OAuth kiểu cũ: status needs_migration (runs.py, v0.2.28)
+    "mcp.unavailable": "summary",  # MCP nguồn claude gán cho agent mà run không nạp / chưa kết nối, vd needs-auth (claude_adapter)
     "connector.auth_fallback": "summary",  # run có connector nhưng user OS chưa `claude /login` → vẫn dùng token setup-token (runs)
     "auth.transient": "summary",  # run báo "Not logged in" nhưng kiểm lại `claude auth status` vẫn đăng nhập → KHÔNG chặn
     "hook.event": "debug",

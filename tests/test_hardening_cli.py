@@ -483,21 +483,21 @@ def test_h11_hook_cli_and_rpc_record_events(daemon, capsys):
 def test_h13_unprobed_literal_include_exclude_rules(hub):
     from cfharness.mcp_client import agent_mcp_tool_rules
 
-    hub.mcp.add({"name": "viec", "command": "echo", "trust": "trusted", "tools": {"include": ["tim_viec", "doc_viec", "xem_*"], "exclude": ["xoa_viec"], "require_approval": ["doc_viec"]}})
+    hub.mcp.add({"name": "viec", "trust": "trusted", "tools": {"include": ["tim_viec", "doc_viec", "xem_*"], "exclude": ["xoa_viec"], "require_approval": ["doc_viec"]}})
     hub.agents.create({"id": "m", "name": "M", "mcp_servers": ["viec"]})
     rules = agent_mcp_tool_rules(hub.agents.get_row("m"))
     assert rules["allowed"] == ["mcp__viec__tim_viec"]  # doc_viec cần duyệt → không cho tĩnh
-    assert rules["disallowed"] == ["mcp__viec__xoa_viec"]
-    assert any("glob" in w for w in rules["warnings"])
+    assert rules["disallowed"] == ["mcp__viec__xoa_viec"]  # glob (xem_*) do hook guard áp theo `selected`
     hub.mcp.update("viec", {"trust": "untrusted"})
     rules = agent_mcp_tool_rules(hub.agents.get_row("m"))
     assert rules["allowed"] == [] and rules["disallowed"] == ["mcp__viec__xoa_viec"]
 
 
-async def test_h13_unprobed_rules_reach_argv(hub):
+async def test_h13_unprobed_rules_reach_argv(hub, claude_mcp):
     rt = FakeRuntime()
     hub.runs._runtime = rt
-    hub.mcp.add({"name": "viec", "command": "echo", "trust": "trusted", "tools": {"include": ["tim_viec"], "exclude": ["xoa_viec"]}})
+    claude_mcp("viec")  # MCP bên thứ ba do claude giữ (v0.2.32): server trong cấu hình claude của tài khoản
+    hub.mcp.add({"name": "viec", "trust": "trusted", "tools": {"include": ["tim_viec"], "exclude": ["xoa_viec"]}})
     hub.agents.create({"id": "m", "name": "M", "mcp_servers": ["viec"]})
     r = hub.runs.submit("m", "x")
     await hub.runs.wait(r["id"], timeout=5)
@@ -524,12 +524,13 @@ def test_h13_classify_untrusted_requires_approval(hub_home):
     assert v.verdict == "uncertain" and v.hold
 
 
-async def test_h13_untrusted_mcp_tool_opens_approval(hub):
+async def test_h13_untrusted_mcp_tool_opens_approval(hub, claude_mcp):
     rt = FakeRuntime(hold=True)
     hub.runs._runtime = rt
     hub.config.set("guard.enabled", True)
     hub.config.set("approval.timeout_s", 1)
-    hub.mcp.add({"name": "viec", "command": "echo", "trust": "untrusted"})
+    claude_mcp("viec")
+    hub.mcp.add({"name": "viec", "trust": "untrusted"})
     hub.agents.create({"id": "u", "name": "U", "mcp_servers": ["viec"]})
     r = hub.runs.submit("u", "x")
     for _ in range(200):
@@ -672,14 +673,24 @@ async def test_h20_oneshot_via_runtime(tmp_path):
 
 
 # ============================================================================ Thấp: FR-AG-08 doctor thử kết nối MCP
-def test_low_doctor_probes_agent_mcp(daemon, capsys):
+def test_low_doctor_checks_agent_mcp_in_claude_config(daemon, capsys, claude_mcp):
+    """`cfharness doctor <agent>`: MCP gán phải có trong cấu hình claude của tài khoản đang dùng (hub không tự kết nối MCP từ v0.2.32)."""
+    import json
+    import os
+    from pathlib import Path
+
     from cfharness.rpc import RpcClient
 
     rpc = RpcClient(daemon.socket, timeout=30)
-    rpc.call("mcp.add", {"config": {"name": "vb", "command": "/khong/ton/tai/mcp"}, "probe": False})
+    claude_mcp("vb")
+    rpc.call("mcp.add", {"config": {"name": "vb", "source": "claude"}})
     rpc.call("agent.create", {"config": {"id": "coder", "name": "C", "mcp_servers": ["vb"]}})
-    code, out, _ = cli(capsys, "doctor", "coder", "--probe-timeout", "5")
-    assert code != 0 and "✗ MCP vb: không kết nối được" in out
+    code, out, _ = cli(capsys, "doctor", "coder")
+    assert "✓ MCP vb" in out
+    p = Path(os.environ["CFHARNESS_TEST_CLAUDE_HOME"]) / ".claude.json"
+    p.write_text(json.dumps({"mcpServers": {}}), encoding="utf-8")  # tài khoản bỏ server khỏi cấu hình claude
+    code, out, _ = cli(capsys, "doctor", "coder")
+    assert code != 0 and "✗ MCP vb: không có trong cấu hình claude" in out
 
 
 # ============================================================================ Thấp: NFR-26 màn trợ giúp `?`
