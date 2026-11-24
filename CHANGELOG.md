@@ -12,6 +12,7 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ### Sửa lỗi
 - Không gian số (cổng cfharness): nhiều run ghi vào CÙNG một thư mục chung giờ chạy song song (trước đây run sau phải chờ run trước xong, kể cả khi sửa tệp khác nhau). Mỗi run vẫn có cây làm việc riêng; hai run cùng sửa một tệp → bản xung đột riêng, không ghi đè. Thay đổi một run vừa đẩy lên được kéo về cây của run kia và agent được báo là "run khác" sửa. Muốn chạy tuần tự như cũ: `cfharness config set filehub.lane.serialize_runs true`.
+- Super Admin Console (web SAC): mã QR trên trang kích hoạt tài khoản không hiện (ảnh vỡ); mọi form (kích hoạt, đăng nhập, thao tác) bị từ chối "Bad Origin" trên Chrome/Safari do `Referrer-Policy: no-referrer` làm trình duyệt gửi `Origin: null` — nay dùng `same-origin` như web hub.
 
 ---
 
