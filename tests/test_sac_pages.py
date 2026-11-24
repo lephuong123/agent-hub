@@ -48,6 +48,14 @@ def test_pages_render(env, client):
     for tab in ("overview", "access", "agents", "activity", "policy", "reports", "history"):
         r = client.get(f"/users/{uid}?tab={tab}", headers=H(s))
         assert r.status_code == 200, (tab, r.text[:400])
+    # user chưa có file trạng thái (vừa tạo qua SAC, hub chưa xuất số liệu) → hồ sơ vẫn dựng được, chi phí hiện "—"
+    env.fakes[0].group.append("moi")
+    env.ok("user.import", {"os_user": "moi", "full_name": "Mới"}, as_="boss")
+    collect(env.state)
+    nid = env.state.db.one("SELECT id FROM hub_users WHERE os_user='moi'")["id"]
+    for tab in ("overview", "access", "agents", "activity", "policy", "reports", "history"):
+        r = client.get(f"/users/{nid}?tab={tab}", headers=H(s))
+        assert r.status_code == 200, ("moi", tab, r.text[:400])
     html = client.get("/users", headers=H(s)).text
     assert "<script>alert(1)</script>" not in html and "&lt;script&gt;" in html  # escape
     assert "lamlinh.example.com" in html

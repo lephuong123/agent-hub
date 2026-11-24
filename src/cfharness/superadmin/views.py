@@ -10,6 +10,7 @@ import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+from jinja2.exceptions import UndefinedError
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
 
@@ -73,7 +74,7 @@ def ts(v: Any, fmt: str = "%d/%m %H:%M") -> str:
 def ago(v: Any) -> str:
     try:
         d = time.time() - float(v)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, UndefinedError):  # khoá thiếu trong số liệu hub (hub mới chưa xuất trạng thái) → Undefined
         return "—"
     if d < 90:
         return "vừa xong"
@@ -87,7 +88,7 @@ def ago(v: Any) -> str:
 def money(v: Any) -> str:
     try:
         return f"${float(v):,.2f}"
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, UndefinedError):  # vd `p.cost.usd.today` khi hub chưa xuất số liệu
         return "—"
 
 

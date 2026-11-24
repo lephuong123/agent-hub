@@ -64,7 +64,7 @@
 
 <section class="card"><h2>Chi phí</h2><dl class="kv">
   <dt>Hôm nay</dt><dd>{{ p.cost.usd.today | money }}</dd><dt>Tháng</dt><dd>{{ p.cost.usd.month | money }}</dd>
-  <dt>% ngân sách ngày</dt><dd>{% if p.cost.budget.day_pct is not none %}{{ "%.0f" | format(p.cost.budget.day_pct) }}%{% else %}—{% endif %}</dd>
+  <dt>% ngân sách ngày</dt><dd>{% if p.cost.budget.day_pct is number %}{{ "%.0f" | format(p.cost.budget.day_pct) }}%{% else %}—{% endif %}</dd>
 </dl>
 {% if bars %}<svg class="chart" viewBox="0 0 600 110" role="img" aria-label="Chi phí 30 ngày">{% for b in bars %}<rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}"><title>{{ b.label }}</title></rect>{% endfor %}</svg>{% endif %}
 {% if p.cost.by_agent %}<h3>Theo agent</h3><ul class="small">{% for a in p.cost.by_agent %}<li>{{ a.name }}: {{ a.usd | money }}</li>{% endfor %}</ul>{% endif %}
