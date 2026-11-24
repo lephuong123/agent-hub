@@ -10,13 +10,26 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
-- Điều phối: đổi tab luồng/hội thoại nhanh hơn — server chỉ vẽ phần lưới (không vẽ lại thanh bên, bớt lời gọi daemon trùng), chỉ làm mờ khi chờ quá 400 ms; hàng tab cập nhật tại chỗ (không nháy, giữ focus); khung "đang trả lời" của lượt dài hiện đúng tool/checklist mới nhất; "đã đọc" ghi bằng POST riêng khi hội thoại đang hiện; bản nháp chạy chữ gửi tối đa 2 lần/giây; tệp tĩnh có phiên bản được cache hẳn và trang/JS nén gzip. RPC `events.query` nhận thêm `since`/`epoch`.
-- Điều phối (chuẩn bị giao diện mới): thêm hợp đồng dữ liệu v2 — ảnh chụp JSON `/api/manager/snapshot`, MỘT luồng sự kiện mỗi trang `/sse/manager/v2` (nối lại không mất/không trùng tin, tự báo tải lại khi hở quá xa, trạng thái mọi luồng đẩy tới ngay thay cho hỏi lại 20 s), `/api/manager/watch`, và trả lời câu hỏi / duyệt có khoá chống gửi trùng (`/api/manager/act/…`). Trang hiện tại không đổi. Hub demo: tin có `[demo]` cho câu trả lời chạy chữ ~100 token/s kèm tool, thẻ hành động, thao tác chờ duyệt và câu hỏi.
-- Điều phối (thử giao diện mới): mở `/manager?ui=next` — trang Điều phối dựng lại bằng Preact, chạy trên hợp đồng v2: đổi qua lại tab luồng/hội thoại đã mở không tải lại (giữ nguyên chữ đang gõ, tệp đính kèm, vị trí cuộn), một luồng sự kiện cho cả trang, tin gửi hiện ngay (lạc quan, lỗi thì trả chữ về ô nhập). Giao diện cũ vẫn là mặc định. Thư viện JS (Preact, htm, signals, streaming-markdown, DOMPurify) đóng gói sẵn trong cfharness, ghim phiên bản — không tải từ CDN.
-- Điều phối (giao diện mới `?ui=next`, đủ tính năng): câu trả lời chạy chữ hiện markdown ngay khi đang gõ (bảng, code, danh sách; link lọc qua DOMPurify) rồi thay bằng bản đã lưu khi xong; cuộn "dính đáy" chỉ bỏ khi chính bạn cuộn lên, nút "Tin mới nhất" khi có tin mới lúc đang đọc chỗ khác, mỗi tab nhớ vị trí cuộn riêng; thẻ thao tác phá huỷ chờ duyệt có nút Cho phép một lần / Từ chối ngay trong hội thoại và trả lời câu hỏi không tải lại trang (hiện kết quả ngay, mạng lỗi thì trả về như cũ và bấm lại an toàn — không bị làm hai lần); thẻ duyệt xếp đúng thứ tự thời gian; dải cảnh báo khi ESTOP đang bật; hội thoại dài (2.000 tin) mở trong ~50 ms, tin cũ vẽ dần khi cuộn lên; không còn nhảy bố cục khi tin/thẻ mới tới.
-- **Điều phối: giao diện mới là mặc định.** `/manager` nay mở trang Điều phối mới (đổi tab tức thì, giữ nháp/tệp đính kèm/vị trí cuộn, chạy chữ markdown, duyệt/trả lời ngay trong hội thoại). Cần giao diện cũ thì mở `/manager?ui=old` (trình duyệt nhớ lựa chọn; `/manager?ui=new` để quay lại) — giao diện cũ sẽ bị gỡ ở bản phát hành sau. Kèm theo: luồng sự kiện không còn tự nối lại mỗi ~40 s khi agent ở luồng khác đang chạy; tải lại nền không làm mất chỗ đang đọc ở tin cũ; hết khoảng trắng lớn ở đầu hội thoại rất dài; chấm "đang chạy" và nút mic nhấp nháy nhẹ hơn cho máy (không vẽ lại cả khung hình).
+---
+
+## v0.2.31 — 2026-11-24
+
+### Trang Điều phối mới: đổi tab tức thì, không gián đoạn (#200)
+- **`/manager` nay là trang Điều phối dựng lại bằng Preact.** Đổi qua lại luồng/hội thoại đã mở không tải lại trang và không nối lại luồng sự kiện: giữ nguyên chữ đang gõ (kể cả sau F5), tệp đính kèm và vị trí cuộn của từng tab. Đo trên hub demo: đổi sang tab đã mở ~210–310 ms → ~41 ms, mở tab lần đầu 50–130 ms.
+- **Chạy chữ mượt**: câu trả lời hiện markdown ngay khi đang gõ (bảng, code, danh sách; link lọc qua DOMPurify) rồi thay bằng đúng bản đã lưu khi xong — nội dung không đổi sau khi tải lại. Cuộn "dính đáy" chỉ bỏ khi chính bạn cuộn lên, có nút "Tin mới nhất"; hội thoại 2.000 tin mở ~50 ms, tin cũ vẽ dần khi cuộn lên, không nhảy bố cục. Mở/đóng panel xem tệp không làm lệch chỗ đang đọc.
+- **Duyệt và trả lời ngay trong hội thoại**: thẻ thao tác chờ duyệt có Cho phép một lần / Từ chối, trả lời câu hỏi không tải lại trang; kết quả hiện ngay, mạng lỗi thì trả về như cũ và bấm lại an toàn (không bị làm hai lần). Tin bạn gửi từ máy/tab khác hiện ngay ở mọi tab đang mở hội thoại đó. Dải cảnh báo khi ESTOP đang bật.
+- **Một luồng sự kiện cho cả trang** (`/sse/manager/v2`, ảnh chụp `/api/manager/snapshot`): mỗi sự kiện có id, nối lại (mất mạng, máy ngủ) không mất/không trùng tin, tự tải lại khi hở quá xa; trạng thái mọi luồng đẩy tới ngay thay cho hỏi lại mỗi 20 s. Hợp đồng: `docs/dev-notes/dieu-phoi-island.md`.
+- **Trang cũ cũng nhanh hơn** (vẫn mở được bằng `/manager?ui=old`, trình duyệt nhớ lựa chọn, `?ui=new` để quay lại): server chỉ vẽ phần lưới khi đổi tab, hàng tab cập nhật tại chỗ, chỉ làm mờ khi chờ quá 400 ms, "đã đọc" ghi bằng POST riêng, khung "đang trả lời" của lượt dài hiện đúng tool/checklist mới nhất.
+- **Web nhẹ hơn**: tệp tĩnh có phiên bản được cache hẳn, trang/JS nén gzip; chấm "đang chạy" và nút mic nhấp nháy không còn vẽ lại cả khung hình. Thư viện JS (Preact, htm, signals, streaming-markdown, DOMPurify) đóng gói sẵn, ghim phiên bản, không tải từ CDN.
+- RPC `events.query` nhận thêm `since`/`epoch`; event hub mới `manager.message` (tin người gửi cho điều phối viên). Hub demo: tin có `[demo]` cho câu trả lời chạy chữ ~100 token/s kèm tool, thẻ duyệt và câu hỏi.
+
+### Run và daemon ổn định hơn (#201)
 - **Run đã trả lời xong không còn bị tính quá giờ vì task nền**: khi một lệnh Bash chạy lâu bị Claude CLI chuyển sang chạy nền (vd `git fetch` treo vì mất mạng), CLI không thoát sau `result`, nên run bị giữ tới hạn `max_runtime_s` (30 phút) rồi ghi `timed_out` dù điều phối viên đã trả lời. Nay CLI im lặng quá `runtime.claude.exit_grace_s` (mặc định 60 s) sau `result` thì hub dừng tiến trình (gồm cả task nền) và giữ kết quả theo `result`.
 - **Daemon bị treo thì để lại dấu vết**: thread watchdog mới phát hiện event loop của daemon không phản hồi quá `perf.loop_stall_dump_s` (mặc định 15 s; 0 = tắt) và ghi stack mọi thread vào `logs/faults.log` ngay lúc đang treo (tối đa 3 lần mỗi lần treo), kèm dòng `loop.stall` / `loop.stall_end` trong hub.log. Trên Windows trước đây không có cách nào lấy stack (`daemon dump-stacks` chỉ có trên macOS/Linux).
+
+### Lưu ý khi cập nhật
+- Không có migration DB hay cấu hình phải sửa tay (hai setting mới `runtime.claude.exit_grace_s`, `perf.loop_stall_dump_s` có mặc định). Sau khi cập nhật, tải lại tab web đang mở để nhận giao diện mới.
+- Giao diện Điều phối cũ (`?ui=old`) sẽ bị gỡ ở bản phát hành sau.
 
 ---
 
