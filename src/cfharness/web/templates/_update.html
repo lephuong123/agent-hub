@@ -2,7 +2,7 @@
 {% import "_macros.html" as m with context %}
 {% set polling = down or busy %}
 {% set q = "full=1" if full else "" %}
-<section class="card {{ 'attention' if polling or (chk and chk.update_available) }}" id="update"{% if polling %} hx-get="/partials/update?{{ q }}" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+<section class="card {{ 'notice' if polling or (chk and chk.update_available) }}" id="update"{% if polling %} hx-get="/partials/update?{{ q }}" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
   <div class="card-head"><h2>{{ m.icon('refresh') }} Cập nhật hệ thống</h2>
     {% if down %}<span class="pill warn">{{ m.icon('clock') }}daemon đang khởi động lại…</span>
     {% elif busy %}<span class="pill warn">{{ m.icon('clock') }}đang cập nhật</span>

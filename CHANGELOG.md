@@ -10,6 +10,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Giao diện dễ đọc hơn
+- **Web dễ đọc hơn ở cả nền sáng lẫn tối**: nút chính, nút Dừng khẩn cấp/nguy hiểm ở nền tối, nhãn trạng thái (ok/cảnh báo/nhấn) và chữ phụ (gợi ý phím tắt, dòng lưu ý, giờ) giờ đủ tương phản (chuẩn WCAG AA); mục đang mở ở thanh bên có vạch màu bên trái; ô nhập và khung chat có viền rõ khi đang gõ; nút đóng thông báo và nút thêm hội thoại dễ bấm hơn; gợi ý phím tắt dưới ô chat gọn còn một dòng; thẻ "có bản cập nhật" dùng màu thông tin thay vì đỏ; trang Cài đặt trên điện thoại không còn bị tràn ngang khi email tài khoản dài.
+
 ### Gỡ giao diện Điều phối cũ
 - **Giao diện Điều phối cũ đã được gỡ hẳn** — `/manager` chỉ còn trang Điều phối mới (ra mắt ở v0.2.31). Link `/manager?ui=old` không còn mở trang cũ: nó mở trang mới như bình thường, lựa chọn "giao diện cũ" trình duyệt từng nhớ cũng không còn tác dụng. Hub chưa có điều phối viên vẫn thấy phần hướng dẫn + chỉ định như trước; thẻ Điều phối ở trang Tổng quan không đổi.
 
