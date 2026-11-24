@@ -773,9 +773,13 @@ class LaneService:
         wds = [wd for wd in self.workdirs.values() if wd.server == server and not wd.parked]
         if ev.type == "change":
             root = str(ev.data.get("root") or "")
+            writer = self._writer_tree(server, ev.data)
             for wd in wds:
                 if wd.root == root:
-                    await wd.on_change(ev.data, at_recv=recv)
+                    # khung `self: true` = lệnh ghi bằng khoá cổng của hub — CHUNG cho mọi run: chỉ là tiếng vọng với chính cây đã ghi;
+                    # cây của run khác chạy song song trên cùng gốc phải kéo thay đổi đó về như thay đổi của người (không lộ ra là ghi đè)
+                    peer = bool(ev.data.get("self")) and writer is not None and writer != wd.tree
+                    await wd.on_change(ev.data, at_recv=recv, peer=peer)
         elif ev.type == "reset":
             root = str(ev.data.get("root") or "")
             for wd in wds:
@@ -801,6 +805,22 @@ class LaneService:
             await self._stop_pushes(server, "unauthorized")
             return True
         return False
+
+    def _writer_tree(self, server: str, d: dict[str, Any]) -> str | None:
+        """Cây (tree) của run đã ghi khung `self: true`; None = không biết (coi là tiếng vọng như trước). Run không còn cây (hoàn tác sau
+        khi run xong) → mã run, khác mọi cây đang mở."""
+        if not d.get("self"):
+            return None
+        pair = self._clients.get(server)
+        cl = pair[1] if pair is not None else None
+        rid = getattr(cl, "writer_run", lambda _x: None)(d.get("request_id")) if cl is not None else None
+        if not rid:
+            return None
+        tree = self.by_run.get(rid)
+        if tree is None:  # run đã đóng cây (chuỗi continue/resume dùng lại cây cũ) → tra DB
+            r = self.hub.store.get_run(rid) or {}
+            tree = ((r.get("run_opts") or {}).get("filehub_lane") or {}).get("tree")
+        return str(tree) if tree else f"run:{rid}"
 
     async def _stop_pushes(self, server: str, code: str) -> None:
         for wd in self.workdirs.values():

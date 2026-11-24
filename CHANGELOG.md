@@ -10,6 +10,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Sửa lỗi
+- Không gian số (cổng cfharness): nhiều run ghi vào CÙNG một thư mục chung giờ chạy song song (trước đây run sau phải chờ run trước xong, kể cả khi sửa tệp khác nhau). Mỗi run vẫn có cây làm việc riêng; hai run cùng sửa một tệp → bản xung đột riêng, không ghi đè. Thay đổi một run vừa đẩy lên được kéo về cây của run kia và agent được báo là "run khác" sửa. Muốn chạy tuần tự như cũ: `cfharness config set filehub.lane.serialize_runs true`.
+
 ---
 
 ## v0.2.31 — 2026-11-24

@@ -1,5 +1,5 @@
 """Cổng cfharness H2 — luồng sự kiện (cursor, nối lại sau khi đứt), steer run khi người sửa tệp trong phạm vi, tool hub-self `fs_*`
-(chỉ đọc + ràng run), chế độ `tools` cho run chỉ đọc, khoá theo gốc thư mục chung, `filehub:` ở cả hai chế độ. Server lane GIẢ + ScriptedRuntime.
+(chỉ đọc + ràng run), chế độ `tools` cho run chỉ đọc, run song song trên cùng gốc (khoá theo gốc chỉ khi `serialize_runs`), `filehub:` ở cả hai chế độ. Server lane GIẢ + ScriptedRuntime.
 """
 
 from __future__ import annotations
@@ -78,14 +78,13 @@ async def test_tree_run_materializes_scope_steers_on_human_change_and_cleans_up(
     lane.human_delete("Báo cáo/so-lieu-2025.csv")
     await until(lambda: not (cwd / "so-lieu-2025.csv").exists())
     assert any("moved so-lieu.csv to so-lieu-2025.csv" in x for x in steers(d, rid)) and any("deleted so-lieu-2025.csv" in x for x in steers(d, rid))
-    # khoá ghi = gốc thư mục chung trên server: run ghi thứ hai cùng thư mục → chờ
+    # không khoá theo gốc thư mục chung: run ghi thứ hai cùng thư mục chạy SONG SONG (xong khi run đầu còn đang chạy)
     s.by_prompt["THỨ-HAI"] = {"text": "xong"}
     r2 = {"run_id": d.hub.runs.submit("w2", "THỨ-HAI", cwd="filehub:chung/Khác")["id"]}
-    await asyncio.sleep(0.3)
-    assert d.hub.store.get_run(r2["run_id"])["status"] == "queued"
+    await wait_status(d, r2["run_id"], ("completed",))
+    assert d.hub.store.get_run(rid)["status"] == "running"
     d.hub.runs.runtime().release(rid)
     await wait_status(d, rid, ("completed",))
-    await wait_status(d, r2["run_id"], ("completed",))
     assert not cwd.exists() and rid not in d.hub.filehub.lane.by_run  # cây bị xoá khi run kết thúc
     assert not (d.hub.paths.home / "filehub" / "lane" / f"{rid}.json").exists()
 
@@ -200,3 +199,41 @@ async def test_filehub_refs_lane_only_legacy_needs_migration(env, tmp_path):
     assert run["run_opts"]["filehub_lane"]["sub"] == "Báo cáo"
     assert {f["name"] for f in d.hub.filehub.lane_folders()} == {"chung"}
     assert {f["name"] for f in d.hub.filehub.legacy_folders()} == {"cu"}
+
+
+async def test_parallel_runs_same_root_see_each_others_writes(env):
+    """Hai run ghi cùng thư mục chung chạy song song: khung `self: true` của run A (cùng khoá cổng) KHÔNG bị cây của run B coi là tiếng
+    vọng — B kéo bản mới + steer nói rõ là run khác; A không kéo lại bản của chính mình."""
+    d, s, lane = env
+    a = await _held_run(d, s, prompt="A")
+    b = await _held_run(d, s, prompt="B", agent="w2")
+    assert a["status"] == b["status"] == "running"
+    ca, cb = Path(a["cwd"]), Path(b["cwd"])
+    (ca / "yeu-cau.md").write_text("run A sửa\n")
+    await until(lambda: lane.file("Báo cáo/yeu-cau.md") == "run A sửa\n".encode())
+    await until(lambda: (cb / "yeu-cau.md").read_text() == "run A sửa\n")
+    assert steers(d, b["id"]) == ["[cfharness] Another cfharness agent run changed yeu-cau.md on Không gian số just now. Re-Read it before editing."]
+    assert steers(d, a["id"]) == []  # tiếng vọng của chính A
+    hc = [e for e in events(d, "filehub.human_changed") if e.run_id == b["id"]]
+    assert hc and hc[-1].payload.get("by") == "cfharness"
+    # B sửa tệp khác → A kéo về; người sửa → câu "The human" như cũ
+    (cb / "so-lieu.csv").write_text("a,b\n3,4\n")
+    await until(lambda: (ca / "so-lieu.csv").read_text() == "a,b\n3,4\n")
+    lane.human_write("Báo cáo/yeu-cau.md", "người sửa\n")
+    await until(lambda: any(x.startswith("[cfharness] The human changed yeu-cau.md") for x in steers(d, a["id"])))
+    # thư mục chung đang có run làm việc → không gỡ được
+    with pytest.raises(Exception, match="đang có run"):
+        d.hub.filehub.remove("chung")
+
+
+async def test_serialize_runs_restores_root_lock(env):
+    d, s, lane = env
+    d.hub.config.set("filehub.lane.serialize_runs", True)
+    run = await _held_run(d, s)
+    s.by_prompt["THỨ-HAI"] = {"text": "xong"}
+    r2 = d.hub.runs.submit("w2", "THỨ-HAI", cwd="filehub:chung/Khác")["id"]
+    await asyncio.sleep(0.3)
+    assert d.hub.store.get_run(r2)["status"] == "queued"
+    d.hub.runs.runtime().release(run["id"])
+    await wait_status(d, run["id"], ("completed",))
+    await wait_status(d, r2, ("completed",))
