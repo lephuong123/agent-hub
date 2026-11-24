@@ -993,7 +993,7 @@ class GuardService:
     # WEB-1: luật mạng (SSRF/DNS/ngoài allowlist) cũng luôn giữ — chính sách mạng của người, không để `hold_uncertain=false` mở
     ALWAYS_HOLD_KLASS = ("hub", "policy", "network")
     # approval-profiles: tool MCP chưa probe / server untrusted cũng luôn giữ — MCP chạy NGOÀI sandbox OS nên "cho chạy + audit" của
-    # uncertain (dựa vào sandbox) không áp được (FR-MC-03); người gỡ bằng `mcp probe`, `mcp annotate` hoặc luật mcp_tool
+    # uncertain (dựa vào sandbox) không áp được (FR-MC-03); người gỡ bằng `mcp annotate` hoặc luật mcp_tool
     # Claude in Chrome: `chrome_sensitive` (javascript_tool/file_upload/upload_image trên Chrome THẬT của người) luôn giữ — guard/chrome.py
     ALWAYS_HOLD_RULES = ("mcp_require_approval", "web_domain_not_allowed", "ssrf_private_resolved", "url_dns_failed", "mcp_unknown_tool", "mcp_untrusted_write",
                          "chrome_sensitive")

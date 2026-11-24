@@ -23,13 +23,12 @@ from cfharness import hub_transfer as T
 from cfharness import redact
 from cfharness import transfer_secrets as S
 from cfharness.errors import HubError
-from cfharness.mcp_client import legacy_oauth as oauth
 from cfharness.paths import HubPaths
 
 from test_hub_transfer import _rewrite_pkg, make_source
 
 PW = "correct horse battery staple 42"
-OAUTH = oauth.secret_name("srv")
+OAUTH = "MCP_OAUTH_SRV_A1B2C3"  # bản ghi OAuth MCP kiểu cũ (tiền tố MCP_OAUTH_ — OAuth của hub gỡ từ v0.2.28)
 VALUES = {
     "API_KEY": "sk-TRANSFER-SECRET-XYZ",  # make_source đặt sẵn
     "TELEGRAM_BOT_TOKEN": "123456:tg-bot-token-AAAA",
@@ -153,10 +152,7 @@ def test_import_clone_drops_bots_and_oauth_keeps_static_and_accounts(tmp_path, m
     for n in VALUES:
         assert (sd / n).exists() == (n not in CLONE_DROPPED), n
     assert not (dst.home / "auth" / "totp.json").exists() and not (dst.home / "mcp_server" / "tokens.json").exists()
-    from cfharness.secrets import SecretStore
-
-    store = SecretStore(sd)
-    assert oauth.load_record(store, "srv") is None  # bản ghi OAuth hub kiểu cũ (gỡ từ v0.2.28) — clone không mang
+    assert not (sd / OAUTH).exists()  # bản ghi OAuth hub kiểu cũ (gỡ từ v0.2.28) — clone không mang
 
 
 def test_redaction_after_import_comes_from_secret_store(tmp_path, monkeypatch):

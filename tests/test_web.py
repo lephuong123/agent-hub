@@ -260,10 +260,12 @@ async def test_human_token_never_in_html_or_logs(held, caplog):
 
 
 # =========================================================================== luồng hằng ngày
-async def test_daily_flow_create_agent_with_mcp_assign_task_see_result_and_cost(env):
+async def test_daily_flow_create_agent_with_mcp_assign_task_see_result_and_cost(env, claude_mcp):
     await env.login()
-    env.hub.mcp.add({"name": "docs-mcp", "transport": "stdio", "command": "true", "trust": "trusted"})
-    env.hub.mcp.add({"name": "other", "transport": "stdio", "command": "true"})
+    claude_mcp("docs-mcp")  # MCP bên thứ ba do claude giữ (v0.2.32): server trong cấu hình claude của tài khoản
+    claude_mcp("other")
+    env.hub.mcp.add({"name": "docs-mcp", "transport": "stdio", "trust": "trusted"})
+    env.hub.mcp.add({"name": "other", "transport": "stdio"})
     r = await env.client.get("/agents/new")
     assert "docs-mcp" in r.text and 'name="mcp"' in r.text and "researcher" in r.text
     r = await env.post("/agents/create", {"id": "nc", "template": "researcher", "name": "Nghiên cứu", "mcp": ["docs-mcp"], "max_budget_usd_per_run": "0.3", "confirm": "yes"})
@@ -736,9 +738,9 @@ async def test_heavy_approval_needs_second_step(held):
 
 async def test_wt6_sensitive_forms_need_confirmation(env):
     await env.login()
-    env.hub.mcp.add({"name": "docs-mcp", "transport": "stdio", "command": "true"})
+    env.hub.mcp.add({"name": "docs-mcp", "transport": "stdio"})
     r = await env.post("/do/mcp_add", {"name": "x", "transport": "stdio", "command": "touch /tmp/should-not-run", "next": "/mcp"})
-    assert r.status_code == 200 and "CHẠY NGAY" in r.text and "touch /tmp/should-not-run" in r.text
+    assert r.status_code == 404  # web không còn thêm MCP chạy lệnh (v0.2.32 — claude giữ cấu hình theo tài khoản)
     assert [m["name"] for m in env.hub.mcp.list()] == ["docs-mcp"]
     r = await env.post("/do/secret_set", {"name": "TELEGRAM_BOT_TOKEN", "value": "ghi-de"})
     assert r.status_code == 200 and "GHI ĐÈ" in r.text and "ghi-de" not in r.text  # giá trị không vào trang xác nhận

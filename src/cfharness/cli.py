@@ -413,19 +413,22 @@ def cmd_doctor(ctx: Ctx) -> int:
                     except PluginError as e:
                         add("plugin", False, str(e))
                 reg = load_mcp_registry(ctx.paths)
+                st_by_name: dict[str, str] = {}
+                if ag.get("mcp_servers"):
+                    try:  # MCP do claude giữ theo tài khoản: trạng thái từ lần `claude mcp list` gần nhất (không chạy claude)
+                        st = client.call("mcp.claude_status", {"cached": True}) or {}
+                        st_by_name = {x["name"]: x.get("status") or "unknown" for x in st.get("servers") or []}
+                    except RpcError as e:
+                        add("MCP của tài khoản claude", False, f"không đọc được: {e.message}", "warning")
                 for s in ag.get("mcp_servers") or []:
                     if s not in reg:
                         add(f"MCP {s}", False, "không có trong registry")
-                        continue
-                    # FR-AG-08: thử kết nối thật (probe: initialize + tools/list, không gọi model)
-                    try:
-                        pr = client.call("mcp.probe", {"name": s, "timeout_s": getattr(ctx.args, "probe_timeout", None) or 20})
-                        if pr.get("ok"):
-                            add(f"MCP {s}", True, f"kết nối được, {len(pr.get('tools') or {})} tool ({pr.get('elapsed_ms')} ms)")
-                        else:
-                            add(f"MCP {s}", False, f"không kết nối được: {pr.get('error')}" + (f" — {pr['hint']}" if pr.get("hint") else ""))
-                    except RpcError as e:
-                        add(f"MCP {s}", False, f"không thử được: {e.message}")
+                    elif s not in st_by_name:
+                        add(f"MCP {s}", False, "không có trong cấu hình claude của tài khoản đang dùng — `cfharness mcp claude add`")
+                    elif st_by_name[s] in ("connected", "unknown"):
+                        add(f"MCP {s}", True, f"cấu hình claude: {st_by_name[s]}" + (" (`cfharness mcp claude status` để kiểm)" if st_by_name[s] == "unknown" else ""))
+                    else:
+                        add(f"MCP {s}", False, f"cấu hình claude: {st_by_name[s]} — `cfharness mcp claude status` / `cfharness mcp claude login {s}`")
                 json.dumps(cfg["runtime"]["claude"].get("settings") or {})
                 add("settings.json hub sinh", isinstance(cfg["runtime"]["claude"].get("settings") or {}, dict), "hợp lệ")
             except RpcError as e:
@@ -804,7 +807,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     doc = sub.add_parser("doctor", help="kiểm sức khoẻ (không gọi model)", parents=[common])
     doc.add_argument("agent", nargs="?", help="id agent cần kiểm, hoặc `multi` = kiểm sẵn sàng chạy nhiều hub trên một máy")
-    doc.add_argument("--probe-timeout", type=float, default=20, help="giây chờ mỗi MCP server khi thử kết nối")
     doc.set_defaults(fn=cmd_doctor)
 
     ag = sub.add_parser("agent", help="quản lý agent", parents=[common])

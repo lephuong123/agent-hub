@@ -1,13 +1,10 @@
 """MCP client registry cho agent (FR-MC-01..06) — luồng A của M1.
 
 Hàm hợp đồng cho luồng B (docs/plan/M1.md):
-- `build_agent_mcp_servers(agent) -> dict[str, dict]`: dạng `mcpServers` cho `claude --mcp-config`,
-  CHỈ gồm server gán cho agent, ĐÃ thay secret (chỉ ghi vào file runtime 0600, xoá sau run).
-  Server thiếu/đã xoá mềm hoặc secret thiếu → `HubError` (fail-closed, run báo lỗi rõ ràng).
-- `tool_annotations(server, tool) -> dict | None`: annotations đã probe (`readOnlyHint`, `destructiveHint`,
-  `title`, `description`, `suspicious`) + `trust` của server, `require_approval`, `selected`.
-  `None` = server lạ hoặc tool chưa thấy khi probe (tool mới → coi như cần duyệt, FR-MC-03).
-- `agent_claude_mcp_servers(agent) -> list[str]`: server nguồn `claude` gán cho agent (không vào mcp.json; plan-mcp-claude-native PR2).
+- `tool_annotations(server, tool) -> dict | None`: annotations (ghi đè của người + bản probe cũ nếu còn) + `trust` của server,
+  `require_approval`, `selected`, `source`, `probed`. `None` = server lạ.
+- `agent_claude_mcp_servers(agent) -> list[str]`: server gán cho agent — mọi MCP bên thứ ba do `claude` giữ theo tài khoản (không vào
+  mcp.json của run; plan-mcp-claude-native). Server thiếu/đã xoá mềm → `HubError` (fail-closed).
 - `agent_mcp_tool_rules(agent) -> {"allowed": [...], "disallowed": [...], "warnings": [...]}`: chuyển
   include/exclude/trust/readOnlyHint thành tên `mcp__<server>__<tool>` cho `--allowedTools/--disallowedTools`
   (FR-MC-02/03). Tool `destructiveHint`/`require_approval` KHÔNG nằm trong allowed (để guard quyết).
@@ -105,15 +102,8 @@ def _agent_info(agent: Any, home: str | Path | None) -> tuple[list[str], str | P
     return list(servers), home
 
 
-def build_agent_mcp_servers(agent: Any, *, home: str | Path | None = None) -> dict[str, dict[str, Any]]:
-    servers, h = _agent_info(agent, home)
-    if not servers:
-        return {}
-    return registry_for(h).build_for_agent_servers(servers)
-
-
 def agent_claude_mcp_servers(agent: Any, *, home: str | Path | None = None) -> list[str]:
-    """Server nguồn `claude` gán cho agent (KHÔNG có trong `build_agent_mcp_servers` — claude tự nạp từ cấu hình tài khoản)."""
+    """Server gán cho agent (claude tự nạp từ cấu hình của tài khoản — không vào mcp.json)."""
     servers, h = _agent_info(agent, home)
     if not servers:
         return []
@@ -131,4 +121,4 @@ def agent_mcp_tool_rules(agent: Any, *, home: str | Path | None = None) -> dict[
     return registry_for(h).tool_rules_for_servers(servers)
 
 
-__all__ = ["agent_claude_mcp_servers", "build_agent_mcp_servers", "tool_annotations", "agent_mcp_tool_rules", "registry_for", "register_registry"]
+__all__ = ["agent_claude_mcp_servers", "tool_annotations", "agent_mcp_tool_rules", "registry_for", "register_registry"]

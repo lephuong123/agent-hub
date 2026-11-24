@@ -32,7 +32,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .aiotasks import spawn
-from .agents import load_mcp_registry
 from .cost_guard import COST_BASIS_ESTIMATED, estimated_run_cost, flag_once, manager_budget_scope
 from .errors import Blocked, Conflict, HubError, NotFound
 from .events import TERMINAL_RUN_EVENTS, HubEvent, make_event
@@ -559,7 +558,7 @@ class RunManager:
             if missing:
                 raise HubError(f"MCP nguồn claude {', '.join(missing)} không có trong cấu hình claude của tài khoản "
                                f"{_cs.account_label(account)} ({_cs.claude_json_path(connector_dir)}) — thêm server dưới tài khoản đó "
-                               "(`claude mcp add -s user …` với CLAUDE_CONFIG_DIR của tài khoản) hoặc gỡ khỏi agent",
+                               "(`cfharness mcp claude add <tên> … --account <id>`) hoặc gỡ khỏi agent",
                                data={"servers": missing, "account": account})
             if conn is None:
                 from .manager.connectors import run_setup
@@ -612,8 +611,8 @@ class RunManager:
         settings_path = rt_dir / "settings.json"
         _write_json_0600(settings_path, settings)
         json.loads(settings_path.read_text(encoding="utf-8"))
-        # mcp.json: server của agent (luồng A — đã thay secret) + hub-guard (luồng B)
-        servers = self._agent_mcp_servers(agent, run_id=run_id)
+        # mcp.json: CHỈ server của hub (hub-guard, hub-self) — MCP bên thứ ba do claude tự nạp từ cấu hình của tài khoản (claude_mcp)
+        servers: dict[str, Any] = {}
         tp = dict(agent.get("tool_policy") or {})
         if conn and tp.get("tools") is not None and "ToolSearch" not in tp["tools"]:
             # `--tools` thiếu ToolSearch → CLI nhét schema MỌI tool connector vào ngữ cảnh (đo 2.1.310: 161k vs 15k token/lượt)
@@ -626,7 +625,7 @@ class RunManager:
         if claude_deny:  # server claude-quản-lý KHÔNG gán cho agent: gỡ mọi tool khỏi ngữ cảnh (server vẫn connect — guard chặn gọi)
             from .mcp_client.claude_source import tool_server_name
 
-            pats = [f"mcp__{tool_server_name(n)}__*" for n in claude_deny if n not in servers and tool_server_name(n) not in servers]
+            pats = [f"mcp__{tool_server_name(n)}__*" for n in claude_deny]
             tp["disallowed_tools"] = list(dict.fromkeys(list(tp.get("disallowed_tools") or []) + pats))
         perm_tool = None
         env_extra: dict[str, str] = {}
@@ -655,13 +654,16 @@ class RunManager:
         if browser in CHROME_MODES:
             allowed_mcp.append(CHROME_SERVER)  # server dynamic của CLI — không phải isolation.violation
         if browser == "chrome" or web_allow:
-            drop = [n for n, e in servers.items() if is_playwright_server(n, e)]
-            for n in drop:
-                servers.pop(n, None)
+            # Playwright gán cho agent (MCP do claude nạp): gỡ khỏi ngữ cảnh — server vẫn connect, guard chặn gọi (mcp_not_in_run)
+            from .mcp_client.claude_source import playwright_servers, tool_server_name
+
+            pw = playwright_servers(connector_dir) if claude_mcp else set()
+            drop = [n for n in claude_mcp if n in pw or is_playwright_server(n, None)]
             if drop:
                 allowed_mcp = [x for x in allowed_mcp if x not in drop]
-                pre = tuple(f"mcp__{n}" for n in drop)
+                pre = tuple(f"mcp__{tool_server_name(n)}" for n in drop)
                 tp["allowed_tools"] = [x for x in tp.get("allowed_tools") or [] if not str(x).startswith(pre)]
+                tp["disallowed_tools"] = list(dict.fromkeys(list(tp.get("disallowed_tools") or []) + [f"{x}__*" for x in pre]))
         static: list[str] = []
         if guard_on:
             from .guard import runtime as gr
@@ -813,38 +815,6 @@ class RunManager:
             persist_thinking=bool(claude_cfg.get("persist_thinking", True)),
             thinking_max_chars=int(claude_cfg.get("thinking_max_chars") or 8000),
         )
-
-    def _agent_mcp_servers(self, agent: dict[str, Any], run_id: str | None = None) -> dict[str, Any]:
-        """Hợp đồng A: `mcp_client.build_agent_mcp_servers(agent)` (đã thay secret). Chưa có → registry.yaml của M0.
-        Server OAuth kiểu cũ (nguồn hub, gỡ từ v0.2.28) → HubError `oauth=needs_migration` (run failed trước spawn)."""
-        try:
-            from .mcp_client import build_agent_mcp_servers
-        except ImportError:  # pragma: no cover
-            reg = load_mcp_registry(self.hub.paths)
-            return {name: reg[name] for name in agent.get("mcp_servers") or [] if name in reg}
-        return dict(build_agent_mcp_servers(agent, home=self.hub.paths.home) or {})
-
-    def _refuse_legacy_oauth_mcp(self, run: dict[str, Any], agent: dict[str, Any]) -> None:
-        """Agent gán server OAuth kiểu cũ (nguồn hub — OAuth của hub đã gỡ từ v0.2.28): phát `mcp.unavailable{server,
-        status: needs_migration, source: hub}` cho từng server rồi ném HubError nêu tên + lệnh chuyển (fail-closed, không lặng lẽ bỏ server)."""
-        from .mcp_client.legacy_oauth import STATUS, needs_migration, needs_migration_error
-
-        reg = getattr(self.hub, "mcp", None)
-        if reg is None:  # pragma: no cover — hub tối giản (test) không có registry
-            return
-        bad = []
-        for name in agent.get("mcp_servers") or []:
-            row = reg.get_row(name)
-            if row is not None and not row.get("deleted_at") and needs_migration(row.get("config") or {}):
-                bad.append(name)
-        if not bad:
-            return
-        for name in bad:
-            self.hub.publish(make_event("mcp.unavailable", agent["id"], {"server": name, "status": STATUS, "source": "hub"},
-                                        run_id=run["id"], session_id=run.get("session_id")))
-        raise needs_migration_error(bad[0]) if len(bad) == 1 else HubError(
-            f"{len(bad)} MCP dùng OAuth do hub giữ (đã gỡ từ v0.2.28): {', '.join(bad)} — run không chạy tới khi chuyển sang claude: "
-            "cfharness mcp migrate-to-claude <tên> --account <id>", data={"servers": bad, "oauth": STATUS})
 
     def _refresh_claude_redact(self, config_dir: Path | None) -> None:
         """Run khởi động: giá trị secret trong cấu hình claude (tài khoản đang dùng + file đã đổi) → bộ che (chỉ stat khi không đổi)."""
@@ -1032,8 +1002,6 @@ class RunManager:
                 raise HubError(f"thư mục {', '.join(ar.lock_keys)} đang bị khoá bởi run khác (workspace_locked)")
             runtime = self.runtime()
             ar.runtime = runtime
-            if agent.get("mcp_servers"):
-                self._refuse_legacy_oauth_mcp(run, agent)  # MCP OAuth kiểu cũ (gỡ từ v0.2.28) → failed TRƯỚC khi ghi gì vào runtime/
             ropts = run.get("run_opts") or {}
             if ropts.get("workspace_kind") == "filehub" and not ropts.get("filehub_lane"):
                 # run tạo trước H5 trên bản sao của đồng bộ 2 chiều cũ (đã bỏ): không chạy trong bản sao cũ nữa

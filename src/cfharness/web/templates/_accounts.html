@@ -55,7 +55,7 @@
                 {% if mc.secrets_ok %}<label>Header (tuỳ chọn) <input name="header_name" autocomplete="off" placeholder="vd Authorization"></label>
                 <label>Giá trị header <input name="header_value" type="password" autocomplete="off" spellcheck="false"></label>{% endif %}
               </div>
-              <p class="muted small">claude giữ cấu hình + đăng nhập (OAuth) theo tài khoản này; hub chỉ giữ tên/host/quyền. {% if mc.secrets_ok %}Header lưu trong thư mục cấu hình riêng của tài khoản (agent không đọc được).{% else %}Server cần header bí mật: dùng trang MCP (nguồn hub, secret store).{% endif %}</p>
+              <p class="muted small">claude giữ cấu hình + đăng nhập (OAuth) theo tài khoản này; hub chỉ giữ tên/host/quyền. Header lưu trong cấu hình claude của tài khoản (agent không đọc được). Server chạy lệnh (stdio): <code>cfharness mcp claude add &lt;tên&gt; -- &lt;lệnh&gt;</code>.</p>
               <div class="row end"><button class="btn" type="submit">Thêm</button></div>
             </form>
           </details>

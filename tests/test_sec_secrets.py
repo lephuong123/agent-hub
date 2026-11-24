@@ -1,8 +1,8 @@
 """Hardening SEC — H-12 (NFR-10, FR-MC-05): secret không lộ ra DB/WAL/raw stdout/log/OTel/runtime.
 
-Tái hiện kịch bản QA (`scratchpad/audit/scripts/secret_e2e.py`, `probe_leak.py`, `otel_leak.py`): run có MCP mang secret,
-agent in secret ra stdout (tool result + câu trả lời), secret từ env-fallback, probe server in token ra stderr, OTel bật
-`include_payloads` — rồi grep TOÀN BỘ `HUB_HOME` (trừ `secrets/`) và stderr của tiến trình.
+Tái hiện kịch bản QA (`scratchpad/audit/scripts/secret_e2e.py`, `otel_leak.py`): run có secret trong secret store, agent in
+secret ra stdout (tool result + câu trả lời), OTel bật `include_payloads` — rồi grep TOÀN BỘ `HUB_HOME` (trừ `secrets/`).
+(Hub không còn tự chạy/probe MCP bên thứ ba từ v0.2.32 — kịch bản mcp.json mang secret + probe in token đã gỡ cùng tính năng.)
 """
 
 from __future__ import annotations
@@ -10,8 +10,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -68,10 +66,9 @@ def test_value_masker_unit():
     assert "SUPERSECRET" not in redact_str("echo sk-live-SUPERSECRET-123456")
 
 
-def test_e2e_run_with_mcp_secret_never_leaks(tmp_path, monkeypatch):
+def test_e2e_run_with_secret_never_leaks(tmp_path, monkeypatch):
     """QA secret_e2e + H-12: run thật (FakeRuntime phát lại stream-json có secret) → không file nào trong HUB_HOME chứa secret."""
     monkeypatch.setenv("CFHARNESS_HOME", str(tmp_path / "hub"))
-    monkeypatch.setenv("QA_ENV_TOKEN", ENV_SECRET)
     p = HubPaths.resolve(tmp_path / "hub")
     p.ensure()
     p.config.write_text(yaml.safe_dump({"guard": {"git_probe": False, "integrity": {"tick_s": 0.2}},
@@ -83,28 +80,17 @@ def test_e2e_run_with_mcp_secret_never_leaks(tmp_path, monkeypatch):
         hub = Hub(p, runtime=rt)
         hub.start()
         hub.secrets.set("INTERNAL_MCP_TOKEN", STORE_SECRET)
-        hub.mcp.add({"name": "vb", "command": "vb-mcp", "args": ["--token", "${INTERNAL_MCP_TOKEN}"], "env": {"TOKEN": "${INTERNAL_MCP_TOKEN}", "E": "${QA_ENV_TOKEN}"},
-                     "trust": "trusted"})
-        hub.mcp.add({"name": "web", "transport": "http", "url": "https://x.example/mcp", "headers": {"Authorization": "Bearer ${INTERNAL_MCP_TOKEN}"}, "trust": "trusted"})
-        hub.agents.create({"id": "a1", "name": "A1", "mcp_servers": ["vb", "web"]})
+        hub.secrets.set("OTHER_TOKEN", ENV_SECRET)
+        hub.agents.create({"id": "a1", "name": "A1"})
         r = hub.runs.submit("a1", f"hello, use {ENV_SECRET} carefully")
         rid = r["id"]
-        mp = None
-        for _ in range(300):
-            await asyncio.sleep(0.02)
-            cand = list(p.home.rglob(f"runtime/{rid}/mcp.json"))
-            if cand:
-                mp = cand[0]
-                break
-        assert mp is not None and (sys.platform == "win32" or oct(mp.stat().st_mode & 0o777) == "0o600")  # Windows: không có bit POSIX
-        assert STORE_SECRET in mp.read_text() and ENV_SECRET in mp.read_text()  # chỉ ở đây, 0600, trong thời gian chạy
-        for _ in range(500):  # mcp.json có trước `runtime.start` (checkpoint/spawn chậm trên Windows) — chờ gate rồi mới thả
+        for _ in range(500):  # chờ gate (spawn chậm trên Windows) rồi mới thả
             if rid in rt.gates:
                 break
             await asyncio.sleep(0.02)
         rt.release(rid)
         await hub.runs.wait(rid, 10)
-        assert not mp.exists()
+        assert not list(p.home.rglob(f"runtime/{rid}"))  # thư mục runtime của run được dọn
         hub.telemetry.flush(2.0)
         logging.getLogger("cfharness.test").warning("log có secret %s và %s", STORE_SECRET, ENV_SECRET)
         await hub.stop()
@@ -165,29 +151,3 @@ def test_otel_include_payloads_masks_secret(tmp_path):
     assert d.count('"tool.input"') >= 1  # payload có xuất (đã che)
     assert S not in d and "SUPERSECRET" not in d and "StoredOtelSecret998877" not in d
     h.store.close()
-
-
-def test_probe_stderr_masked_not_in_daemon_out(tmp_path):
-    """QA probe_leak.py: server MCP in token ra stdout/stderr khi probe → không lọt vào stderr daemon (`logs/daemon.out`)
-    hay kết quả probe/DB. Chạy trong tiến trình con có cấu hình log như daemon thật, bắt stderr của nó."""
-    import subprocess
-
-    home = tmp_path / "hub"
-    script = tmp_path / "probe_child.py"
-    script.write_text(
-        "import asyncio, json, sys\n"
-        "from cfharness.paths import HubPaths\nfrom cfharness.hub import Hub\n"
-        "from cfharness.redact import install_stderr_masking\n"
-        "install_stderr_masking()\n"
-        f"p=HubPaths.resolve({str(home)!r}); p.ensure(); hub=Hub(p)\n"
-        "S='QkeyLEAK8812abcXYZ99'\nhub.secrets.set('QK', S)\n"
-        "hub.mcp.add({'name':'s','command':sys.executable,'args':['-c',\"import sys,os; print('bad token '+os.environ['T']); "
-        "sys.stderr.write('bad token '+os.environ['T']); sys.exit(3)\"],'env':{'T':'${QK}'}})\n"
-        "r=asyncio.run(hub.mcp.probe('s', timeout_s=10))\n"
-        "print('RESULT', json.dumps(r, default=str))\n"
-        "hub.store.close()\n"
-    )
-    out = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=60, env={**os.environ, "CFHARNESS_HOME": str(home)})
-    assert "RESULT" in out.stdout, out.stderr[-2000:]
-    assert "QkeyLEAK8812abcXYZ99" not in out.stdout + out.stderr
-    assert not _grep_home(home, "QkeyLEAK8812abcXYZ99")

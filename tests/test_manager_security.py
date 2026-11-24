@@ -208,13 +208,11 @@ async def test_manager_cannot_assign_unregistered_or_hub_mcp(env):
     d, rid = env
     await _deny_tool(d, rid, "agent_update", {"id": "w1", "changes": {"mcp_servers": ["evil"]}}, match="registry")
     await _deny_tool(d, rid, "agent_create", {"id": "w6", "spec": {"mcp_servers": ["evil"]}}, match="registry")
-    d.hub.mcp.add({"name": "hubctl", "transport": "stdio", "command": "cfharness", "args": ["mcp", "serve"]})  # người đăng ký MCP của hub
-    d.hub.mcp.add({"name": "docs", "transport": "stdio", "command": "docs-mcp", "trust": "trusted"})
-    d.hub.mcp.add({"name": "raw", "transport": "stdio", "command": "raw-mcp"})  # untrusted (mặc định) → chỉ người gán (MGR-7d)
+    d.hub.mcp.add({"name": "docs", "transport": "stdio", "trust": "trusted"})
+    d.hub.mcp.add({"name": "raw", "transport": "stdio"})  # untrusted (mặc định) → chỉ người gán (MGR-7d)
     await _deny_tool(d, rid, "agent_update", {"id": "w1", "changes": {"mcp_servers": ["raw"]}}, match="untrusted")
-    await _deny_tool(d, rid, "agent_update", {"id": "w1", "changes": {"mcp_servers": ["hubctl"]}}, match="MCP của chính hub")
     names = {m["name"] for m in await tool(d, rid, "mcp_registry_list")}
-    assert "hubctl" not in names and "docs" in names
+    assert "docs" in names
     await _deny_rpc(d, rid, "mcp.add", {"name": "x", "config": {"command": "x"}})
     await _deny_rpc(d, rid, "mcp.assign", {"agent": "w1", "server": "x"})
     assert d.hub.store.get_agent("w1")["mcp_servers"] in ([], None)

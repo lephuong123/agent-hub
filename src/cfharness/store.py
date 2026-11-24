@@ -1006,10 +1006,12 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS file_leases_session ON file_leases(session_id);
     """,
+    # v34: MCP bên thứ ba chỉ còn nguồn claude — dòng nguồn hub đổi tại chỗ (mcp_client/schema.py)
+    "mcp_client.schema.to_claude_source",
 ]
 
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.
-PY_MIGRATION_PREFIXES = ("session_search.", "knowledge.graph.schema.")
+PY_MIGRATION_PREFIXES = ("session_search.", "knowledge.graph.schema.", "mcp_client.schema.")
 
 
 def is_py_migration(sql: str) -> bool:

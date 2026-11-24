@@ -214,9 +214,6 @@ class Hub:
         except Exception:  # pragma: no cover
             log.exception("không ghi được registry hub")
         self._warn_if_sandbox_disabled()
-        from .mcp_client.legacy_oauth import warn_on_start as _warn_legacy_oauth
-
-        _warn_legacy_oauth(self)  # MCP OAuth kiểu cũ (gỡ từ v0.2.28) còn sót → MỘT dòng cảnh báo, không xoá gì
         try:  # R2-1(c): .pth/sitecustomize lạ trong venv của hub → cảnh báo đỏ
             from .guard.integrity import check_python_env
 

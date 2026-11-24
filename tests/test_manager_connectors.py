@@ -119,18 +119,22 @@ def test_adapter_connector_prefix_not_violation():
     assert sorted(e.payload.get("name") for e in evs if e.type == "isolation.violation") == ["claude.ai Claude Docs", "rogue"]
 
 
-async def _connector_manager(d, connectors):
+async def _connector_manager(d, connectors, add_mcp=None):
     d.hub.config.set("manager.capabilities", {"profile": "hermes", "tools": None, "mcp": "trusted", "web": None, "connectors": connectors})
-    d.hub.mcp.add({"name": "docs", "transport": "stdio", "command": "/bin/echo", "trust": "trusted"})
-    d.hub.agents.create({"id": "boss", "name": "boss", "role": "hub boss", "model": "haiku", "tool_policy": {"tools": HERMES_TOOLS}, "mcp_servers": ["docs"]})
+    mcp = []
+    if add_mcp is not None:  # MCP bên thứ ba do claude giữ (v0.2.32): server phải có trong cấu hình claude của tài khoản
+        add_mcp("docs")
+        d.hub.mcp.add({"name": "docs", "transport": "stdio", "trust": "trusted"})
+        mcp = ["docs"]
+    d.hub.agents.create({"id": "boss", "name": "boss", "role": "hub boss", "model": "haiku", "tool_policy": {"tools": HERMES_TOOLS}, "mcp_servers": mcp})
     await rpc(d, "manager.set", {"agent_id": "boss"})
     res = await rpc(d, "manager.chat", {"channel": "web", "text": "hi"})
     await wait_status(d, res["run_id"])
     return [s for s in d.script.specs if s.run_id == res["run_id"]][-1], res["run_id"]
 
 
-async def test_manager_run_spec_with_connectors(d, user_home):
-    spec, _ = await _connector_manager(d, ["Claude Docs"])
+async def test_manager_run_spec_with_connectors(d, user_home, claude_mcp):
+    spec, _ = await _connector_manager(d, ["Claude Docs"], claude_mcp)
     assert spec.isolation_overrides == {"setting_sources": "user", "strict_mcp_config": False}
     assert spec.allowed_mcp_prefixes and "claude.ai " in spec.allowed_mcp_prefixes
     assert {"playwright", "video-context", "docs", "hub-guard", "hub-self"} <= set(spec.allowed_mcp_servers)
@@ -149,9 +153,9 @@ async def test_manager_run_without_connectors_unchanged(d, user_home):
     assert "ToolSearch" not in spec.tool_policy["tools"]
 
 
-async def test_connectors_need_guard(d, user_home):
+async def test_connectors_need_guard(d, user_home, claude_mcp):
     """Không có hook guard = không lớp nào chặn MCP lạ của ~/.claude → run (nếu vẫn được tạo) KHÔNG bật connector."""
-    await _connector_manager(d, ["Claude Docs"])
+    await _connector_manager(d, ["Claude Docs"], claude_mcp)
     d.hub.config.set("guard.enabled", False)
     try:
         res = await rpc(d, "manager.chat", {"channel": "web", "text": "again"})
@@ -163,8 +167,8 @@ async def test_connectors_need_guard(d, user_home):
 
 
 # ------------------------------------------------------------------ guard
-async def test_guard_connector_rules(d, user_home):
-    _, run_id = await _connector_manager(d, ["Claude Docs", "Abacum (MCP)"])
+async def test_guard_connector_rules(d, user_home, claude_mcp):
+    _, run_id = await _connector_manager(d, ["Claude Docs", "Abacum (MCP)"], claude_mcp)
     run = d.hub.store.get_run(run_id)
     ctx = d.hub.guard.context_for(run)
     assert ctx.connectors == ("Claude_Docs", "Abacum__MCP_") and ctx.run_mcp_servers == frozenset({"docs"})

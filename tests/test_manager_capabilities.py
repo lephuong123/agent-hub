@@ -48,8 +48,10 @@ def _hermes(d, **over):
     d.hub.config.set("manager.capabilities", {"profile": "hermes", "tools": None, "mcp": None, "web": None, **over})
 
 
-def _mcp(d, name: str, trust: str, cache: dict | None = None) -> None:
-    d.hub.mcp.add({"name": name, "transport": "stdio", "command": "/bin/echo", "trust": trust})
+def _mcp(d, name: str, trust: str, cache: dict | None = None, claude_mcp=None) -> None:
+    if claude_mcp is not None:  # MCP bên thứ ba do claude giữ (v0.2.32): run cần server trong cấu hình claude của tài khoản
+        claude_mcp(name)
+    d.hub.mcp.add({"name": name, "transport": "stdio", "trust": trust})
     if cache is not None:
         d.hub.store.conn.execute("UPDATE mcp_servers SET annotations_cache=? WHERE name=?", (json.dumps(cache), name))
 
@@ -270,9 +272,10 @@ async def test_child_over_real_socket_denied(d):
 
 
 # ------------------------------------------------------------------ spec run manager hermes: guard + sandbox vẫn đủ
-async def test_hermes_manager_run_spec_keeps_guard_and_sandbox(d):
+async def test_hermes_manager_run_spec_keeps_guard_and_sandbox(d, claude_mcp):
     _hermes(d)
-    _mcp(d, "docs", "trusted", cache={"search": {"name": "search", "readOnlyHint": True}, "update_page": {"name": "update_page", "readOnlyHint": None}})
+    _mcp(d, "docs", "trusted", cache={"search": {"name": "search", "readOnlyHint": True}, "update_page": {"name": "update_page", "readOnlyHint": None}},
+         claude_mcp=claude_mcp)
     _agent(d, "boss", tools=HERMES_TOOLS, mcp_servers=["docs"])
     await rpc(d, "manager.set", {"agent_id": "boss"})
     res = await rpc(d, "manager.chat", {"channel": "web", "text": "hi"})
@@ -296,7 +299,8 @@ async def test_hermes_manager_run_spec_keeps_guard_and_sandbox(d):
     assert sb_path(d.paths.socket) not in (sb.get("network") or {}).get("allowUnixSockets", [])
     assert st.get("permissions", {}).get("deny"), "permissions.deny tĩnh phải có"
     mcp = json.loads(spec.mcp_config_path.read_text())["mcpServers"]
-    assert "hub-guard" in mcp and "hub-self" in mcp and "docs" in mcp
+    assert "hub-guard" in mcp and "hub-self" in mcp and "docs" not in mcp  # MCP bên thứ ba: claude nạp từ cấu hình tài khoản
+    assert spec.claude_mcp_servers == ["docs"]
 
 
 # ------------------------------------------------------------------ classifier: đường vòng từ Bash/Write/Web của run manager

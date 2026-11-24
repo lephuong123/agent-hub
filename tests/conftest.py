@@ -146,6 +146,30 @@ def _claude_home_for_transfer(tmp_path_factory):
             os.environ["CFHARNESS_TEST_CLAUDE_HOME"] = prev
 
 
+@pytest.fixture
+def claude_mcp():
+    """MCP bên thứ ba do claude giữ (v0.2.32): ghi server vào `.claude.json` của cấu hình claude MẶC ĐỊNH của test
+    (`CFHARNESS_TEST_CLAUDE_HOME`) — run của agent gán server đó mới chạy được. `claude_mcp("docs")` (stdio giả) hoặc
+    `claude_mcp("web", {"type": "http", "url": "https://x/mcp"})`. Khôi phục file sau test."""
+    import json
+    import os
+    from pathlib import Path
+
+    p = Path(os.environ["CFHARNESS_TEST_CLAUDE_HOME"]) / ".claude.json"
+    before = p.read_text(encoding="utf-8") if p.exists() else None
+
+    def add(name: str, entry: dict | None = None) -> None:
+        data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        data.setdefault("mcpServers", {})[name] = entry or {"type": "stdio", "command": "echo", "args": []}
+        p.write_text(json.dumps(data), encoding="utf-8")
+
+    yield add
+    if before is None:
+        p.unlink(missing_ok=True)
+    else:
+        p.write_text(before, encoding="utf-8")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _admin_shared_root(tmp_path_factory):
     """Quản trị máy: cờ ESTOP admin / chính sách / admin-log đọc từ thư mục chung HẰNG SỐ (/Users/Shared/cfharness). Test (kể cả daemon

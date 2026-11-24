@@ -1,23 +1,16 @@
-"""Import MCP server từ `~/.claude.json` (FR-MC-04). Tham khảo Hermes `hermes_cli/agent_import.py`.
+"""Heuristic nhận diện giá trị trông như secret trong một entry `mcpServers` của claude (env / header / args / query của url).
 
-- CHỈ ĐỌC file nguồn (mở chế độ đọc; không bao giờ ghi lại).
-- Đọc `mcpServers` cấp user; tuỳ chọn `projects[<đường dẫn tuyệt đối>].mcpServers` (`--project`).
-- Giá trị trông như secret trong env / header / args / query của url được tách ra secret store,
-  registry chỉ giữ `${NAME}` (FR-MC-05). Giá trị đã là `${VAR}` giữ nguyên.
-- MCP import mặc định `trust: trusted` (Q-05) — tool ghi chạy không hỏi nhưng có audit.
+Dùng bởi `claude_redact` (che theo giá trị). Trước v0.2.32 là `importer.py` (import `~/.claude.json` vào registry nguồn hub — đã gỡ).
 """
 
 from __future__ import annotations
 
-import json
 import math
 import re
 from collections import Counter
-from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from ..errors import HubError
 from ..secrets import is_ref, normalize_name
 
 SECRET_KEY_RE = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|AUTH|CREDENTIAL|COOKIE|SESSION|PRIVATE)", re.I)
@@ -38,31 +31,6 @@ def looks_secret_value(v: str) -> bool:
         return False
     classes = sum(bool(re.search(p, v)) for p in (r"[a-z]", r"[A-Z]", r"[0-9]", r"[^A-Za-z0-9]"))
     return entropy_bits(v) >= 3.5 and classes >= 2
-
-
-def read_claude_servers(path: Path, project: str | None = None) -> dict[str, dict[str, Any]]:
-    """Đọc `mcpServers` (user + project nếu có). CHỈ ĐỌC."""
-    if not path.is_file():
-        raise HubError(f"không tìm thấy {path}")
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except json.JSONDecodeError as e:
-        raise HubError(f"{path} không phải JSON hợp lệ: {e}") from None
-    if not isinstance(data, dict):
-        raise HubError(f"{path}: nội dung không phải object JSON")
-    servers: dict[str, dict[str, Any]] = {}
-    user = data.get("mcpServers")
-    if isinstance(user, dict):
-        servers.update({k: v for k, v in user.items() if isinstance(v, dict)})
-    if project:
-        projects = data.get("projects") or {}
-        key = str(Path(project).expanduser().resolve())
-        proj = projects.get(key) or projects.get(project) or {}
-        ps = proj.get("mcpServers") if isinstance(proj, dict) else None
-        if isinstance(ps, dict):
-            servers.update({k: v for k, v in ps.items() if isinstance(v, dict)})
-    return servers
 
 
 class _Extractor:
@@ -143,34 +111,3 @@ class _Extractor:
         # giữ `${…}` không bị mã hoá
         query = urlencode(nq, safe="${}")
         return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
-
-
-def convert_entry(name: str, entry: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str], list[str]]:
-    """Entry Claude Code → (cấu hình registry, secrets tách ra, ghi chú)."""
-    notes: list[str] = []
-    ex = _Extractor(name)
-    typ = str(entry.get("type") or ("stdio" if entry.get("command") else "http")).lower()
-    if typ in ("streamable-http", "streamable_http"):
-        typ = "http"
-    cfg: dict[str, Any] = {"name": name, "trust": "trusted", "source": "claude-import"}
-    if typ == "stdio":
-        cfg.update(
-            transport="stdio",
-            command=entry.get("command"),
-            args=ex.args(list(entry.get("args") or [])),
-            env={k: ex.kv(k, v) for k, v in (entry.get("env") or {}).items()},
-        )
-    elif typ in ("http", "sse"):
-        cfg.update(
-            transport=typ,
-            url=ex.url(str(entry.get("url") or "")),
-            headers={k: ex.kv(k, v) for k, v in (entry.get("headers") or {}).items()},
-        )
-    else:
-        raise HubError(f"server '{name}': loại '{typ}' không hỗ trợ")
-    ignored = sorted(set(entry) - {"type", "command", "args", "env", "url", "headers"})
-    if ignored:
-        notes.append(f"bỏ qua trường không hỗ trợ: {', '.join(ignored)}")
-    if ex.secrets:
-        notes.append(f"{len(ex.secrets)} secret chuyển vào secret store: {', '.join(sorted(ex.secrets))}")
-    return cfg, ex.secrets, notes

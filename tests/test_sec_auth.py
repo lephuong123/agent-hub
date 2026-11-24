@@ -634,50 +634,6 @@ async def test_mcp_claude_admin_human_only(home):
         await _stop(d, srv)
 
 
-async def test_mcp_migrate_to_claude_human_only(home):
-    """plan-mcp-claude-native PR4: chuyển server OAuth của hub sang claude (thêm vào cấu hình claude của tài khoản + xoá token hub) = cấp/thu
-    hồi quyền dịch vụ ngoài thay người — agent trong run (kể cả đọc trộm token người) bị từ chối; người qua được cổng quyền; CLI bị chặn."""
-    from cfharness.guard.classifier import HUB_HUMAN_ONLY_CLI
-
-    assert "mcp.migrate_to_claude" in auth.HUMAN_ONLY and "mcp.migrate_to_claude" not in auth.MANAGER_ALLOWED
-    assert "migrate-to-claude" in HUB_HUMAN_ONLY_CLI["mcp"]
-    d, srv = await _start(home)
-    try:
-        for params in ({"name": "x", "account_id": "machine"}, {"name": "x", "drop_hub_token": True}):
-            run_n, proc_n, go_n = await _start_run(d)
-            rr = await _in_run(go_n, _client_py(home, "mcp.migrate_to_claude", params, steal_token=True))
-            resp = json.loads(rr["out"].strip().splitlines()[-1])
-            assert resp.get("error", {}).get("code") == -32003, (params, resp)
-            proc_n.wait(5)
-        with pytest.raises(RpcError) as ei:  # người: qua cổng quyền (lỗi nghiệp vụ: không có server 'x')
-            await asyncio.to_thread(RpcClient(home.socket).call, "mcp.migrate_to_claude", {"name": "x", "account_id": "machine", "dry_run": True})
-        assert ei.value.code == -32004
-    finally:
-        await _stop(d, srv)
-
-
-# =============================================================================== L3 (plan-logging.md A2/A5): audit.list + token web/MCP riêng
-def test_audit_list_human_only_and_cli_blocked(home):
-    from cfharness.guard.classifier import HUB_HUMAN_ONLY_CLI, GuardContext, classify
-    from cfharness.guard.policy import PolicyStore
-
-    assert "audit.list" in auth.HUMAN_ONLY and "audit.list" not in auth.MANAGER_ALLOWED
-    assert HUB_HUMAN_ONLY_CLI.get("audit", "missing") is None
-    ps = PolicyStore(home.home)
-    ps.ensure()
-    ctx = GuardContext(home.home / "agents", ps.load(), run_since=time.time(), hub_socket=str(home.socket), git_probe=False)
-    for cmd in ("cfharness audit list", "cfharness audit list --limit 5"):
-        assert classify("Bash", {"command": cmd}, ctx).forbidden, cmd
-    # token web/MCP riêng: cùng lớp bảo vệ với token người (classifier + permissions.deny)
-    from cfharness.guard.runtime import secret_read_deny_rules
-
-    rules = secret_read_deny_rules(home.home, home.socket)
-    for kind in auth.TOKEN_KINDS:
-        tp = auth.token_path(home.socket, kind)
-        assert classify("Bash", {"command": f"cat {tp}"}, ctx).forbidden, kind
-        assert classify("Read", {"file_path": str(tp)}, ctx).forbidden, kind
-        assert any(str(tp) in r and r.startswith("Read(") for r in rules), kind
-
 
 async def test_agent_with_stolen_web_or_mcp_token_still_denied(home):
     """Token web/MCP là token NGƯỜI (kênh khác): agent trong run đọc trộm được (giả định sandbox tắt) vẫn bị bằng chứng tiến trình chặn

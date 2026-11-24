@@ -119,7 +119,9 @@ def prepare(hub: "Hub", ref: str) -> dict[str, Any]:
     settings = dict(claude_cfg.get("settings") or {})
     settings_path, mcp_path = rt / "settings.json", rt / "mcp.json"
     _write_0600(settings_path, settings)
-    _write_0600(mcp_path, {"mcpServers": hub.runs._agent_mcp_servers(agent)})
+    # MCP bên thứ ba do claude giữ theo tài khoản (v0.2.32) — hub không còn entry mcp.json nào cho chúng; phiên tiếp quản giữ
+    # --strict-mcp-config nên KHÔNG nạp MCP của agent (người tự gọi trong phiên nếu cần)
+    _write_0600(mcp_path, {"mcpServers": {}})
     soul_p = Path(agent["home_path"]) / "SOUL.md"
     from ..pdf_support import system_note
 

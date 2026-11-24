@@ -70,16 +70,12 @@ def test_config_source_claude_keeps_only_safe_metadata():
     assert c.managed_by_claude and c.url == "https://mcp.jira.example:8443"
     st = c.stored()
     assert st["source"] == "claude" and not {"command", "args", "env", "headers", "auth"} & set(st)
-    with pytest.raises(HubError):
-        c.claude_entry()
-    for bad in ({"command": "npx"}, {"headers": {"Authorization": "x"}}, {"env": {"A": "b"}}, {"args": ["x"]},
-                {"auth": {"type": "oauth"}}):
-        with pytest.raises(ValueError):
-            McpServerConfig(name="x", source="claude", transport="http", **bad)
+    assert not hasattr(c, "claude_entry")  # hub không bao giờ dựng entry mcp.json cho MCP bên thứ ba (v0.2.32)
+    for legacy in ({"command": "npx"}, {"headers": {"Authorization": "x"}}, {"env": {"A": "b"}}, {"args": ["x"]},
+                   {"auth": {"type": "oauth"}}, {"source": "manual"}, {"source": "claude-import"}):
+        st = McpServerConfig(name="x", transport="http", **legacy).stored()  # dòng kiểu cũ đọc được — trường kiểu hub bị bỏ
+        assert st["source"] == "claude" and not {"command", "args", "env", "headers", "auth"} & set(st)
     assert McpServerConfig(name="gh", source="claude").transport == "stdio"  # stdio không cần command
-    assert McpServerConfig(name="h", source="hub", command="x").source == "manual"  # "hub" = nguồn hub (giá trị cũ)
-    with pytest.raises(ValueError):
-        McpServerConfig(name="h", source="weird", command="x")
 
 
 def test_read_servers_names_transport_host_only(tmp_path):
@@ -146,7 +142,13 @@ def _acct(d) -> tuple[str, str, Path]:
 
 async def _setup_agent(d, servers=("jira", "local1"), agent="w1", trust="trusted"):
     if "local1" in servers and d.hub.mcp.get_row("local1") is None:
-        d.hub.mcp.add({"name": "local1", "transport": "stdio", "command": "local1-mcp", "trust": "trusted"})
+        # server stdio thứ hai của tài khoản đang dùng (trước v0.2.32 là server nguồn hub)
+        _aid, cdir = claude_source.account_config_dir(d.hub, None)
+        p = claude_source.claude_json_path(cdir)
+        data = json.loads(p.read_text(encoding="utf-8"))
+        data["mcpServers"]["local1"] = {"command": "local1-mcp"}
+        p.write_text(json.dumps(data), encoding="utf-8")
+        await rpc(d, "mcp.add", {"config": {"name": "local1", "trust": "trusted"}})
     if "jira" in servers and d.hub.mcp.get_row("jira") is None:
         await rpc(d, "mcp.add", {"config": {"name": "jira", "source": "claude", "trust": trust, "tools": {"require_approval": ["approve*"]}}})
     d.hub.agents.create({"id": agent, "name": agent, "model": "haiku", "tool_policy": {"tools": TOOLS}, "mcp_servers": list(servers)})
@@ -184,9 +186,11 @@ async def test_rpc_list_and_add_checks_account_config(d):
         await rpc(d, "mcp.add", {"config": {"name": "selfhub", "source": "claude"}})
     with pytest.raises(HubError):  # tài khoản B không có cấu hình
         await rpc(d, "mcp.add", {"config": {"name": "gh", "source": "claude"}, "account_id": b})
-    pr = await rpc(d, "mcp.probe", {"name": "jira"})
-    assert pr["ok"] is False and "nguồn claude" in pr["error"]
-    with pytest.raises(HubError):  # không đổi được nguồn
+    with pytest.raises(HubError):  # hub không probe MCP bên thứ ba nữa (v0.2.32)
+        await rpc(d, "mcp.probe", {"name": "jira"})
+    with pytest.raises(HubError):  # cấu hình kiểu hub (không nói nguồn) → hướng dẫn `mcp claude add`
+        await rpc(d, "mcp.add", {"config": {"name": "gh", "command": "evil"}})
+    with pytest.raises(HubError):  # không sửa được cách kết nối
         await rpc(d, "mcp.update", {"name": "jira", "patch": {"source": "hub", "command": "x"}})
 
 
@@ -194,12 +198,12 @@ async def test_run_uses_account_config_without_strict(d):
     a, _, cdir = _acct(d)
     await _setup_agent(d)
     run_id, spec, _ = await _run(d)
-    # mcp.json: server hub + hub-guard, KHÔNG có server nguồn claude
+    # mcp.json: CHỈ server của hub (hub-guard…), KHÔNG có MCP bên thứ ba
     mcp = json.loads(spec.mcp_config_path.read_text(encoding="utf-8"))["mcpServers"]
-    assert "local1" in mcp and "hub-guard" in mcp and "jira" not in mcp
+    assert "hub-guard" in mcp and "jira" not in mcp and "local1" not in mcp
     _no_secret(mcp)
     assert spec.isolation_overrides == {"setting_sources": "user", "strict_mcp_config": False}
-    assert spec.connectors is None and spec.claude_mcp_servers == ["jira"]
+    assert spec.connectors is None and spec.claude_mcp_servers == ["jira", "local1"]
     argv, _ = build_argv(spec, dict(DEFAULTS["runtime"]["claude"]))
     assert "--strict-mcp-config" not in argv and argv[argv.index("--setting-sources") + 1] == "user"
     dis = argv[argv.index("--disallowedTools") + 1:]
@@ -209,7 +213,7 @@ async def test_run_uses_account_config_without_strict(d):
     assert spec.auth_mode == "token" and spec.claude_config_dir == cdir
     env = ClaudeCliRuntime(dict(DEFAULTS["runtime"]["claude"]), secrets=d.hub.secrets)._run_env(spec)
     assert env["CLAUDE_CONFIG_DIR"] == str(cdir) and env[OAUTH_TOKEN_SECRET] == TOK_A
-    assert d.hub.runs.active[run_id].claude_session == a and d.hub.runs.active[run_id].claude_mcp == ("jira",)
+    assert d.hub.runs.active[run_id].claude_session == a and d.hub.runs.active[run_id].claude_mcp == ("jira", "local1")
     # sandbox mạng: host của server nguồn claude
     assert "mcp.jira.example" in d.hub.guard.agent_mcp_domains("w1")
     # adapter: server đã gán chưa đăng nhập → mcp.unavailable; server lạ (ngoài cấu hình) → isolation.violation; server không gán
@@ -295,9 +299,9 @@ async def test_guard_disabled_fails_run(d):
     assert spec is None and "guard.enabled" in row["error"]
 
 
-async def test_hub_only_agent_keeps_strict(d):
+async def test_agent_without_mcp_keeps_strict(d):
     _acct(d)
-    await _setup_agent(d, servers=("local1",))
+    await _setup_agent(d, servers=())
     _, spec, _ = await _run(d)
     assert spec.isolation_overrides is None and spec.claude_mcp_servers is None and spec.claude_config_dir is None
     argv, _ = build_argv(spec, dict(DEFAULTS["runtime"]["claude"]))
@@ -331,7 +335,7 @@ async def test_manager_registry_list_shows_source(d):
     await _setup_agent(d)
     res = await manager_run(d)
     rows = {m["name"]: m for m in await tool(d, res["run_id"], "mcp_registry_list")}
-    assert rows["jira"]["source"] == "claude" and rows["local1"]["source"] == "hub"
+    assert rows["jira"]["source"] == "claude" and rows["local1"]["source"] == "claude"
     _no_secret(rows)
 
 
