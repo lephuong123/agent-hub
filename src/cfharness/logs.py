@@ -437,6 +437,11 @@ def install_crash_handlers(logs_dir: Path | None = None) -> None:
             _FAULT_FILE = None
 
 
+def fault_file() -> Any:
+    """File logs/faults.log đang mở (None khi chưa `install_crash_handlers(logs_dir)` hoặc mở lỗi) — cho loop_watchdog."""
+    return _FAULT_FILE
+
+
 def asyncio_exception_handler(loop: Any, context: dict[str, Any]) -> None:
     """`loop.set_exception_handler`: task chết không ai đợi, callback lỗi… → log ERROR (thay vì chỉ in stderr)."""
     ERROR_COUNTS["asyncio"] += 1
