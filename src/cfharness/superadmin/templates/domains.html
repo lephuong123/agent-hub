@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Tên miền{% endblock %}
+{% block content %}
+<h1>Tên miền</h1>
+<form method="get" class="filters">
+  <select name="zone_id"><option value="">mọi zone</option>{% for z in zones %}<option value="{{ z.id }}" {% if q.zone_id == z.id %}selected{% endif %}>{{ z.name }}</option>{% endfor %}</select>
+  <select name="state"><option value="">mọi trạng thái</option>{% for st in ("healthy", "unhealthy", "unknown", "creating", "revoked") %}<option value="{{ st }}" {% if q.state == st %}selected{% endif %}>{{ state_pill(st)[0] }}</option>{% endfor %}</select>
+  <input name="q" placeholder="tìm hostname" value="{{ q.q or '' }}">
+  <button class="btn">Lọc</button>
+  <a class="btn ghost" href="/domains?format=csv">Xuất CSV</a>
+</form>
+<table class="grid small">
+<thead><tr><th>Hostname</th><th>Zone</th><th>User</th><th>Cổng web</th><th>DNS</th><th>Ingress</th><th>HTTP</th><th>TLS</th><th>Trạng thái</th><th>Kiểm lúc</th><th></th></tr></thead>
+<tbody>
+{% for d in rows %}
+{% set h = d.health %}
+<tr>
+  <td><b>{{ d.fqdn }}</b>{% if d.kind != "hub" %} <span class="pill info">{{ d.kind }}</span>{% endif %}</td><td>{{ d.zone }}</td>
+  <td>{% if d.os_user %}<a href="/users/{{ d.hub_user_id }}">{{ d.os_user }}</a>{% else %}—{% endif %}</td><td>{{ d.web_port or "—" }}</td>
+  <td>{% if "domain_dns" in (h.codes or []) %}<span class="pill bad">lệch</span>{% elif h.dns %}<span class="pill ok">ok</span>{% else %}—{% endif %}</td>
+  <td>{% if "domain_tunnel" in (h.codes or []) %}<span class="pill bad">lệch</span>{% elif h.ingress %}<span class="pill ok">ok</span>{% else %}—{% endif %}</td>
+  <td>{{ h.http if h.http is not none else "—" }}</td>
+  <td>{% if h.cert_days is not none %}{{ h.cert_days }} ngày{% else %}—{% endif %}</td>
+  <td>{{ pill(d.state) }}</td><td>{{ d.checked_at | ago }}</td>
+  <td class="actions">
+    {{ op_form("domain.check_now", "Kiểm", {"id": d.id}, next="/domains") }}
+    {% if can(sess, "domain") and d.state != "revoked" and d.kind == "hub" %}
+      <details class="inline"><summary class="btn">Đổi tên</summary>
+        {{ form_open("domain.rename", "Đổi tên " ~ d.fqdn, cls="inline") }}<input type="hidden" name="p.id" value="{{ d.id }}"><input name="p.sub" placeholder="tên mới" required><button class="btn">Đổi</button></form>
+      </details>
+      {{ op_form("domain.revoke", "Thu hồi", {"id": d.id}, confirm="Thu hồi " ~ d.fqdn ~ "? Hub vẫn chạy cục bộ nhưng không truy cập được từ ngoài.", cls="danger") }}
+    {% endif %}
+  </td>
+</tr>
+{% else %}<tr><td colspan="11" class="muted">Chưa có tên miền.</td></tr>
+{% endfor %}
+</tbody></table>
+
+{% if issues %}
+<section class="card"><h2>Lệch cần xử lý</h2><ul>
+{% for i in issues %}
+<li>{% if i.kind == "orphan_ingress" %}Ingress mồ côi: <b>{{ i.host }}</b> → {{ i.service }} (không có hub nào trong SAC)
+{% elif i.kind == "hub_without_domain" %}Hub không có tên miền: <a href="/users/{{ i.user_id }}">{{ i.user }}</a>
+{% elif i.kind == "port_conflict" %}Trùng cổng {{ i.port }}: {{ i.users | join(", ") }}{% else %}{{ i }}{% endif %}</li>
+{% endfor %}</ul></section>
+{% endif %}
+
+<section class="card"><h2>Zone</h2>
+<table class="grid"><thead><tr><th>Zone</th><th>Cloudflare zone id</th><th>Token</th><th>Tên miền</th><th>Kiểm lúc</th><th></th></tr></thead><tbody>
+{% for z in zones %}
+<tr><td>{{ z.name }}</td><td><code>{{ z.cf_zone_id or "—" }}</code></td><td>{{ pill(z.token_state) }}</td><td>{{ z.domains }}</td><td>{{ z.checked_at | ago }}</td>
+<td>{% if can(sess, "domain") %}{{ op_form("zone.verify", "Kiểm", {"id": z.id}) }}{% if not z.domains %}{{ op_form("zone.remove", "Bỏ", {"id": z.id}, confirm="Bỏ zone " ~ z.name ~ " khỏi SAC?") }}{% endif %}{% endif %}</td></tr>
+{% endfor %}
+</tbody></table>
+{% if can(sess, "domain") %}
+{{ form_open("zone.add", "Khai zone", cls="row") }}<input name="p.name" placeholder="vd trungtamdhs.com" required><button class="btn primary">Khai zone</button></form>
+{% endif %}
+</section>
+{% endblock %}

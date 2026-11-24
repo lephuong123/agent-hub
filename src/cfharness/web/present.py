@@ -298,8 +298,9 @@ def _md_parser() -> Any:
     return m
 
 
-def md(text: str | None) -> str:
-    """Markdown → HTML AN TOÀN (xem khối chú thích trên). LRU theo băm nội dung. Lỗi thư viện → `<pre>` escape."""
+def md(text: str | None, *, cache: bool = True) -> str:
+    """Markdown → HTML AN TOÀN (xem khối chú thích trên). LRU theo băm nội dung. Lỗi thư viện → `<pre>` escape.
+    `cache=False`: không đọc/ghi LRU — cho bản nháp đang chạy chữ (mỗi lần một nội dung khác, chỉ đẩy bản đã xong ra khỏi cache)."""
     global _MD
     from markupsafe import escape
 
@@ -307,8 +308,8 @@ def md(text: str | None) -> str:
     cut = len(text) > MD_MAX
     if cut:
         text = text[:MD_MAX]
-    key = hashlib.blake2b(text.encode("utf-8", "surrogatepass"), digest_size=16).digest()
-    hit = _MD_CACHE.get(key)
+    key = hashlib.blake2b(text.encode("utf-8", "surrogatepass"), digest_size=16).digest() if cache else b""
+    hit = _MD_CACHE.get(key) if cache else None
     if hit is not None:
         _MD_CACHE.move_to_end(key)
         return hit
@@ -320,6 +321,8 @@ def md(text: str | None) -> str:
         out = f"<pre>{escape(text)}</pre>"
     if cut:
         out += '<p class="tx-cut">… (nội dung quá dài — đã cắt)</p>'
+    if not cache:
+        return out
     _MD_CACHE[key] = out
     if len(_MD_CACHE) > MD_CACHE:
         _MD_CACHE.popitem(last=False)
@@ -1097,7 +1100,7 @@ def mgr_action_item(ev: dict[str, Any]) -> dict[str, Any]:
     ok = p.get("ok", True) is not False and not p.get("error")
     return {"kind": "action", "tool": short_tool(tool) if tool else "", "summary": str(p.get("summary") or tool or "hành động"),
             "target": tgt, "run_id": ev.get("run_id"), "ts": ev.get("ts"), "audit_id": p.get("audit_id"), "ok": ok,
-            "error": str(p.get("error") or "") or None}
+            "error": str(p.get("error") or "") or None, "conversation_id": p.get("conversation_id") or None}
 
 
 def mgr_message(m: dict[str, Any]) -> dict[str, Any] | None:
@@ -1116,7 +1119,7 @@ def mgr_message(m: dict[str, Any]) -> dict[str, Any] | None:
         return None
     text = str(text or "")
     cut = kind == "manager" and (bool(m.get("truncated")) or len(text) >= MGR_TEXT_MAX)
-    return {"kind": kind, "text": text, "ts": m.get("ts") or m.get("created_at"), "run_id": m.get("run_id"),
+    return {"kind": kind, "text": text, "ts": m.get("ts") or m.get("created_at"), "run_id": m.get("run_id"), "id": m.get("id"),
             "notify": role == "notify" or bool(m.get("notify")), "tick": role == "tick",
             "cut": cut_note("Tin", len(text), m.get("run_id")) if cut else ""}
 

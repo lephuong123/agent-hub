@@ -70,6 +70,7 @@ EVENT_LEVELS: dict[str, str] = {
     "hub.estop": "summary",
     # quản trị máy (admin_control.py): cờ ESTOP admin bật/gỡ — {on, scope all|user, reason_code (enum), since}; user không gỡ được
     "hub.admin_estop": "summary",
+    "team.inbox_new": "summary",
     # quản trị máy (admin_watch.py, chỉ hub của admin): cảnh báo theo user/hub — {user, hub_id, code (enum ALERT_CODES), state on|resolved}
     "admin.alert": "summary",
     "hub.started": "summary",
@@ -83,7 +84,7 @@ EVENT_LEVELS: dict[str, str] = {
     "auth.cleared": "summary",  # cờ chặn đăng nhập được gỡ (người: doctor/auth.reset; tự động: kiểm lại thấy đã đăng nhập)
     "account.claudeai_login": "summary",  # đăng nhập/đăng xuất phiên claude.ai (connector) của user OS chạy hub — chỉ {logged_in}
     "connector.unavailable": "summary",  # connector claude.ai người cho phép mà run không nạp / chưa kết nối (claude_adapter)
-    "mcp.unavailable": "summary",  # MCP nguồn claude gán cho agent mà run không nạp / chưa kết nối, vd needs-auth (claude_adapter)
+    "mcp.unavailable": "summary",  # MCP nguồn claude gán cho agent mà run không nạp / chưa kết nối, vd needs-auth (claude_adapter); nguồn hub OAuth kiểu cũ: status needs_migration (runs.py, v0.2.28)
     "connector.auth_fallback": "summary",  # run có connector nhưng user OS chưa `claude /login` → vẫn dùng token setup-token (runs)
     "auth.transient": "summary",  # run báo "Not logged in" nhưng kiểm lại `claude auth status` vẫn đăng nhập → KHÔNG chặn
     "hook.event": "debug",
@@ -159,10 +160,23 @@ EVENT_LEVELS: dict[str, str] = {
     "task.reassigned": "summary",  # đổi người làm task chưa chạy (giữ trong task gốc) — tasks.reassign
     "task.circuit_open": "summary",
     "task.requeue_exhausted": "summary",  # cost-guardrails: quá trần requeue run interrupted → task blocked
+    # workspace-parallel D: task con tách vào worktree riêng (payload {root_id, branch, path, base, reason}), ghép vào nhánh tích hợp
+    # ({root_id, branch, into, commit, how, needs_lockfile_refresh, merge_task_id?}), xung đột → task merge ({root_id, branch, into, files, merge_task_id})
+    "task.isolated": "summary",
+    "task.integrated": "summary",
+    "task.integration_conflict": "summary",
     "run.protocol_violation": "summary",
     "run.reverted": "summary",
     "workspace.checkpoint": "debug",
     "workspace.diff": "summary",
+    # workspace-parallel A: khoá repo — payload {key, session_id, run_id, reason}
+    "workspace.lock_acquired": "debug",
+    "workspace.lock_released": "summary",
+    "workspace.lock_blocked": "summary",
+    # workspace-parallel E (guard.repo_lock: files): lease theo file — payload {key (repo), path, reason, tool, session_id, holder_*}
+    "workspace.lease_denied": "summary",
+    "workspace.lease_acquired": "debug",
+    "workspace.lease_released": "debug",
     "ratelimit.throttle": "summary",
     "ratelimit.gate": "summary",  # cổng dispatcher: open=false (hạn mức rejected tới `until`) / open=true (đã reset)
     "agent.cloned": "summary",
@@ -200,7 +214,8 @@ EVENT_LEVELS: dict[str, str] = {
     "curation.rolled_back": "summary",  # người hoàn tác cả lượt curation
     # M7 MGR-CORE — điều phối viên (manager/): hành động ghi, trả lời hội thoại, nhịp, chỉ định
     "manager.action": "summary",  # mọi thao tác ghi của manager (tool, target, summary, audit_id, ok, error?)
-    "manager.reply": "summary",  # trả lời/ thông báo của manager tới kênh người (conversation_id, run_id, text, kind)
+    "manager.reply": "summary",  # trả lời/ thông báo của manager tới kênh người (conversation_id, run_id, text, kind, message_id?)
+    "manager.message": "summary",  # tin NGƯỜI vừa lưu vào hội thoại điều phối viên (conversation_id, run_id, message_id, role=user, text, channel)
     "manager.tick": "summary",  # nhịp heartbeat: started|skipped (reason, events)
     "manager.designated": "summary",  # người chỉ định/huỷ chỉ định manager (agent_id, previous)
     "workstream.updated": "summary",  # luồng việc (manager/workstreams.py): created|updated|state|closed|reopened|deleted|conversation (workstream_id, key, title, by)

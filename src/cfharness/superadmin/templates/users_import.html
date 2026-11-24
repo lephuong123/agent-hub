@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Nhập user có sẵn{% endblock %}
+{% block content %}
+<h1>Nhập user có sẵn</h1>
+<p class="muted">Quét máy: thành viên nhóm <code>cfharness-users</code>, plist LaunchDaemon, thư mục trạng thái, hostname trong ingress tunnel. Nhập chỉ ghi vào SAC — không chạm hub.</p>
+<table class="grid"><thead><tr><th>User</th><th>Nhóm users</th><th>LaunchDaemon</th><th>File trạng thái</th><th>Cổng web</th><th>Tên miền</th><th>Nhập</th></tr></thead><tbody>
+{% for c in cands %}
+<tr><td><b>{{ c.os_user }}</b></td><td>{{ "có" if c.member else "không" }}</td><td>{{ "có" if c.plist else "không" }}</td><td>{{ "có" if c.status_file else "không" }}</td>
+<td>{{ c.web_port or "—" }}</td><td class="small">{{ c.hostnames | join(", ") or "—" }}</td>
+<td>
+  {{ form_open("user.import", "Nhập " ~ c.os_user, next="/users", cls="inline") }}
+    <input type="hidden" name="p.os_user" value="{{ c.os_user }}">
+    <input name="p.full_name" placeholder="họ tên">
+    <input name="p.email" type="email" placeholder="email">
+    <select name="p.group_id"><option value="">(không nhóm)</option>{% for g in groups %}<option value="{{ g.id }}">{{ g.name }}</option>{% endfor %}</select>
+    <button class="btn primary">Nhập</button>
+  </form>
+</td></tr>
+{% else %}<tr><td colspan="7" class="muted">Không còn user nào chưa nhập.</td></tr>
+{% endfor %}
+</tbody></table>
+{% endblock %}

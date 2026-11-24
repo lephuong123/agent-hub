@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Nhóm{% endblock %}
+{% block content %}
+<h1>Nhóm quản trị</h1>
+<table class="grid"><thead><tr><th>Tên</th><th>Mô tả</th><th>Thành viên</th><th>Mã</th><th></th></tr></thead><tbody>
+{% for g in rows %}
+<tr><td>{{ g.name }}</td><td>{{ g.description }}</td><td>{{ g.members }}</td><td><code>{{ g.id }}</code></td>
+<td>{% if can(sess, "user_lifecycle") and not g.members %}{{ op_form("group.delete", "Xoá", {"id": g.id}, confirm="Xoá nhóm " ~ g.name ~ "?") }}{% endif %}</td></tr>
+{% endfor %}
+</tbody></table>
+{% if can(sess, "user_lifecycle") %}
+<section class="card"><h2>Tạo nhóm</h2>
+{{ form_open("group.create", "Tạo nhóm", cls="grid-form") }}
+  <label>Tên <input name="p.name" required></label>
+  <label>Mô tả <input name="p.description"></label>
+  <button class="btn primary">Tạo</button>
+</form></section>
+{% endif %}
+{% endblock %}

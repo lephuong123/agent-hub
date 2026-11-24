@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Team{% endblock %}
+{% block content %}
+<h1>Team</h1>
+<table class="grid"><thead><tr><th>Team</th><th>Mục tiêu</th><th>Thành viên</th><th>Việc mở</th><th>Thời gian</th></tr></thead><tbody>
+{% for t in rows %}
+<tr><td><a href="/teams/{{ t.id }}"><b>{{ t.name }}</b></a> <span class="muted small">{{ t.slug }}</span></td><td class="small">{{ t.goal }}</td>
+<td>{{ t.members }}</td><td>{{ t.open_tasks }}</td><td class="small">{{ t.starts_on or "" }}{% if t.ends_on %} → {{ t.ends_on }}{% endif %}</td></tr>
+{% else %}<tr><td colspan="5" class="muted">Chưa có team.</td></tr>{% endfor %}
+</tbody></table>
+{% if can(sess, "team_admin") %}
+<section class="card"><h2>Tạo team</h2>
+{{ form_open("team.upsert", "Tạo team", cls="grid-form") }}
+  <label>Mã team (slug) <input name="p.slug" pattern="[a-z0-9][a-z0-9-]{0,39}" required placeholder="vd du-an-a"></label>
+  <label>Tên <input name="p.name" required></label>
+  <label>Mục tiêu <input name="p.goal"></label>
+  <label>Trưởng team <select name="p.lead_user_id"><option value="">(chọn sau)</option>{% for u in users if u.state == "active" %}<option value="{{ u.id }}">{{ u.os_user }} — {{ u.full_name }}</option>{% endfor %}</select></label>
+  <label>Bắt đầu <input type="date" name="p.starts_on"></label><label>Kết thúc <input type="date" name="p.ends_on"></label>
+  <label>Mô tả <textarea name="p.description" rows="2"></textarea></label>
+  <button class="btn primary">Tạo</button>
+</form></section>
+{% endif %}
+{% endblock %}

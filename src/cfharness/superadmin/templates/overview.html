@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Tổng quan{% endblock %}
+{% block content %}
+<h1>Tổng quan</h1>
+<div id="ov" data-refresh="/api/overview" data-every="5">
+{% if ov %}
+<div class="tiles">
+  <div class="tile"><span>Người dùng hoạt động</span><b data-k="users.active">{{ ov.users.active }}</b><small>{{ ov.users.total }} tổng · {{ ov.users.suspended }} tạm khoá</small></div>
+  <div class="tile"><span>Hub đang chạy</span><b data-k="hubs.up">{{ ov.hubs.up }}</b><small>{{ ov.hubs.down }} dừng/quá hạn</small></div>
+  <div class="tile"><span>Run đang chạy</span><b data-k="runs.running">{{ ov.runs.running }}</b><small>{{ ov.runs.queued }} chờ</small></div>
+  <div class="tile"><span>Duyệt đang chờ</span><b data-k="approvals">{{ ov.approvals }}</b></div>
+  <div class="tile"><span>Chi phí hôm nay</span><b data-k="cost_today">{{ ov.cost_today | money }}</b><small>tháng {{ ov.cost_month | money }}</small></div>
+  <div class="tile {% if ov.alerts %}bad{% endif %}"><span>Cảnh báo mở</span><b data-k="alerts">{{ ov.alerts }}</b></div>
+  <div class="tile {% if ov.domains_bad %}bad{% endif %}"><span>Tên miền lỗi</span><b data-k="domains_bad">{{ ov.domains_bad }}</b></div>
+  <div class="tile {% if ov.estop %}bad{% endif %}"><span>ESTOP</span><b>{{ "BẬT" if ov.estop else "tắt" }}</b></div>
+</div>
+{% else %}
+<p class="muted">Chưa có số liệu — admind chưa thu thập hoặc chưa nhập user (Người dùng → Nhập user có sẵn).</p>
+{% endif %}
+</div>
+{% endblock %}

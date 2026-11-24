@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Chờ duyệt{% endblock %}
+{% block content %}
+<h1>Yêu cầu four-eyes</h1>
+<table class="grid"><thead><tr><th>Lúc</th><th>Thao tác</th><th>Đối tượng</th><th>Người yêu cầu</th><th>Lý do</th><th>Trạng thái</th><th>Chạy lúc</th><th></th></tr></thead><tbody>
+{% for r in rows %}
+<tr><td>{{ r.created_at | ts }}</td><td><code>{{ r.op }}</code></td><td>{{ r.target or "" }}</td><td>{{ r.requested_by }}</td><td>{{ r.reason }}</td>
+<td>{{ pill(r.state) }}</td><td>{{ r.run_after | ts }}</td>
+<td class="actions">
+  {% if r.state == "pending" and r.requested_by != sess.account.id %}
+    {{ op_form("approval.decide", "Duyệt", {"id": r.id, "approve:bool": "true"}, confirm="Duyệt và cho chạy " ~ r.op ~ "?", cls="primary") }}
+    {{ op_form("approval.decide", "Từ chối", {"id": r.id, "approve:bool": "false"}) }}
+  {% endif %}
+  {% if r.state in ("pending", "approved") %}{{ op_form("approval.cancel", "Huỷ", {"id": r.id}) }}{% endif %}
+</td></tr>
+{% else %}<tr><td colspan="8" class="muted">Không có yêu cầu.</td></tr>
+{% endfor %}
+</tbody></table>
+{% endblock %}

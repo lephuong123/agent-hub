@@ -211,6 +211,9 @@ def build_argv(spec: RunSpec,claude_cfg: dict[str, Any], cli_version: str | None
             raise ArgvError("bypassPermissions bị từ chối: agent phải khai báo rõ tool_policy.allow_bypass=true (NFR-15)")
         if spec.workspace_kind not in ("scratch", "worktree"):
             raise ArgvError("bypassPermissions bị từ chối: chỉ cho phép trên workspace scratch/worktree, không trên repo thật (NFR-15)")
+        if spec.workspace_kind == "worktree" and spec.cwd_main_checkout:
+            raise ArgvError("bypassPermissions bị từ chối: workspace worktree nhưng cwd là checkout chính của repo "
+                            "(claude --worktree vẫn ghi được repo chính) — dùng worktree do hub tạo (task `worktree`) (NFR-15)")
     if pm:
         argv += ["--permission-mode", pm]
     if tp.get("permission_prompts"):
@@ -348,7 +351,8 @@ LOOPBACK_NO_PROXY = ("127.0.0.1", "localhost", "::1")
 def with_loopback_no_proxy(env: dict[str, str]) -> dict[str, str]:
     """Có HTTP(S)_PROXY/ALL_PROXY trong env → thêm 127.0.0.1/localhost/::1 vào NO_PROXY + no_proxy (giữ giá trị sẵn có).
     Đã kiểm thật (claude 2.1.326, docs/dev-notes/mcp-oauth.md §8.1): không có NO_PROXY, client MCP của claude gửi request tới
-    proxy OAuth loopback của hub QUA proxy ngoài (http thường → lộ route id + khoá trong rõ cho proxy, và MCP hỏng 502)."""
+    proxy OAuth loopback của hub QUA proxy ngoài (http thường → lộ route id + khoá trong rõ cho proxy, và MCP hỏng 502). Proxy đó đã gỡ
+    (v0.2.28) nhưng vẫn giữ: MCP server http chạy trên máy này (127.0.0.1/localhost) cũng phải đi thẳng."""
     if not any(env.get(k) for k in PROXY_VARS):
         return env
     for var in ("NO_PROXY", "no_proxy"):
@@ -622,11 +626,42 @@ class ClaudeCliRuntime(AgentRuntime):
         if handle.adapter.replay_count == replay_count and handle.internal.get("steer_pending"):
             handle.internal["steer_pending"] = 0
             self._close_stdin(handle)
+            self._arm_exit_grace(handle)
+
+    # ------------------------------------------------------------------ CLI không thoát sau `result`
+    def _arm_exit_grace(self, handle: RunHandle) -> None:
+        """Đã có `result` và stdin đã đóng: đặt hạn `exit_grace_s` cho CLI thoát. CLI còn task nền (vd Bash bị chuyển nền vì
+        treo) thì không thoát → trước đây run giữ tới max_runtime_s rồi thành timed_out dù đã trả lời xong."""
+        try:
+            grace = float(self.cfg.get("exit_grace_s") or 0)
+        except (TypeError, ValueError):
+            grace = 0.0
+        if grace <= 0 or handle.internal.get("exit_grace_timer") is not None:
+            return
+        handle.internal["exit_grace_timer"] = asyncio.get_running_loop().call_later(grace, self._check_exit, handle, grace)
+
+    def _check_exit(self, handle: RunHandle, grace: float) -> None:
+        handle.internal.pop("exit_grace_timer", None)
+        proc = handle.internal.get("proc")
+        if proc is None or proc.returncode is not None or handle.stop_requested:
+            return
+        loop = asyncio.get_running_loop()
+        idle = loop.time() - float(handle.internal.get("last_line_at") or 0.0)
+        if idle < grace:  # CLI vẫn đang phát (vd task nền xong → lượt mới): chờ tới khi im lặng đủ `grace`
+            handle.internal["exit_grace_timer"] = loop.call_later(grace - idle, self._check_exit, handle, grace)
+            return
+        log.warning("run %s: CLI không thoát %.0f s sau result (còn task nền?) — dừng tiến trình, giữ kết quả theo result",
+                    handle.run_id, idle)
+        handle.internal["exit_grace_stopped"] = True
+        # task nền riêng (KHÔNG trong control_tasks — events() huỷ chúng khi kết thúc, có thể cắt ngang bước dọn hậu duệ)
+        track(loop.create_task(self.stop(handle, grace_s=5.0), name=f"run-exit-grace:{handle.run_id}"))
 
     async def events(self, handle: RunHandle) -> AsyncIterator[HubEvent]:
         proc: asyncio.subprocess.Process = handle.internal["proc"]
         raw = RawLog(handle.spec.raw_log_path)
         assert proc.stdout is not None
+        loop = asyncio.get_running_loop()
+        handle.internal["last_line_at"] = loop.time()
         try:
             while True:
                 try:
@@ -636,6 +671,7 @@ class ClaudeCliRuntime(AgentRuntime):
                     continue
                 if not line:
                     break
+                handle.internal["last_line_at"] = loop.time()
                 raw.write(line)
                 if b'"control_request"' in line:
                     self._on_control_request(handle, line)
@@ -652,6 +688,7 @@ class ClaudeCliRuntime(AgentRuntime):
                     # M0: một lượt mỗi tiến trình — đóng stdin sau `result` để CLI thoát
                     # (M2: trừ khi còn tin steer chưa được phát lại — xem `send`)
                     self._close_stdin(handle)
+                    self._arm_exit_grace(handle)
                 elif handle.adapter.result_count > before and handle.internal.get("steer_pending"):
                     # phòng hờ: CLI không phát lại tin steer trong `steer_ack_grace_s` → đóng stdin như M0
                     asyncio.get_running_loop().call_later(
@@ -659,6 +696,9 @@ class ClaudeCliRuntime(AgentRuntime):
                     )
             handle.exit_code = await proc.wait()
         finally:
+            timer = handle.internal.pop("exit_grace_timer", None)
+            if timer is not None:
+                timer.cancel()
             for t in list(handle.internal.get("control_tasks") or ()):
                 t.cancel()
             JOBS.finished(handle.run_id)

@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Quản trị viên{% endblock %}
+{% block content %}
+<h1>Quản trị viên</h1>
+<table class="grid">
+<thead><tr><th>Họ tên</th><th>Email</th><th>Vai trò</th><th>Phạm vi</th><th>Trạng thái</th><th>Đăng nhập cuối</th><th></th></tr></thead>
+<tbody>
+{% for a in rows %}
+<tr>
+  <td>{{ a.name }}</td><td>{{ a.email }}</td><td>{{ role_vi.get(a.role, a.role) }}</td>
+  <td class="small">{% for k, v in a.scope.items() if v %}{{ k }}: {{ v | join(", ") }}<br>{% endfor %}</td>
+  <td>{{ pill(a.state) }}</td><td>{{ a.last_login_at | ago }}{% if a.last_login_ip %} · {{ a.last_login_ip }}{% endif %}</td>
+  <td class="actions">
+    {% if a.id != sess.account.id %}
+      {% if a.state == "locked" %}{{ op_form("admin.unlock", "Mở khoá", {"id": a.id}) }}{% else %}{{ op_form("admin.lock", "Khoá", {"id": a.id}, confirm="Khoá tài khoản " ~ a.email ~ "?") }}{% endif %}
+      {{ op_form("admin.reset_totp", "Đặt lại TOTP", {"id": a.id}, confirm="Đặt lại mật khẩu + TOTP của " ~ a.email ~ "?") }}
+      <details class="inline"><summary class="btn">Vai trò</summary>
+        {{ form_open("admin.set_role", "Đổi vai trò", cls="inline") }}
+          <input type="hidden" name="p.id" value="{{ a.id }}">
+          <select name="p.role">{% for r in ROLES %}<option value="{{ r }}" {% if r == a.role %}selected{% endif %}>{{ role_vi[r] }}</option>{% endfor %}</select>
+          <input name="p.reason" placeholder="lý do">
+          <button class="btn">Đổi</button>
+        </form>
+      </details>
+      {{ op_form("admin.delete", "Xoá", {"id": a.id}, confirm="Xoá tài khoản " ~ a.email ~ "? (cần Super Admin khác duyệt)", cls="danger") }}
+    {% else %}<span class="muted">bạn</span>{% endif %}
+  </td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+
+<section class="card">
+<h2>Mời quản trị viên</h2>
+{{ form_open("admin.create", "Mời quản trị viên", cls="grid-form") }}
+  <label>Email <input name="p.email" type="email" required></label>
+  <label>Họ tên <input name="p.name" required></label>
+  <label>Vai trò <select name="p.role"><option value="operator">Operator</option><option value="auditor">Auditor</option><option value="team_lead">Team Lead</option></select></label>
+  <label>Phạm vi nhóm (mỗi dòng một id) <textarea name="p.scope.groups:list" rows="2"></textarea></label>
+  <label>Phạm vi zone <textarea name="p.scope.zones:list" rows="2" placeholder="trungtamdhs.com"></textarea></label>
+  <label>Team (Team Lead bắt buộc) <textarea name="p.scope.teams:list" rows="2"></textarea></label>
+  <button class="btn primary">Mời</button>
+</form>
+<p class="muted small">Super Admin mới: mời với vai trò khác rồi “Đổi vai trò” (cần Super Admin thứ hai duyệt).</p>
+</section>
+{% endblock %}

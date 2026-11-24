@@ -500,7 +500,7 @@ async def office_chat(request: Request) -> Response:
     msgs = [m for m in (P.mgr_message(x) for x in raw if isinstance(x, dict)) if m]
     acts = await _actions(request, aid)
     conv_qs = [q for q in await questions(request, "all", agent_id=aid) if q.get("conversation_id") == cid and q.get("status") != "cancelled"]
-    body.update({"conversation_id": cid, "messages": chat_messages(_timeline(msgs, acts, conv_qs))})
+    body.update({"conversation_id": cid, "messages": chat_messages(_timeline(msgs, acts, conv_qs, cid))})
     return JSONResponse(body, headers=NO_STORE)
 
 
@@ -548,7 +548,7 @@ def chat_frames(conv: str | None = None) -> Callable[[dict[str, Any]], list[dict
 async def sse_office_chat(request: Request) -> Response:
     from .manager import mgr_state
 
-    st = await mgr_state(request)
+    st = await mgr_state(request, with_row=False)
     if not st.get("agent_id"):
         raise HTTPException(404, "Chưa có điều phối viên")
     q = request.query_params

@@ -59,7 +59,6 @@ class McpRegistry:
         self.publish = publish or (lambda ev: None)
         self.agents_using = agents_using or (lambda name: [])
         self.writable = writable
-        self.oauth: Any = None  # OAuthManager (daemon) — gắn trong wiring.attach; registry chỉ đọc thì None
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -105,16 +104,13 @@ class McpRegistry:
         return row
 
     def _add_oauth(self, row: dict[str, Any]) -> dict[str, Any]:
-        """`oauth_status` (not_connected|connected|expired|error) + `oauth` (hạn, scope, issuer…) — KHÔNG BAO GIỜ có token."""
-        from .oauth import is_oauth, status_of
+        """Dòng OAuth kiểu cũ (nguồn hub, đã gỡ từ v0.2.28 — `legacy_oauth.py`) → `oauth_status = needs_migration` +
+        `migrate_cmd`. Không còn trạng thái token (hub không giữ OAuth nữa)."""
+        from .legacy_oauth import STATUS, migrate_cmd, needs_migration
 
-        if is_oauth(row.get("config")):
-            try:
-                st = status_of(self.secrets, self.config_of(row))
-            except Exception as e:  # noqa: BLE001 — cấu hình hỏng không được làm hỏng mcp.list
-                st = {"status": "error", "error": f"{type(e).__name__}"}
-            row["oauth_status"], row["oauth"] = st["status"], st
-            row["oauth_expires_at"] = st.get("expires_at")
+        if needs_migration(row.get("config") or {}):
+            row["oauth_status"] = STATUS
+            row["migrate_cmd"] = migrate_cmd(row["name"])
         return row
 
     def with_oauth(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -168,15 +164,25 @@ class McpRegistry:
             self.secrets.set(n, v)
         return McpServerConfig(**d), sorted(ex.secrets)
 
+    @staticmethod
+    def _refuse_legacy_oauth(cfg: McpServerConfig) -> None:
+        from .legacy_oauth import ADD_REFUSED, needs_migration
+
+        if needs_migration(cfg):
+            raise HubError(ADD_REFUSED, data={"oauth": "removed"})
+
     def _emit(self, op: str, name: str, extra: dict[str, Any] | None = None) -> None:
         try:
             self.publish(make_event("mcp.changed", None, {"op": op, "name": name, **(extra or {})}))
         except Exception:  # pragma: no cover
             log.exception("không phát được mcp.changed")
 
-    def add(self, data: dict[str, Any]) -> dict[str, Any]:
+    def add(self, data: dict[str, Any], *, allow_legacy_oauth: bool = False) -> dict[str, Any]:
+        """`allow_legacy_oauth` CHỈ cho test dựng dòng OAuth kiểu cũ (hub cũ còn sót) — đường thường từ chối (`legacy_oauth.ADD_REFUSED`)."""
         self._check_writable()
         cfg, warnings = self._validate(data)
+        if not allow_legacy_oauth:
+            self._refuse_legacy_oauth(cfg)
         existing = self.get_row(cfg.name, include_deleted=True)
         if existing is not None:
             hint = " (đang xoá mềm — dùng `cfharness mcp restore`)" if existing.get("deleted_at") else ""
@@ -232,16 +238,9 @@ class McpRegistry:
             else:
                 cur[k] = v
         cfg, warnings = self._validate({"name": name, **cur})
+        if "auth" in patch:  # sửa dòng OAuth kiểu cũ (mô tả, trust…) vẫn được; THÊM/đổi auth OAuth nguồn hub thì không
+            self._refuse_legacy_oauth(cfg)
         cfg, moved = self._extract_literal_secrets(cfg)
-        if cfg.url != row["config"].get("url"):
-            from .oauth import load_record, save_record
-
-            rec = load_record(self.secrets, name)
-            if rec and rec.get("tokens"):
-                # token OAuth gắn với `resource` (URL cũ) — không bao giờ gửi sang URL mới
-                rec["tokens"], rec["error"] = None, {"message": "URL server đã đổi — kết nối lại"}
-                save_record(self.secrets, name, rec)
-                warnings.append("URL đổi → đã bỏ token OAuth cũ, cần kết nối lại")
         with _tx(self.conn):
             self.conn.execute(
                 "UPDATE mcp_servers SET transport=?, config=?, trust=?, tools_include=?, tools_exclude=?, updated_at=? WHERE name=?",
@@ -325,11 +324,13 @@ class McpRegistry:
 
     # ------------------------------------------------------------------ probe
     def runtime_entry(self, cfg: McpServerConfig) -> dict[str, Any]:
-        """Entry đã thay secret + `Authorization: Bearer` cho server OAuth (chưa kết nối/hết hạn → HubError). CHỈ trong bộ nhớ / file
-        runtime 0600 — không bao giờ trả qua RPC, ghi DB/log."""
-        from .oauth import inject_bearer
+        """Entry đã thay secret. CHỈ trong bộ nhớ / file runtime 0600 — không bao giờ trả qua RPC, ghi DB/log.
+        Dòng OAuth kiểu cũ (nguồn hub, đã gỡ từ v0.2.28) → HubError `oauth=needs_migration` (fail-closed: run không chạy thiếu server)."""
+        from .legacy_oauth import needs_migration, needs_migration_error
 
-        return inject_bearer(self.secrets.resolve(cfg.claude_entry()), self.secrets, cfg)
+        if needs_migration(cfg):
+            raise needs_migration_error(cfg.name)
+        return self.secrets.resolve(cfg.claude_entry())
 
     def resolved_entry(self, name: str) -> dict[str, Any]:
         """Entry `mcpServers` đã thay secret (chỉ dùng trong bộ nhớ / file runtime 0600)."""
@@ -345,18 +346,19 @@ class McpRegistry:
             return {"ok": False, "tools": {}, "elapsed_ms": 0, "name": name, "trust": cfg.trust, "warnings": [],
                     "error": "server nguồn claude: hub không probe (cấu hình + token do claude giữ)",
                     "hint": f"gắn nhãn tool bằng `cfharness mcp annotate {name} <tool> --read-only|--destructive`"}
-        if cfg.auth is not None and self.oauth is not None:
-            await self.oauth.ensure_fresh_for([name])  # token sắp hết hạn → làm mới trước khi probe
         try:
             resolved = self.runtime_entry(cfg)
         except HubError as e:
+            from .legacy_oauth import migrate_cmd
+
             oauth_err = isinstance(e.data, dict) and e.data.get("oauth")
             res = {"ok": False, "tools": {}, "elapsed_ms": 0, "error": e.message,
-                   "hint": (f"kết nối OAuth trước (nút Kết nối trên web / `cfharness mcp login {name}`)" if oauth_err else "đặt secret còn thiếu rồi probe lại")}
+                   "hint": (migrate_cmd(name) if oauth_err else "đặt secret còn thiếu rồi probe lại")}
         else:
             res = await probe_server(cfg, resolved, timeout_s=timeout_s)
             if not res["ok"] and cfg.auth is None and cfg.transport != "stdio" and "401" in str(res.get("error") or ""):
-                res["hint"] = f"server đòi xác thực (401) — nếu là OAuth: `cfharness mcp edit {name} --oauth` rồi `cfharness mcp login {name}`"
+                res["hint"] = (f"server đòi xác thực (401) — nếu là OAuth: gỡ (`cfharness mcp rm {name}`) rồi thêm vào claude theo tài khoản "
+                               f"`cfharness mcp claude add {name} --account <id> --url <url>` + `cfharness mcp claude login {name} --account <id>`")
         now = _now()
         old = row.get("annotations_cache") or {}
         if res["ok"]:

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from ..bus import LEVEL_RANK
 from ..errors import HubError, NotFound
 from ..events import HubEvent, make_event
-from ..mcp_client.oauth import rpc_methods as _oauth_methods
+from ..mcp_client.legacy_oauth import rpc_stubs as _oauth_stubs
 from ..redact import redact
 
 if TYPE_CHECKING:
@@ -38,7 +38,7 @@ MUTATING = frozenset(
         "run.start", "run.stop", "run.resume", "run.continue",
         "estop.set", "config.set", "auth.reset", "hub.shutdown",
         "mcp.add", "mcp.update", "mcp.remove", "mcp.restore", "mcp.import", "mcp.assign", "mcp.run", "mcp.agent_create",
-        # OAuth MCP (mcp_client/oauth.py) — audit KHÔNG mang code/state (xem wrap_with_audit)
+        # OAuth MCP của hub — ĐÃ GỠ từ v0.2.28; stub trả lỗi hướng dẫn chuyển sang claude (legacy_oauth.rpc_stubs) — audit KHÔNG mang code/state
         "mcp.oauth_start", "mcp.oauth_callback", "mcp.oauth_disconnect", "mcp.oauth_refresh",
         # MCP do claude quản lý theo tài khoản (plan-mcp-claude-native PR3) — audit chỉ danh sách trắng (CLAUDE_AUDIT_KEYS)
         "mcp.claude_add", "mcp.claude_remove", "mcp.claude_login_start", "mcp.claude_login_finish", "mcp.claude_login_cancel",
@@ -53,6 +53,7 @@ MUTATING = frozenset(
         "team.create", "team.update", "team.member_set", "team.member_rm", "team.archive", "team.restore", "team.estop",
         "task.create", "task.comment", "task.block", "task.unblock", "task.retry", "task.archive", "task.reassign", "task.link",
         "run.revert", "agent.clone", "agent.export", "agent.import", "mcp.team_run",
+        "workspace.unlock",  # workspace-parallel A (B3): người gỡ khoá repo
         # M4-A (learning/rpc.py)
         "learn.signal_add", "learn.refine", "learn.review_cancel", "learn.propose", "learn.retry", "learn.rollback", "learn.policy_set", "knowledge.pin",
         # M5-A
@@ -303,10 +304,10 @@ class IntegrationRpc:
             cfg = self.hub.mcp.config_of(r)
             servers[name] = cfg.claude_entry()
             missing += [f"{name}:${{{s}}}" for s in self.hub.secrets.missing(servers[name])]
-            if cfg.auth is not None:
-                st = self.hub.mcp.show(name).get("oauth_status")
-                if st != "connected":
-                    missing.append(f"{name}:oauth={st}")
+            from ..mcp_client.legacy_oauth import STATUS, needs_migration
+
+            if needs_migration(cfg):
+                missing.append(f"{name}:oauth={STATUS}")
         return {"mcpServers": servers, "tool_rules": agent_mcp_tool_rules(row), "problems": missing}
 
     async def mcp_catalog(self, p: dict[str, Any]) -> dict[str, Any]:
@@ -642,7 +643,7 @@ class IntegrationRpc:
             "audit.activity": self.audit_activity,
             "feedback.record": self.feedback_record,
             "feedback.list": self.feedback_list,
-            **_oauth_methods(h),
+            **_oauth_stubs(),  # mcp.oauth_* đã gỡ (v0.2.28) — một bản trả lỗi hướng dẫn `mcp migrate-to-claude`
         }
 
 

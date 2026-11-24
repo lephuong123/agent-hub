@@ -65,7 +65,7 @@ class RunContextFilter(logging.Filter):
 _PROC = "daemon"  # tên tiến trình ghi log (daemon|web|mcp|cli|helper) — đặt trong setup_logging
 CONTEXT_FIELDS = ("run_id", "agent_id", "task_id", "team_id", "req_id", "parent_req_id", "channel")
 # L2: trường METADATA của access log RPC (`cfharness.rpc`, daemon._access_log) — chỉ id/tên/số, không bao giờ params/kết quả
-EXTRA_FIELDS = ("event", "method", "via", "duration_ms", "outcome", "code", "reason")
+EXTRA_FIELDS = ("event", "method", "via", "duration_ms", "outcome", "code", "reason", "route", "status", "rpc_ms", "rpc_n", "render_ms")
 
 
 class JsonFormatter(logging.Formatter):
@@ -435,6 +435,11 @@ def install_crash_handlers(logs_dir: Path | None = None) -> None:
                 faulthandler.register(signal.SIGUSR1, file=_FAULT_FILE, all_threads=True, chain=False)
         except (OSError, ValueError, RuntimeError):  # best-effort: không có faults.log vẫn chạy
             _FAULT_FILE = None
+
+
+def fault_file() -> Any:
+    """File logs/faults.log đang mở (None khi chưa `install_crash_handlers(logs_dir)` hoặc mở lỗi) — cho loop_watchdog."""
+    return _FAULT_FILE
 
 
 def asyncio_exception_handler(loop: Any, context: dict[str, Any]) -> None:

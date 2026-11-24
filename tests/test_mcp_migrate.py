@@ -1,7 +1,8 @@
 """Chuyển MCP OAuth của hub sang MCP do claude quản lý theo tài khoản — `mcp.migrate_to_claude` (plan-mcp-claude-native PR4 giai đoạn A).
 
 Không gọi claude thật: `tests/fake_claude_mcp.py` (trạng thái theo CLAUDE_CONFIG_DIR, login qua PTY thật; url chứa "oauth" cần đăng nhập).
-Dòng registry OAuth của hub + bản ghi token `MCP_OAUTH_*` dựng trực tiếp (như tests/test_mcp_oauth.py) — không mạng.
+Dòng registry OAuth KIỂU CŨ của hub (`add(..., allow_legacy_oauth=True)` — OAuth của hub đã gỡ từ v0.2.28) + bản ghi `MCP_OAUTH_*` dựng
+trực tiếp — không mạng. Thêm: run của agent gán server kiểu cũ bị từ chối trước spawn, stub `mcp.oauth_*`, `mcp login|logout`.
 Kiểm: đường đẹp (giữ trust/tools/annotations/agent gán, mở lượt đăng nhập), token hub chỉ bị xoá SAU khi đăng nhập claude thành công
 (hoặc `drop_hub_token` rõ), hoàn tác khi chuyển nguồn lỗi, từ chối server không OAuth / client_secret / header + machine / run đang chạy,
 audit không mang secret, CLI, web, doctor, hub import.
@@ -20,10 +21,10 @@ from cfharness import auth, hub_doctor
 from cfharness import hub_transfer as T
 from cfharness.errors import HubError
 from cfharness.mcp_client import claude_source, migrate
-from cfharness.mcp_client.oauth import load_record, save_record, secret_name
+from cfharness.mcp_client.legacy_oauth import load_record, secret_name
 from cfharness.mcp_server.rpc import MUTATING
 from cfharness.web.app import ACTIONS  # noqa: F401 — nạp app (đăng ký thao tác)
-from m7_fake import MgrScript, close, make_daemon, rpc
+from m7_fake import MgrScript, close, make_daemon, rpc, wait_status
 from test_web_accounts import env, get, post  # noqa: F401 — fixture + helper web
 
 FAKE = str(Path(__file__).with_name("fake_claude_mcp.py"))
@@ -56,12 +57,16 @@ def _acct(d) -> str:
     return d.hub.accounts.add_token("A", TOK_A)["id"]
 
 
+def _save_record(d, name: str, rec: dict) -> None:
+    d.hub.secrets.set(secret_name(name), json.dumps(rec))
+
+
 def _hub_oauth(d, name: str = "notes", **extra) -> None:
     cfg = {"name": name, "transport": "http", "url": URL, "auth": {"type": "oauth"}, "trust": "trusted", "description": "ghi chú",
            "tools": {"exclude": ["delete_*"], "require_approval": ["write_*"], "annotations": {"browse_*": {"readOnlyHint": True}}}}
     cfg.update(extra)
-    d.hub.mcp.add(cfg)
-    save_record(d.hub.secrets, name, {"tokens": {"access_token": ACCESS, "refresh_token": REFRESH, "expires_at": 9999999999}})
+    d.hub.mcp.add(cfg, allow_legacy_oauth=True)
+    _save_record(d, name, {"tokens": {"access_token": ACCESS, "refresh_token": REFRESH, "expires_at": 9999999999}})
     d.hub.store.conn.execute("UPDATE mcp_servers SET annotations_cache=? WHERE name=?",
                              (json.dumps({"browse_page": {"readOnlyHint": True}}), name))
     d.hub.agents.create({"id": "w1", "name": "W1", "model": "haiku"})
@@ -136,8 +141,8 @@ async def test_token_kept_until_status_connected_and_keep_flag(d):
     a = _acct(d)
     _hub_oauth(d)
     _hub_oauth_extra = {"name": "keep", "transport": "http", "url": "https://oauth.keep.example/mcp", "auth": {"type": "oauth"}}
-    d.hub.mcp.add(_hub_oauth_extra)
-    save_record(d.hub.secrets, "keep", {"tokens": {"access_token": ACCESS + "K"}})
+    d.hub.mcp.add(_hub_oauth_extra, allow_legacy_oauth=True)
+    _save_record(d, "keep", {"tokens": {"access_token": ACCESS + "K"}})
     res = await rpc(d, "mcp.migrate_to_claude", {"name": "notes", "account_id": a, "login": False})
     assert res["login"] is None and not any("đăng nhập sau" in w for w in res["warnings"])  # login=False: không mở, không cảnh báo
     st = await rpc(d, "mcp.claude_status", {"account_id": a, "refresh": True})  # vẫn cần đăng nhập → token giữ
@@ -159,7 +164,8 @@ async def test_token_kept_until_status_connected_and_keep_flag(d):
 async def test_static_client_id_and_headers(d):
     a = _acct(d)
     d.hub.mcp.add({"name": "cid", "transport": "http", "url": URL, "headers": {"X-Api": HDR}, "auth": {"type": "oauth", "client_id": "my-app",
-                                                                                                         "scopes": ["read"]}})
+                                                                                                         "scopes": ["read"]}},
+                  allow_legacy_oauth=True)
     assert "${" in d.hub.mcp.get_row("cid")["config"]["headers"]["X-Api"]  # registry chỉ giữ tham chiếu
     with pytest.raises(HubError, match="tài khoản token"):  # header + machine → từ chối (luật PR3)
         await rpc(d, "mcp.migrate_to_claude", {"name": "cid", "account_id": "machine"})
@@ -176,7 +182,7 @@ async def test_refuse_non_oauth_client_secret_and_busy(d):
     a = _acct(d)
     d.hub.mcp.add({"name": "stat", "transport": "http", "url": "https://s.example/mcp", "headers": {"Authorization": HDR}})
     d.hub.mcp.add({"name": "loc", "command": "npx", "args": ["-y", "srv"]})
-    d.hub.mcp.add({"name": "sec", "transport": "http", "url": URL, "auth": {"type": "oauth", "client_id": "c", "client_secret_ref": "pw-123456"}})
+    d.hub.mcp.add({"name": "sec", "transport": "http", "url": URL, "auth": {"type": "oauth", "client_id": "c", "client_secret_ref": "pw-123456"}}, allow_legacy_oauth=True)
     for n, pat in (("stat", "secret tĩnh"), ("loc", "stdio"), ("sec", "client_secret"), ("nope", "không có MCP")):
         with pytest.raises(HubError, match=pat):
             await rpc(d, "mcp.migrate_to_claude", {"name": n, "account_id": a})
@@ -216,13 +222,13 @@ async def test_rollback_when_flip_fails(d, monkeypatch):
     assert load_record(d.hub.secrets, "notes") and not (d.hub.store.state_get(migrate.STATE_KEY) or {})
     # claude add lỗi → không có gì đổi (tên chứa "fail" làm claude giả báo lỗi + in url/header)
     monkeypatch.undo()
-    d.hub.mcp.add({"name": "will-fail", "transport": "http", "url": URL, "auth": {"type": "oauth"}})
+    d.hub.mcp.add({"name": "will-fail", "transport": "http", "url": URL, "auth": {"type": "oauth"}}, allow_legacy_oauth=True)
     with pytest.raises(HubError) as ei:
         await rpc(d, "mcp.migrate_to_claude", {"name": "will-fail", "account_id": a})
     assert URL not in ei.value.message and d.hub.mcp.get_row("will-fail")["config"]["source"] != "claude"
     # đã có sẵn trong cấu hình claude, cùng host → dùng lại (không thêm, không gỡ khi hoàn tác)
     await rpc(d, "mcp.claude_add", {"account_id": a, "name": "pre", "url": "https://oauth.notes.example/other", "register": False})
-    d.hub.mcp.add({"name": "pre", "transport": "http", "url": URL, "auth": {"type": "oauth"}})
+    d.hub.mcp.add({"name": "pre", "transport": "http", "url": URL, "auth": {"type": "oauth"}}, allow_legacy_oauth=True)
     res = await rpc(d, "mcp.migrate_to_claude", {"name": "pre", "account_id": a, "login": False})
     assert res["added"] is False and d.hub.mcp.get_row("pre")["config"]["source"] == "claude"
 
@@ -253,11 +259,12 @@ async def test_manager_caller_denied(d):
 
 
 # ---------------------------------------------------------------- doctor + hub import
-async def test_doctor_recommends_migration(d):
+async def test_doctor_requires_migration(d):
     _hub_oauth(d)
     ck = {c["id"]: c for c in hub_doctor.run(d.hub.paths)["checks"]}
-    assert ck["mcp_hub_oauth"]["level"] == "warning" and "nên chuyển sang claude" in ck["mcp_hub_oauth"]["detail"]
+    assert ck["mcp_hub_oauth"]["level"] == "error" and "cần chuyển sang claude" in ck["mcp_hub_oauth"]["detail"]
     assert "cfharness mcp migrate-to-claude notes --account <id>" in ck["mcp_hub_oauth"]["fix"]
+    assert ck["mcp:notes"]["level"] == "error" and ck["mcp:notes"]["fix"] == "cfharness mcp migrate-to-claude notes --account <id>"
     a = _acct(d)
     await rpc(d, "mcp.migrate_to_claude", {"name": "notes", "account_id": a, "login": False})
     ck = {c["id"]: c for c in hub_doctor.run(d.hub.paths)["checks"]}
@@ -371,14 +378,61 @@ def test_cli_migrate_flow(monkeypatch, capsys):
     assert mcli.cmd_mcp(ctx) == 0 and ctx.calls == [("mcp.migrate_to_claude", {"name": "notes", "drop_hub_token": True})]
 
 
-def test_cli_oauth_login_prints_deprecation(monkeypatch, capsys):
+def test_cli_oauth_login_logout_removed(monkeypatch, capsys):
     from cfharness.cli import build_parser
-    from cfharness.mcp_client import oauth_cli
+    from cfharness.mcp_server import cli as mcli
 
-    a = build_parser().parse_args(["mcp", "logout", "notes"])
-    ctx = _Ctx(a, {"mcp.oauth_disconnect": {"name": "notes", "disconnected": True}})
-    assert oauth_cli.cmd_logout(ctx) == 0
-    assert "migrate-to-claude" in capsys.readouterr().err
+    for act in ("login", "logout"):
+        a = build_parser().parse_args(["mcp", act, "notes", "--no-browser"] if act == "login" else ["mcp", act, "notes"])
+        ctx = _Ctx(a, {})
+        assert mcli.cmd_mcp(ctx) == 1 and ctx.calls == []  # không gọi daemon
+        err = capsys.readouterr().err
+        assert "đã gỡ từ v0.2.28" in err and "cfharness mcp migrate-to-claude notes --account <id>" in err
+
+
+# ---------------------------------------------------------------- giai đoạn B: OAuth của hub đã gỡ (v0.2.28)
+async def test_run_with_legacy_oauth_server_fails_closed_before_spawn(d):
+    _hub_oauth(d)
+    res = await rpc(d, "run.start", {"agent": "w1", "prompt": "hi"})
+    run_id = res.get("run_id") or res.get("id")
+    row = await wait_status(d, run_id, ("failed",))
+    assert "MCP 'notes'" in (row.get("error") or row.get("summary") or "") or "notes" in json.dumps(row, default=str)
+    assert "cfharness mcp migrate-to-claude notes --account <id>" in json.dumps(row, default=str, ensure_ascii=False)
+    assert not [sp for sp in d.script.specs if sp.run_id == run_id]  # không spawn
+    assert not (Path(d.hub.agents.get_row("w1")["home_path"]) / "runtime" / run_id).exists()  # không ghi mcp.json
+    evs = [json.loads(r[0]) for r in d.hub.store.conn.execute("SELECT payload FROM events WHERE type='mcp.unavailable'")]
+    assert {"server": "notes", "status": "needs_migration", "source": "hub"} in evs
+    with pytest.raises(HubError, match="migrate-to-claude notes"):  # đường build mcp.json (takeover…) cũng fail-closed
+        d.hub.mcp.resolved_entry("notes")
+    pr = await rpc(d, "mcp.probe", {"name": "notes"})
+    assert not pr["ok"] and pr["hint"] == "cfharness mcp migrate-to-claude notes --account <id>"
+    # agent không gán server cũ → chạy bình thường; server stdio/header tĩnh không đổi
+    d.hub.mcp.add({"name": "stat", "transport": "http", "url": "https://s.example/mcp", "headers": {"Authorization": HDR}})
+    assert d.hub.mcp.resolved_entry("stat")["headers"]["Authorization"] == HDR
+
+
+async def test_oauth_rpc_stubs_add_refused_and_start_warning(d, caplog):
+    for m in ("mcp.oauth_start", "mcp.oauth_callback", "mcp.oauth_status", "mcp.oauth_disconnect", "mcp.oauth_refresh"):
+        with pytest.raises(HubError, match="migrate-to-claude notes --account <id>") as ei:
+            await rpc(d, m, {"name": "notes", "redirect_uri": "http://x", "state": "s", "code": "CODE-SECRET-123"})
+        assert "v0.2.28" in ei.value.message
+    for m in ("mcp.oauth_start", "mcp.oauth_callback", "mcp.oauth_disconnect", "mcp.oauth_refresh"):
+        assert m in auth.HUMAN_ONLY
+    _no_secret(_audit(d))
+    for cfg in ({"name": "n1", "transport": "http", "url": URL, "auth": {"type": "oauth"}},):
+        with pytest.raises(HubError, match="mcp claude add"):
+            await rpc(d, "mcp.add", {"config": cfg, "probe": False})
+    assert d.hub.mcp.get_row("n1") is None
+    _hub_oauth(d)
+    row = d.hub.mcp.with_oauth(d.hub.mcp.list())[0]
+    assert row["oauth_status"] == "needs_migration" and row["migrate_cmd"] == "cfharness mcp migrate-to-claude notes --account <id>"
+    d.hub.mcp.update("notes", {"description": "vẫn sửa được dòng cũ"})  # không đụng auth → được
+    from cfharness.mcp_client.legacy_oauth import warn_on_start
+
+    with caplog.at_level("WARNING", logger="cfharness.mcp_client"):
+        assert warn_on_start(d.hub) == ["notes"]
+    assert sum("cần chuyển sang claude" in r.getMessage() and "notes" in r.getMessage() for r in caplog.records) == 1
+    assert d.hub.mcp.get_row("notes") is not None and load_record(d.hub.secrets, "notes")  # không tự xoá gì
 
 
 # ---------------------------------------------------------------- web
@@ -388,7 +442,9 @@ def _web_stub(env, oauth: bool = True):
     if oauth:
         cfg["auth"] = {"type": "oauth"}
     env.d.methods["mcp.show"] = lambda p: {"name": "notes", "transport": "http", "trust": "untrusted", "config": cfg, "agents": [],
-                                           "oauth_status": "connected" if oauth else None, "oauth": {"client": "dcr"}, "annotations_cache": {}}
+                                           "oauth_status": "needs_migration" if oauth else None, "annotations_cache": {}}
+    env.d.methods["mcp.list"] = lambda p: [{"name": "notes", "transport": "http", "trust": "untrusted", "config": cfg, "agents": [],
+                                            "oauth_status": "needs_migration" if oauth else None, "source": "manual"}]
 
     def mig(p):
         calls.append(("mcp.migrate_to_claude", dict(p)))
@@ -402,7 +458,10 @@ async def test_web_migrate_button_confirm_and_redirect(env):
     env.acc.tokens["a_11111111"] = TOK_A
     calls = _web_stub(env)
     html = (await get(env, "/mcp/notes")).text
-    assert 'id="oauth-deprecated"' in html and 'action="/do/mcp_migrate_claude"' in html and "Chuyển sang claude" in html
+    assert 'id="migrate"' in html and 'action="/do/mcp_migrate_claude"' in html and "Chuyển sang claude" in html
+    assert "mcp_connect" not in html and "mcp_disconnect" not in html  # nút Kết nối/Ngắt của OAuth hub đã gỡ
+    lst = (await get(env, "/mcp")).text
+    assert "cần chuyển sang claude" in lst and 'href="/mcp/notes#migrate"' in lst
     r = await post(env, "/do/mcp_migrate_claude", {"name": "notes", "account_id": "machine", "next": "/mcp/notes"})
     assert not calls and "Chuyển MCP notes sang claude" in r.text  # cần xác nhận
     r = await post(env, "/do/mcp_migrate_claude", {"name": "notes", "account_id": "machine", "confirm": "yes", "next": "/mcp/notes"})
@@ -417,4 +476,4 @@ async def test_web_migrate_button_confirm_and_redirect(env):
 async def test_web_no_button_for_non_oauth(env):
     _web_stub(env, oauth=False)
     html = (await get(env, "/mcp/notes")).text
-    assert "mcp_migrate_claude" not in html
+    assert "mcp_migrate_claude" not in html and "cần chuyển sang claude" not in (await get(env, "/mcp")).text

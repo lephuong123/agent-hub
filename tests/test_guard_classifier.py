@@ -209,6 +209,9 @@ DESTRUCTIVE_BASH = [
     "cfharness hub unfreeze --yes",  # gỡ đóng băng chuyển nhà (hub_freeze.py) — chỉ người
     "cfharness hub doctor --json",  # lộ đường dẫn/tên secret của người
     "cfharness hub export --for move -y",
+    "cfharness superadmin call auth.me",  # Super Admin Console (admind/cli.py) — chỉ người
+    "cfharness admind status",
+    "uv run cfharness superadmin init --email a@b.c --name A",
     "sqlite3 ~/.cfharness/hub.db 'select 1'".replace("~/.cfharness", "HUBHOME"),
     "rm -rf HUBHOME/ledger",
     "sed -i 's/rm/xx/' HUBHOME/policy/catalog.yaml",
@@ -843,3 +846,67 @@ def test_lane_other_tree_sandbox_deny(env):
     sb2 = confine_only_sandbox(conf, hub, sock, {}, cwd=own)
     assert str(other) in sb2["filesystem"]["denyRead"] and str(other) in sb2["filesystem"]["denyWrite"]
     assert str(own) not in sb2["filesystem"]["denyRead"]
+
+
+# ============================================================================ workspace-parallel E: Bash cần độc quyền repo (guard/leases.repo_ops)
+LEASE_EXCLUSIVE = [
+    "git checkout main", "git checkout -b feat/x", "git switch dev", "git reset --hard HEAD~1", "git reset", "git reset --soft HEAD^",
+    "git rebase main", "git merge feat", "git pull", "git pull --rebase origin main", "git stash", "git stash pop", "git stash push -m x",
+    "git cherry-pick abc123", "git revert HEAD", "git clean -fd", "git am < p.patch",
+    "git add -A", "git add .", "git add --all", "git add -u", "git add src/*.py", "git commit -a -m wip", "git commit -am wip",
+    "git commit --all -m x", "git commit --amend --no-edit", "git checkout .", "git restore .", "git checkout -- .",
+    "cd sub && git checkout main", "git -C /tmp/r pull", "sudo -u x git pull", "FOO=1 git stash", "bash -c 'git checkout main'",
+    "echo $(git stash)", "npm install", "npm i lodash", "npm ci", "npm uninstall x", "npm update", "npm audit fix",
+    "yarn", "yarn add react", "yarn install --frozen-lockfile", "pnpm install", "pnpm add -D vite", "bun install",
+    "pip install -r requirements.txt", "pip3 uninstall x", "python -m pip install x", "uv add httpx", "uv sync", "uv pip install x",
+    "poetry lock", "echo '{}' > package-lock.json", "cp /tmp/x yarn.lock", "sed -i s/a/b/ pnpm-lock.yaml",
+]
+LEASE_SAFE = [
+    "git status", "git diff", "git log --oneline -5", "git show HEAD", "git stash list", "git stash show -p", "git fetch origin",
+    "git branch -a", "git push origin feat", "ls -la", "npm test", "npm run build", "npm install -g typescript", "yarn global add x",
+    "yarn test", "pnpm run lint", "pip list", "pip download x", "uv run pytest", "cat package-lock.json", "python -m pytest",
+    "grep -r foo .", "echo hi > out.txt",
+]
+
+
+@pytest.mark.parametrize("cmd", LEASE_EXCLUSIVE)
+def test_lease_bash_needs_exclusive(cmd, tmp_path):
+    from cfharness.guard.leases import repo_ops
+
+    ops = repo_ops(cmd, str(tmp_path))
+    assert ops and any(o.kind == "exclusive" for o in ops), (cmd, ops)
+
+
+@pytest.mark.parametrize("cmd", LEASE_SAFE)
+def test_lease_bash_safe(cmd, tmp_path):
+    from cfharness.guard.leases import repo_ops
+
+    assert repo_ops(cmd, str(tmp_path)) == [], cmd
+
+
+@pytest.mark.parametrize("cmd,paths", [
+    ("git add a.py b/c.py", ("a.py", "b/c.py")),
+    ("git commit -m 'fix' -- a.py", ("a.py",)),
+    ("git commit -m msg a.py", ("a.py",)),
+    ("git commit -F msg.txt src/x.py", ("src/x.py",)),
+    ("git checkout -- a.py", ("a.py",)),
+    ("git restore --staged a.py", ("a.py",)),
+    ("git restore -s HEAD~1 a.py", ("a.py",)),
+    ("git reset -- a.py", ("a.py",)),
+    ("git rm old.py", ("old.py",)),
+])
+def test_lease_bash_explicit_paths(cmd, paths, tmp_path):
+    """git add/commit/restore theo đường dẫn → chỉ kiểm các file đó (session giữ lease thì được; session khác giữ thì không)."""
+    from cfharness.guard.leases import repo_ops
+
+    ops = repo_ops(cmd, str(tmp_path))
+    assert [o.kind for o in ops] == ["paths"], (cmd, ops)
+    want = {os.path.normcase(os.path.normpath(str(tmp_path / p))) for p in paths}
+    assert {os.path.normcase(p) for p in ops[0].paths} == want
+
+
+def test_lease_bash_plain_commit_is_index(tmp_path):
+    from cfharness.guard.leases import repo_ops
+
+    assert [o.kind for o in repo_ops("git commit -m 'x'", str(tmp_path))] == ["index"]
+    assert [o.kind for o in repo_ops("git add a.py && git commit -m x", str(tmp_path))] == ["paths", "index"]

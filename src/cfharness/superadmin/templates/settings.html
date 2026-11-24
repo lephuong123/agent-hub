@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Cấu hình{% endblock %}
+{% block content %}
+<h1>Cấu hình hệ thống</h1>
+<table class="grid"><thead><tr><th>Khoá</th><th>Giá trị</th></tr></thead><tbody>
+{% for k, v in cfg.items() if k != "secrets" %}
+<tr><td><code>{{ k }}</code></td>
+<td>
+  {{ form_open("sys.config_set", "Lưu " ~ k, cls="inline") }}
+  <input type="hidden" name="p.key" value="{{ k }}">
+  {% if v is sameas true or v is sameas false %}
+    <select name="p.value:json"><option value="true" {% if v %}selected{% endif %}>bật</option><option value="false" {% if not v %}selected{% endif %}>tắt</option></select>
+    {% if k == "visibility.activity" %}<input name="p.ref" placeholder="số văn bản quy định (bắt buộc khi bật)">{% endif %}
+  {% elif v is number %}<input name="p.value:int" value="{{ v }}" inputmode="numeric">
+  {% elif v is string %}<input name="p.value:keep" value="{{ v }}">
+  {% else %}<input name="p.value:json" value="{{ v | tojson }}">{% endif %}
+  <button class="btn">Lưu</button></form>
+</td></tr>
+{% endfor %}
+</tbody></table>
+<section class="card">
+<h2>Secret</h2>
+<ul>{% for n, has in cfg.secrets.items() %}<li><code>{{ n }}</code>: {{ "đã có" if has else "chưa có" }}</li>{% endfor %}</ul>
+{{ form_open("sys.secret_set", "Lưu secret", cls="grid-form") }}
+  <label>Tên <select name="p.name">{% for n in cfg.secrets %}<option>{{ n }}</option>{% endfor %}</select></label>
+  <label>Giá trị <input type="password" name="p.value" autocomplete="off" required></label>
+  <button class="btn primary">Lưu</button>
+</form>
+{{ form_open("sys.cf_token_rotate", "Xoay token Cloudflare", cls="grid-form", confirm="Xoay token Cloudflare? (cần Super Admin khác duyệt)") }}
+  <label>Token Cloudflare mới <input type="password" name="p.value" autocomplete="off" required></label>
+  <label>Lý do <input name="p.reason"></label>
+  <button class="btn">Xoay token</button>
+</form>
+</section>
+{% endblock %}

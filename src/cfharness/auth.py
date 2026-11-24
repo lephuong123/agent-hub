@@ -76,7 +76,7 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "golden.suggestion_approve", "golden.suggestion_reject", "golden.suggest_scan",  # đề xuất golden: hub đề xuất (vòng nền), người quyết
         # secret + registry MCP (server MCP chạy NGOÀI sandbox → thêm server = thoát sandbox)
         "secret.set", "secret.rm", "mcp.add", "mcp.update", "mcp.remove", "mcp.restore", "mcp.import", "mcp.assign",
-        # OAuth MCP: đăng nhập/làm mới/ngắt = cấp/thu hồi quyền truy cập dịch vụ ngoài thay người (docs/dev-notes/mcp-oauth.md)
+        # OAuth MCP của hub (đã gỡ từ v0.2.28 — stub trả lỗi hướng dẫn một bản; giữ trong HUMAN_ONLY tới khi gỡ hẳn tên)
         "mcp.oauth_start", "mcp.oauth_callback", "mcp.oauth_disconnect", "mcp.oauth_refresh",
         # MCP do claude quản lý trong cấu hình claude của tài khoản (tên/transport/host) — cấu hình của NGƯỜI, chỉ người xem (plan-mcp-claude-native PR2)
         "mcp.claude_servers",
@@ -87,6 +87,7 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "mcp.migrate_to_claude",
         # thao tác phá huỷ workspace / tiếp quản / team
         "run.revert", "run.takeover", "run.takeover_record",
+        "workspace.unlock",  # gỡ khoá repo của run khác = cho hai run ghi chồng (workspace-parallel B3)
         "team.create", "team.update", "team.archive", "team.restore", "team.member_set", "team.member_rm",
         # V2-N1: bề mặt quản trị luồng CLI thêm sau (revert về revision cũ = nâng quyền; purge = xoá vĩnh viễn; archive/pause = DoS)
         "agent.archive", "agent.revert", "agent.pause", "agent.resume", "trash.restore", "trash.purge", "task.archive", "task.reassign",
@@ -118,6 +119,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "logs.levels", "logs.level",
         # L6 (công cụ debug): đọc log hệ thống + dòng thời gian của yêu cầu/run — lộ chi tiết vận hành, đường dẫn, id của mọi agent; chỉ người
         "logs.query", "trace.get",
+        # Đo hiệu năng (perf.py): đọc tổng hợp (route/method + ms) + web đẩy ảnh chụp — agent không giả số liệu, không xem vận hành
+        "perf.stats", "perf.report",
         # L7 (gói chẩn đoán, support_bundle.py): gói gom log + doctor + trạng thái + dòng thời gian run (+ raw transcript khi người chọn) —
         # đọc lộ chi tiết vận hành của mọi agent, ghi file vào exports/; chỉ người (kể cả kế hoạch/danh sách)
         "support.plan", "support.create", "support.list",
@@ -129,6 +132,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "hub.freeze", "hub.unfreeze", "hub.doctor",
         # Dung lượng + dọn thư mục làm việc (housekeeping.py): đọc lộ đường dẫn workspace của mọi agent; dọn = xoá thư mục trên đĩa — chỉ người
         "hub.housekeeping", "hub.cleanup",
+        # Worktree của task (housekeeping.py, luồng B): danh sách lộ repo/nhánh của mọi task; dọn = `git worktree remove` + `git branch -d` — chỉ người
+        "worktree.list", "worktree.clean",
         # Xuất/nhập hub từ web (hub_transfer_web.py, PR6): nhận passphrase, đọc gói tải lên, dừng daemon để nhập đè hub.db, lộ đường
         # dẫn/tên secret — chỉ người (kể cả các method chỉ đọc)
         "hub.transfer_status", "hub.export_start", "hub.export_status", "hub.import_plan", "hub.import_start", "hub.import_status",
@@ -139,6 +144,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "account.claudeai_logout",
         # Tổng quan máy (admin_overview.py): CHỈ ĐỌC nhưng lộ hoạt động của user OS khác trên máy (chi phí, số run) — chỉ người
         "admin.overview",
+        # Hộp thư "Việc được giao" từ Team user của Super Admin Console (team_inbox.py): nhận/từ chối/nộp = quyết định của NGƯỜI (BR-SA-02)
+        "inbox.list", "inbox.accept", "inbox.reject", "inbox.submit",
         # Vào/ra web + thiết bị tin cậy (web_events.py): ghi audit + phát event → Telegram — agent không được giả "đăng nhập"/"thu hồi"
         "web.notify",
         # Ghi audit tuỳ ý (mcp_server/rpc.py audit.record): actor/channel/summary do người gọi tự khai — chỉ web/CLI của người dùng;
@@ -264,7 +271,8 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.backup", "MUTATING_BACKUP"), ("cfharness.logs_rpc", "MUTATING_LOGS"), ("cfharness.support_bundle", "MUTATING_SUPPORT"), ("cfharness.hub_transfer", "MUTATING_TRANSFER"),
                       ("cfharness.hub_freeze", "MUTATING_FREEZE"), ("cfharness.hub_transfer_web", "MUTATING_TRANSFER_WEB"),
                       ("cfharness.admin_rpc", "MUTATING_ADMIN"), ("cfharness.admin_directory", "MUTATING_DIRECTORY"),
-                      ("cfharness.fileview", "MUTATING_FILES"), ("cfharness.filehub.rpc", "MUTATING_FILEHUB"), ("cfharness.accounts.rpc", "MUTATING_ACCOUNTS")):
+                      ("cfharness.fileview", "MUTATING_FILES"), ("cfharness.filehub.rpc", "MUTATING_FILEHUB"), ("cfharness.accounts.rpc", "MUTATING_ACCOUNTS"),
+                      ("cfharness.team_inbox", "MUTATING_INBOX"), ("cfharness.housekeeping", "MUTATING_WORKTREE")):
         try:
             import importlib
 
@@ -442,6 +450,51 @@ def ancestors(pid: int, limit: int = 128) -> list[int]:
             break
         cur = info.ppid
     return out
+
+
+# ---------------------------------------------------------------------------- cache chuỗi tổ tiên (perf)
+# `ancestors()` trên Windows = một snapshot Toolhelp32 + GetProcessTimes từng cấp (20–35 ms) — web gọi RPC HUMAN_ONLY (vd
+# `manager.conversation_read`) mỗi lần chuyển trang. Cache ngắn hạn, khoá (pid, thời điểm khởi động) — VÌ SAO AN TOÀN:
+# - Khoá gồm thời điểm khởi động đọc LẠI ở mỗi lần tra (không tin pid trần): pid bị tái dùng bởi tiến trình khác → thời điểm khởi động
+#   khác → trượt cache. Không đọc được thời điểm khởi động (tiến trình đã thoát/không mở được) → không cache, tính lại.
+# - Chỉ cache CHUỖI pid tổ tiên (sự thật bất biến của tiến trình đó: cha được ghi lúc tạo); mọi quyết định khác của `resolve`
+#   (pid run đang sống, Job Object, session, env CFHARNESS_RUN_ID, token) vẫn tính MỚI mỗi lời gọi. Chuỗi cũ chỉ có thể THỪA pid
+#   (cha đã chết, pid bị tái dùng) — thừa thì chỉ có thể nhận nhầm thành agent (chặt hơn), không bao giờ biến agent thành người.
+# - TTL ngắn (ANCESTOR_TTL_S), số khoá bị chặn (ANCESTOR_MAX), chỉ RAM của daemon.
+ANCESTOR_TTL_S = 5.0
+ANCESTOR_MAX = 256
+_ANCESTOR_CACHE: dict[tuple[int, float], tuple[float, tuple[int, ...]]] = {}
+
+
+def proc_start_time(pid: int) -> float | None:
+    if IS_WINDOWS:
+        return win_start_time(pid)
+    info = proc_info(pid)
+    return info.start if info is not None else None
+
+
+def cached_ancestors(pid: int, *, now: float | None = None, start_of: Any = None, compute: Any = None) -> list[int]:
+    """`ancestors(pid)` có cache theo (pid, thời điểm khởi động) — xem chú thích trên. `start_of`/`compute`: tiêm cho test."""
+    start_of = start_of or proc_start_time
+    compute = compute or ancestors
+    start = start_of(pid)
+    if start is None:
+        return list(compute(pid))
+    key = (pid, start)
+    now = time.monotonic() if now is None else now
+    hit = _ANCESTOR_CACHE.get(key)
+    if hit is not None and now - hit[0] < ANCESTOR_TTL_S:
+        return list(hit[1])
+    chain = list(compute(pid))
+    if start_of(pid) != start:  # tiến trình đổi trong lúc tính (thoát + pid tái dùng) → không lưu
+        return chain
+    if len(_ANCESTOR_CACHE) >= ANCESTOR_MAX:
+        for k in [k for k, v in _ANCESTOR_CACHE.items() if now - v[0] >= ANCESTOR_TTL_S]:
+            del _ANCESTOR_CACHE[k]
+        if len(_ANCESTOR_CACHE) >= ANCESTOR_MAX:
+            _ANCESTOR_CACHE.clear()
+    _ANCESTOR_CACHE[key] = (now, tuple(chain))
+    return chain
 
 
 def proc_environ(pid: int) -> dict[str, str] | None:
@@ -721,7 +774,7 @@ class CallerResolver:
         if pid == os.getpid():
             return c  # client trong chính tiến trình daemon (test in-process) — không phải hậu duệ run
         live = self._run_pids()
-        chain = ancestors(pid)
+        chain = cached_ancestors(pid)  # chỉ chuỗi tổ tiên được cache (pid + thời điểm khởi động); phần dưới luôn tính mới
         for p in chain:
             if p in live:
                 c.run_id, c.agent_id = live[p]

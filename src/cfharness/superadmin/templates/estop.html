@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}ESTOP{% endblock %}
+{% block content %}
+<h1>Dừng khẩn (ESTOP quản trị)</h1>
+<p class="muted">Hub bị ESTOP dừng run đang chạy và không nhận run mới; user không tự gỡ được. User chỉ thấy thông báo chung “Hub đang tạm dừng — liên hệ quản trị”.</p>
+<table class="grid"><thead><tr><th>Phạm vi</th><th>User</th><th>Lý do</th><th>Từ lúc</th><th>Hub đã áp</th><th></th></tr></thead><tbody>
+{% for f in flags %}
+<tr><td>{{ "TOÀN MÁY" if f.scope == "all" else "user" }}</td><td>{{ f.user or "—" }}</td><td>{{ f.reason_code }}</td><td>{{ f.since or "" }}</td>
+<td>{% if f.applied is none %}—{% elif f.applied %}<span class="pill ok">đã áp</span>{% else %}<span class="pill warn">chưa</span>{% endif %}</td>
+<td>{% if can(sess, "estop_off") %}{{ op_form("estop.off", "Gỡ", ({"scope": "all"} if f.scope == "all" else {"scope": "user", "ids:multi": f.user}), confirm="Gỡ ESTOP?") }}{% endif %}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">Không có cờ nào đang bật.</td></tr>
+{% endfor %}
+</tbody></table>
+
+{% if can(sess, "estop_on") %}
+<div class="cols">
+{% if sess.account.role in ("super_admin",) or not sess.account.scope.get("groups") and not sess.account.scope.get("zones") and sess.account.role == "operator" %}
+<section class="card"><h2>Toàn máy</h2>
+{{ form_open("estop.on", "ESTOP toàn máy", confirm="DỪNG KHẨN MỌI HUB trên máy?") }}
+  <input type="hidden" name="p.scope" value="all">
+  <label>Lý do <select name="p.reason_code">{% for r in ("incident", "security", "maintenance", "budget", "policy", "other") %}<option>{{ r }}</option>{% endfor %}</select></label>
+  <button class="btn danger">ESTOP TOÀN MÁY</button>
+</form></section>
+{% endif %}
+{% if users %}
+<section class="card"><h2>Theo user</h2>
+{{ form_open("estop.on", "ESTOP user", confirm="Bật ESTOP cho các user đã chọn?") }}
+  <input type="hidden" name="p.scope" value="user">
+  <select name="p.ids:multi" multiple size="6">{% for u in users if u.state in ("active", "suspended") %}<option value="{{ u.os_user }}">{{ u.os_user }} — {{ u.full_name }}</option>{% endfor %}</select>
+  <label>Lý do <select name="p.reason_code">{% for r in ("maintenance", "security", "budget", "policy", "incident", "other") %}<option>{{ r }}</option>{% endfor %}</select></label>
+  <button class="btn danger">Bật ESTOP</button>
+</form></section>
+{% endif %}
+{% if teams %}
+<section class="card"><h2>Theo team</h2>
+{{ form_open("estop.on", "ESTOP team", confirm="Bật ESTOP cho mọi thành viên của team đã chọn?") }}
+  <input type="hidden" name="p.scope" value="team">
+  <select name="p.ids:multi" multiple size="4">{% for t in teams %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}</select>
+  <label>Lý do <select name="p.reason_code">{% for r in ("maintenance", "security", "budget", "incident", "other") %}<option>{{ r }}</option>{% endfor %}</select></label>
+  <button class="btn danger">Bật ESTOP team</button>
+</form></section>
+{% endif %}
+{% if users and has_op("estop.on_timed") %}
+<section class="card"><h2>Bảo trì có lịch (tự gỡ)</h2>
+{{ form_open("estop.on_timed", "ESTOP có hẹn gỡ", confirm="Bật ESTOP và tự gỡ sau số giờ đã chọn?") }}
+  <input type="hidden" name="p.scope" value="user">
+  <select name="p.ids:multi" multiple size="5">{% for u in users if u.state == "active" %}<option value="{{ u.os_user }}">{{ u.os_user }}</option>{% endfor %}</select>
+  <label>Tự gỡ sau (giờ) <input name="p.hours:float" value="2" inputmode="decimal"></label>
+  <button class="btn danger">Bật + hẹn gỡ</button>
+</form></section>
+{% endif %}
+{% if groups and sess.account.role != "team_lead" %}
+<section class="card"><h2>Theo nhóm</h2>
+{{ form_open("estop.on", "ESTOP nhóm", confirm="Bật ESTOP cho mọi user trong nhóm đã chọn?") }}
+  <input type="hidden" name="p.scope" value="group">
+  <select name="p.ids:multi" multiple size="4">{% for g in groups %}<option value="{{ g.id }}">{{ g.name }}</option>{% endfor %}</select>
+  <label>Lý do <select name="p.reason_code">{% for r in ("maintenance", "security", "budget", "incident", "other") %}<option>{{ r }}</option>{% endfor %}</select></label>
+  <button class="btn danger">Bật ESTOP nhóm</button>
+</form></section>
+{% endif %}
+</div>
+{% endif %}
+{% endblock %}

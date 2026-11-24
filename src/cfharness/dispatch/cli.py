@@ -226,6 +226,50 @@ def cmd_run_revert(ctx: Any) -> int:
     return 0
 
 
+def cmd_workspace(ctx: Any) -> int:
+    a = ctx.args
+    if a.action == "locks":
+        r = ctx.call("workspace.locks", {})
+        try:  # luồng E: khoá chia sẻ + lease theo file (daemon cũ chưa có method → chỉ khoá độc quyền)
+            lz = ctx.call("workspace.leases", {})
+        except Exception:  # best-effort: daemon cũ không có workspace.leases — vẫn in khoá độc quyền
+            lz = None
+        if ctx.json:
+            ctx.out(r if lz is None else {"locks": r, **lz})
+            return 0
+        shared = (lz or {}).get("shared") or {}
+        leases = (lz or {}).get("leases") or []
+        if lz is not None:
+            print(f"chế độ khoá: {lz.get('mode')}")
+        if not r and not shared:
+            print("(không có khoá nào)")
+        for k, h in sorted(r.items()):
+            since = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(h.get("since") or 0)))
+            print(f"{k}  run {h.get('run_id')}  session {str(h.get('session_id') or '')[:8]}  từ {since}")
+        for k, hs in sorted(shared.items()):
+            for sid, h in sorted(hs.items()):
+                since = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(h.get("since") or 0)))
+                print(f"{k}  [chia sẻ]  run {h.get('run_id')}  session {str(sid)[:8]}  từ {since}")
+        if leases:
+            print("lease theo file:")
+            for x in leases:
+                what = f"[độc quyền: {x.get('rel')}]" if not x.get("path") else x.get("rel")
+                print(f"  {x.get('repo_key')}  {what}  agent {x.get('agent_id') or '?'}  run {x.get('run_id')}  "
+                      f"session {str(x.get('session_id') or '')[:8]}")
+        return 0
+    p: dict[str, Any] = {"force": bool(a.force)}
+    if Path(a.path).expanduser().exists():
+        p["path"] = str(Path(a.path).expanduser().resolve())
+    else:
+        p["key"] = a.path  # khoá không phải thư mục đang có (filehub, worktree chưa tạo) — truyền nguyên văn
+    r = ctx.call("workspace.unlock", p)
+    txt = f"đã gỡ khoá {r['key']}" + (f" (run {r['released'].get('run_id')})" if r.get("released") else "")
+    if r.get("forced"):
+        txt += f"\ncảnh báo: run {r.get('running_run_id')} vẫn đang chạy và có thể ghi tiếp"
+    ctx.out(r, txt)
+    return 0
+
+
 def cmd_run_diff(ctx: Any) -> int:
     a = ctx.args
     r = ctx.call("run.diff", {"id": a.id, "patch": a.patch})
@@ -332,7 +376,7 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     c.add_argument("--worktree-branch", help="chạy trong git worktree riêng của --workspace (hub tạo ngay) trên nhánh này — "
                                              "task cùng repo chạy song song")
     c.add_argument("--worktree-base", help="nhánh/commit gốc khi tạo nhánh mới (mặc định HEAD của repo)")
-    c.add_argument("--worktree-path", help="thư mục worktree (mặc định <cha của repo>/_wt/<repo>-<nhánh>)")
+    c.add_argument("--worktree-path", help="thư mục worktree (mặc định <cha của repo>/_wt/<repo>-<nhánh ≤40>-<băm 6>)")
     c.add_argument("--budget", type=float, help="trần USD mỗi run")
     c.add_argument("--model")
     c.add_argument("--max-runtime", type=int, help="giây")
@@ -375,6 +419,14 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     rd.add_argument("id")
     rd.add_argument("--patch", action="store_true")
     rd.set_defaults(fn=cmd_run_diff)
+
+    wsp = sub.add_parser("workspace", help="khoá ghi repo/thư mục (xem, gỡ khoá)", parents=[common])
+    wss = wsp.add_subparsers(dest="action", required=True)
+    wss.add_parser("locks", parents=[common], help="liệt kê khoá đang giữ")
+    ul = wss.add_parser("unlock", parents=[common], help="gỡ khoá của một repo/thư mục (chỉ người)")
+    ul.add_argument("path", help="thư mục/repo (hoặc đúng khoá như `workspace locks` in ra)")
+    ul.add_argument("--force", action="store_true", help="gỡ cả khi session giữ khoá còn run đang chạy (run đó vẫn ghi tiếp được)")
+    wsp.set_defaults(fn=cmd_workspace)
 
     rp = sub.add_parser("report", help="báo cáo insights (FR-OB-06)", parents=[common])
     rp.add_argument("--since", help="7d (mặc định), 24h, 2026-10-01")

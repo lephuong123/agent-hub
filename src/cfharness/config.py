@@ -31,7 +31,6 @@ _FLAGS_2_1_302: list[str] = [
 # Đa instance P1: MCP HTTP mặc định KHÁC cổng web (8765) để hai dịch vụ của cùng hub không va nhau.
 MCP_HTTP_DEFAULT_PORT = 8766
 LEGACY_MCP_HTTP_PORT = 8765  # mặc định cũ — guard vẫn coi URL loopback cổng này là MCP của hub (cài đặt cũ đã đăng ký)
-MCP_OAUTH_CALLBACK_DEFAULT_PORT = 33418  # callback OAuth của CLI (`mcp login`) — cố định để bản đăng ký DCR dùng lại được
 
 DEFAULTS: dict[str, Any] = {
     "hub": {
@@ -94,8 +93,15 @@ DEFAULTS: dict[str, Any] = {
         "python": None,
         # gọi `git` để biết thay đổi chưa commit / nhánh đã push (FR-SG-01 nhóm Git)
         "git_probe": True,
-        # khoá ghi theo thư mục dir: (bản tối thiểu M1; FR-RT-12 đầy đủ ở M3)
+        # khoá ghi theo repo (FR-RT-12): `repo` (true, mặc định) = một session ghi mỗi repo; `files` = nhiều session cùng repo, khoá
+        # theo FILE (lease trong guard.check, Bash đổi trạng thái chung cần độc quyền — guard/leases.py); `off` (false) = không khoá
         "repo_lock": True,
+        # chế độ files: dấu độc quyền cả repo của một lệnh Bash (git checkout/pull, npm install…) tự hết hạn sau ngần này giây nếu
+        # PostToolUse không về (hook quan sát fail-open)
+        "lease_exclusive_ttl_s": 600,
+        # run `waiting_human` giữ khoá repo tối đa ngần này giây (4 giờ) rồi nhả; resume sau đó xin lại khoá + kiểm file bị sửa
+        # (`resume_conflicts`). null = giữ tới khi có người quyết (như cũ)
+        "lock_waiting_ttl_s": 14400,
         # lớp tĩnh --disallowedTools cho mẫu luôn-phá-huỷ (CLI tự chặn nếu hook không chạy)
         "static_disallowed_tools": [
             "Bash(git push --force:*)",
@@ -200,7 +206,7 @@ DEFAULTS: dict[str, Any] = {
             "busy_indicator": "reaction",  # "status" ("đang xử lý…" trong thread, lỗi → ⏳) | "reaction" (chỉ icon ⏳ trên tin người)
             "manager_progress": True,  # P7: tin tiến độ + nút Dừng khi điều phối viên làm việc cho tin Slack (chat/slack/progress.py)
             "manager_progress_edit_s": 3,  # P7: sửa tin tiến độ tối đa 1 lần / khoảng này (gộp event)
-            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
+            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop", "team.inbox_new",
                        "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper", "audit.tamper_detected", "audit.anchored", "audit.alert",
                        "budget.warning", "budget.exceeded",
                        "filehub.changed", "filehub.deleted", "filehub.conflict", "filehub.secret_warning", "filehub.blocked", "filehub.lane.roots"],  # M4-B: digest + nhắc chọn golden task (Q-23)
@@ -220,7 +226,7 @@ DEFAULTS: dict[str, Any] = {
             "allowed_chat_ids": [],  # CHỈ các chat này được nhận thông báo + điều khiển hub
             "allowed_user_ids": [],  # WT-4: from.id được phép (ghi lúc ghép nối); nhóm CHỈ nhận người trong danh sách này
             "allow_groups": False,  # nhóm phải bật rõ ràng; mặc định chỉ chat riêng
-            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
+            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop", "team.inbox_new",
                        "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper", "audit.tamper_detected", "audit.anchored", "audit.alert",
                        "budget.warning", "budget.exceeded",
                        # thư mục chung Không gian số (filehub/): run đổi/xoá tệp, bản xung đột, tệp có thể chứa bí mật, chiều đẩy lên bị chặn
@@ -265,6 +271,17 @@ DEFAULTS: dict[str, Any] = {
         "levels": {},
         "slow_rpc_ms": 2000,  # L2: lời gọi RPC chậm hơn → WARNING `rpc.slow` trong hub.log (0 = tắt)
     },
+    # Đo hiệu năng (perf.py, docs/dev-notes/perf-monitor.md): web đo từng request (route, RPC, render) + header Server-Timing, trình duyệt
+    # gửi beacon (tải trang, htmx, chuyển tab/luồng, SSE, long task); tổng hợp cuộn trong RAM → trang /perf, `cfharness perf`.
+    "perf": {
+        "enabled": True,  # tắt = web không đo/không nhận beacon (daemon vẫn đo RPC — gần như miễn phí)
+        "slow_ms": 1500,  # request web chậm hơn → WARNING `http.slow` trong web.jsonl (0 = tắt)
+        "window_min": 15,  # cửa sổ mặc định của bảng "chậm nhất" (tối đa 60 phút — dữ liệu chỉ ở RAM)
+        "loop_lag_warn_ms": 250,  # event loop daemon bị chặn lâu hơn → WARNING `loop.lag` trong hub.log (0 = tắt; số đo vẫn lên /perf)
+        # event loop daemon đứng LÂU hơn (giây) → thread watchdog dump stack mọi thread vào logs/faults.log NGAY LÚC đang đứng
+        # (loop_watchdog.py; Windows không có SIGUSR1/`daemon dump-stacks`). 0 = tắt
+        "loop_stall_dump_s": 15,
+    },
     "recovery": {
         "auto_resume": True,  # Q-09: daemon restart → dừng-và-resume tự động (trừ waiting_human)
         "pid_start_tolerance_s": 5,
@@ -281,20 +298,8 @@ DEFAULTS: dict[str, Any] = {
         # server MCP nội bộ của hub không ghi audit tool.write (tool điều khiển của guard)
         "audit_ignore_servers": ["hub-guard"],
         "probe_timeout_s": 30,
-        # Proxy loopback chèn token MCP OAuth (mcp_client/oauth_proxy.py, docs/dev-notes/mcp-oauth.md §8.1): mcp.json của run trỏ tới
-        # http://127.0.0.1:<cổng>/r/<id>… + khoá theo run, token làm mới khi chuyển tiếp, không bao giờ vào file runtime. Tắt (`enabled: false`) = đường cũ
-        # (Bearer tĩnh trong mcp.json 0600). Nhánh này ∈ integrity.SECURITY_KEYS.
-        "oauth_proxy": {
-            "enabled": True,  # bật mặc định từ v0.2.17 (đã nghiệm thu với claude thật, mcp-oauth.md §8.1); proxy lỗi → tự về đường cũ
-            "port": 0,  # 0 = OS chọn cổng ngẫu nhiên mỗi lần daemon khởi động (chỉ bind 127.0.0.1)
-            "max_body_mb": 16,  # trần thân request (đệm để gửi lại sau khi làm mới token)
-        },
-    },
-    # Client OAuth của `cfharness mcp login` (mcp_client/oauth_cli.py)
-    "mcp_client": {
-        # cổng listener callback `http://127.0.0.1:<cổng>/callback`; 0 = OS chọn (mỗi lần một cổng → nhà cung cấp phải chấp nhận
-        # redirect loopback cổng bất kỳ, RFC 8252 §7.3; DCR sẽ đăng ký lại). Bận → cổng ngẫu nhiên.
-        "oauth_callback_port": MCP_OAUTH_CALLBACK_DEFAULT_PORT,
+        # `mcp.oauth_proxy.*` + `mcp_client.oauth_callback_port` (OAuth + proxy loopback của hub) đã gỡ từ v0.2.28 — OAuth MCP do claude giữ
+        # theo tài khoản. config.yaml cũ còn các khoá này vẫn đọc bình thường (khoá lạ được bỏ qua).
     },
     "secrets": {
         # `${VAR}` không có trong secret store thì lấy biến môi trường của daemon (tương thích ~/.claude.json)
@@ -568,6 +573,9 @@ DEFAULTS: dict[str, Any] = {
     # MỌI connector tài khoản `claude /login` của user OS đã Connect (Google Drive, Gmail…) — agent ghi bằng tài khoản thật. BẬT mặc
     # định từ v0.2.26 (chủ repo chốt 2026-11-20); chỉ có tác dụng khi user OS có phiên /login. Tắt: `config set connectors.auto false`
     "connectors": {"auto": True},
+    # Khối system prompt do hub chèn (prompt.py). `workspace_rules`: rule chung về workspace/git (worktree hub cấp vs checkout chính) cho
+    # MỌI run có workspace ghi — SOUL là bản sao theo máy nên rule chung phải nằm trong code (docs/dev-notes/workspace-parallel.md §C)
+    "prompt": {"workspace_rules": True},
     # M5-B — FR-OB-07: OpenTelemetry (opt-in, tắt mặc định). Chỉ metadata; không input/output tool MCP, không secret.
     "telemetry": {
         "otel": {
@@ -782,6 +790,17 @@ DEFAULTS: dict[str, Any] = {
         "checkpoint": True,  # FR-RT-12: checkpoint + diff cho run ghi vào workspace dir
         "max_file_bytes": 5_000_000,  # file lớn hơn: chỉ lưu hash (không revert được)
         "max_files": 20_000,
+        # Luồng B (docs/dev-notes/workspace-parallel.md): phụ thuộc node của worktree hub tạo — link (package.json + lockfile giống hệt repo
+        # chính → liên kết node_modules của repo chính), install (agent tự `npm ci`), none (không làm gì)
+        "deps": "link",
+        # Luồng D (docs/dev-notes/workspace-parallel.md §D): tự cô lập task con của task gốc tách việc vào worktree riêng (nhánh
+        # `cfh/<gốc>/<task>` tách từ nhánh tích hợp `cfh/<gốc>/integration`) rồi ghép lại khi xong. never = như cũ (task cùng repo
+        # chờ khoá); auto = khi lead yêu cầu (`isolate`) hoặc repo đang có task mở khác cùng khoá; always = mọi task con ghi trên repo git.
+        # Team ghi đè bằng `policies.isolate`, task bằng `workspace.isolate` (false = không cô lập task đó).
+        "isolate": "auto",
+        # fast_forward: task gốc xong → fast-forward nhánh base ở checkout chính tới nhánh tích hợp, CHỈ khi checkout chính sạch và
+        # đang ở base. Mặc định false: hub để nguyên nhánh tích hợp (không push, không đụng nhánh của người) và báo trong kết quả.
+        "integrate": {"fast_forward": False},
     },
     "bus": {
         "ring_events": 2000,  # FR-OB-01 [ĐỀ XUẤT]
@@ -875,6 +894,10 @@ DEFAULTS: dict[str, Any] = {
             # trần (giây) chờ quyết định cho một `control_request can_use_tool` của CLI (vd SandboxNetworkAccess) — quá → deny.
             # Guard tự giữ ≤ approval.timeout_s; đây chỉ là chốt an toàn để CLI không bao giờ treo vô hạn.
             "control_request_timeout_s": 1800,
+            # sau `result` (stdin đã đóng) mà CLI vẫn không thoát và im lặng quá ngần này giây → hub dừng tiến trình, giữ kết quả
+            # theo `result` (không ghi timed_out). Gặp thật: lệnh Bash bị CLI chuyển sang chạy nền (git fetch treo vì mất mạng)
+            # giữ CLI sống tới hạn max_runtime_s dù đã trả lời xong. 0/null = tắt (chờ như cũ).
+            "exit_grace_s": 60,
             # hardening H-10 (FR-RT-02/15): cờ được phép theo phiên bản CLI. Phiên bản CÓ trong bảng → build_argv ném ArgvError
             # với cờ không có trong danh sách (gồm extra_args). Phiên bản lạ → không kiểm (cảnh báo vàng `cli.version_warning`).
             # Danh sách 2.1.302 lấy từ `claude --help` (bỏ cố ý --dangerously-skip-permissions / --allow-dangerously-skip-permissions).
@@ -1018,6 +1041,11 @@ class HubConfig:
 
 def validate_setting(key: str, value: Any) -> None:
     """Kiểm tối thiểu các khoá quan trọng; khoá lạ vẫn cho ghi (mở rộng sau)."""
+    if key in ("perf.slow_ms", "perf.window_min", "perf.loop_lag_warn_ms", "perf.loop_stall_dump_s"):  # đo hiệu năng (perf.py)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise ValueError(f"{key} phải là số ≥ 0")
+        if key == "perf.window_min" and not 1 <= value <= 60:
+            raise ValueError("perf.window_min phải từ 1 tới 60 (dữ liệu chỉ giữ 60 phút trong RAM)")
     if key == "manager" or key.startswith("manager.capabilities"):
         from .manager.permissions import validate_capabilities
 
@@ -1080,13 +1108,21 @@ def validate_setting(key: str, value: Any) -> None:
         from .fileview import validate_setting as _validate_files
 
         _validate_files(key, value)
+    if key in ("guard", "guard.repo_lock"):  # workspace-parallel E: repo | files | off (true/false cũ vẫn nhận)
+        from .guard.locks import validate_repo_lock
+
+        if key == "guard.repo_lock":
+            validate_repo_lock(value)
+        elif isinstance(value, dict) and "repo_lock" in value:
+            validate_repo_lock(value["repo_lock"])
+    if key == "guard.lease_exclusive_ttl_s" and (isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0):
+        raise ValueError("guard.lease_exclusive_ttl_s phải là số giây > 0")
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")
-    if key in ("mcp_server.http_port", "mcp_client.oauth_callback_port"):
-        lo = 0 if key == "mcp_client.oauth_callback_port" else 1
-        if not isinstance(value, int) or isinstance(value, bool) or not lo <= value <= 65535:
-            raise ValueError(f"{key} phải là số nguyên {lo}–65535")
+    if key == "mcp_server.http_port":
+        if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 65535:
+            raise ValueError(f"{key} phải là số nguyên 1–65535")
     if key in ("gates", "gates.mode"):
         from .guard.profiles import GATES_MODES
 
@@ -1097,6 +1133,12 @@ def validate_setting(key: str, value: Any) -> None:
         from .confine import validate_setting as _validate_confine
 
         _validate_confine(key, value)
+    if key == "workspace.deps" and value not in ("link", "install", "none"):
+        raise ValueError("workspace.deps chỉ nhận 'link', 'install' hoặc 'none'")
+    if key == "workspace.isolate" and value not in ("never", "auto", "always"):
+        raise ValueError("workspace.isolate chỉ nhận 'never', 'auto' hoặc 'always'")
+    if key == "workspace.integrate.fast_forward" and not isinstance(value, bool):
+        raise ValueError("workspace.integrate.fast_forward phải là true/false")
     if key == "guard.trust_new_agents" and value not in ("off", "full"):
         raise ValueError("guard.trust_new_agents chỉ nhận 'off' hoặc 'full'")
     if key == "notify.reminder_max_count":

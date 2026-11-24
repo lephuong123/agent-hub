@@ -25,6 +25,9 @@ Migration **v13** (`manager_conversations`, `manager_messages`). Test: `tests/te
   - `manager.reply{conversation_id, run_id, text, channel, kind: reply|tick|notify, ok, outcome?, notify_kind?}` — `reply` khi run hội thoại kết
     thúc (lỗi → `ok=false`, text mô tả lỗi); `tick` khi run nhịp kết thúc (kênh `heartbeat`, UI có thể bỏ qua); `notify` khi manager gọi
     `notify_owner` (đích = hội thoại của run, hoặc với tick: hội thoại NGƯỜI hoạt động gần nhất; `conversation_id=null` nếu chưa có).
+    `message_id` = id tin đã lưu (`manager_messages`) khi có — chữ `text` đúng là chữ đã lưu (web dùng làm id mục: bản SSE = bản tải lại).
+  - `manager.message{conversation_id, run_id, message_id, role: user, text, channel}` — tin NGƯỜI vừa lưu vào hội thoại (tab/khung web khác
+    đang mở hội thoại thấy ngay).
   - `manager.action{tool, target, summary, audit_id, ok, error?}` — mọi thao tác GHI (kể cả bị từ chối: `ok=false`, `error`=lý do).
     `target` dạng `"agent:<id>" | "task:<id>" | "team:<id>" | "run:<id>"` hoặc null.
   - `manager.tick{status: started|skipped|failed, reason, events?, dropped?, conversation_id?}`, `manager.designated{agent_id, previous, by, channel}`.

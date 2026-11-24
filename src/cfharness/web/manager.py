@@ -41,11 +41,12 @@ from ..events import TERMINAL_RUN_EVENTS
 from ..rpc import METHOD_NOT_FOUND, DaemonUnavailable, RpcError
 from ..tui.model import short_tool
 from . import present as P
-from .app import CHANNEL, _stream, err_text, flash_redirect, post_guard, render, rpc, session_of, ws
+from .app import CHANNEL, _stream, err_text, flash_redirect, gather_ordered, post_guard, render, rpc, session_of, ws
 
 HISTORY_LIMIT = 200
 HEARTBEAT = "heartbeat"  # = manager.service.HEARTBEAT_CHANNEL (không import service ở web)
-ACTIONS_SCAN = 3000  # số event gần nhất của điều phối viên quét để lấy thẻ `manager.action`
+ACTIONS_LIMIT = 50  # số thẻ `manager.action` GẦN NHẤT (của luồng đang xem) lấy cho panel "Hành động gần đây" + dòng thời gian
+WS_CONV_LIMIT = 500  # hội thoại (mọi kênh) đọc MỘT lần mỗi lần tải trang: tab luồng, Sảnh, thanh bên
 PENDING_SCAN = 5000  # event tối đa của MỘT lượt đang chạy đọc lại khi tải trang (tool đang dùng + checklist)
 MAX_TEXT = 8000
 ATTACH_FIELD = "attach"
@@ -91,8 +92,23 @@ async def _attachments(form: Any) -> tuple[list[dict[str, str]], list[dict[str, 
     return images, files, names, errors
 
 
-async def mgr_state(request: Request) -> dict[str, Any]:
-    """`manager.get` + hàng agent (trạng thái live). `available=False` khi daemon chưa có `manager.*` (MGR-CORE chưa cài)."""
+async def _agent_row(request: Request, aid: str) -> dict[str, Any] | None:
+    """Dòng trạng thái live của MỘT agent: `tui.agent_state` (chỉ truy vấn của agent đó). Daemon cũ chưa có → `tui.snapshot` như trước."""
+    try:
+        return (await rpc(request, "tui.agent_state", {"id": aid}) or {}).get("agent")
+    except RpcError as e:
+        if e.code != METHOD_NOT_FOUND:
+            return None
+    try:
+        snap = await rpc(request, "tui.snapshot")
+        return next((r for r in snap.get("agents") or [] if r.get("id") == aid), None)
+    except RpcError:
+        return None
+
+
+async def mgr_state(request: Request, *, with_row: bool = True) -> dict[str, Any]:
+    """`manager.get` + hàng agent (trạng thái live). `available=False` khi daemon chưa có `manager.*` (MGR-CORE chưa cài).
+    `with_row=False`: chỉ cần biết điều phối viên là ai (vd mở luồng SSE) → không hỏi trạng thái agent."""
     try:
         g = await rpc(request, "manager.get") or {}
     except RpcError as e:
@@ -100,13 +116,7 @@ async def mgr_state(request: Request) -> dict[str, Any]:
             return {"available": False, "agent_id": None}
         raise
     aid = g.get("agent_id")
-    row = None
-    if aid:
-        try:
-            snap = await rpc(request, "tui.snapshot")
-            row = next((r for r in snap.get("agents") or [] if r.get("id") == aid), None)
-        except RpcError:
-            row = None
+    row = await _agent_row(request, aid) if aid and with_row else None
     return {"available": True, "agent_id": aid, "row": row, "last_tick": g.get("last_tick"), "next_tick": g.get("next_tick"),
             "tick": g.get("tick") or {}, "conversations": [P.mgr_conv(c) for c in g.get("conversations") or [] if isinstance(c, dict)]}
 
@@ -123,10 +133,15 @@ async def _web_convs(request: Request) -> list[dict[str, Any]]:
 async def _workstreams(request: Request) -> dict[str, Any]:
     """Dữ liệu thanh bên luồng việc: luồng đang mở (+ số tin chưa đọc gộp mọi kênh), số luồng đã đóng, hội thoại SẢNH (web).
     Daemon cũ chưa có `workstream.*` → rỗng (trang vẫn chạy như trước)."""
-    try:
-        active = await rpc(request, "workstream.list", {"status": "active"}) or []
-        closed = await rpc(request, "workstream.list", {"status": "closed", "limit": 50}) or []
-        convs = await rpc(request, "manager.conversations", {"limit": 500}) or []
+    return await workstreams_data(lambda m, p: rpc(request, m, p))
+
+
+async def workstreams_data(call: Any) -> dict[str, Any]:
+    """Như `_workstreams` nhưng nhận hàm gọi RPC `call(method, params)` — dùng chung cho trang và luồng v2 (`manager_feed`, không có request)."""
+    try:  # ba lời gọi độc lập → đồng thời
+        active, closed, convs = (r or [] for r in await gather_ordered(call("workstream.list", {"status": "active"}),
+                                                                        call("workstream.list", {"status": "closed", "limit": 50}),
+                                                                        call("manager.conversations", {"limit": WS_CONV_LIMIT})))
     except RpcError:
         return {"enabled": False, "active": [], "closed": [], "lobby": []}
     unread: dict[str, int] = {}
@@ -150,6 +165,48 @@ async def _workstreams(request: Request) -> dict[str, Any]:
             "by_id": {w["id"]: w for w in active + closed}, "convs": {c["id"]: c for c in convs if isinstance(c, dict)}}
 
 
+def _web_from(wsd: dict[str, Any]) -> list[dict[str, Any]]:
+    """Hội thoại kênh web (mọi luồng) lọc từ danh sách `_workstreams` đã có — thay cho một lần `manager.conversations` nữa."""
+    out = [P.mgr_conv(c) for c in (wsd.get("convs") or {}).values() if isinstance(c, dict) and c.get("channel") == CHANNEL]
+    return sorted([c for c in out if c["id"]], key=lambda c: str(c.get("updated_at") or ""), reverse=True)
+
+
+def _viewing(wsd: dict[str, Any], cid: str | None) -> None:
+    """Hội thoại `cid` đang hiện trên màn hình → số chưa đọc của nó không tính (tab luồng, Sảnh, thanh bên). Chỉ sửa dữ liệu hiển thị."""
+    raw = (wsd.get("convs") or {}).get(cid) if cid else None
+    if not raw:
+        return
+    n = int(raw.get("unread") or 0)
+    raw["unread"] = 0
+    w = (wsd.get("by_id") or {}).get(raw.get("workstream_id"))
+    if w and n:
+        w["unread"] = max(0, int(w.get("unread") or 0) - n)
+    for c in wsd.get("lobby") or []:
+        if c["id"] == cid:
+            c["unread"] = 0
+    if "lobby_unread" in wsd:
+        wsd["lobby_unread"] = sum(int(c.get("unread") or 0) for c in wsd.get("lobby") or [])
+
+
+async def manager_read(request: Request) -> Response:
+    """POST /manager/read {c}: đánh dấu hội thoại đã xem tới tin cuối (`manager.conversation_read`). Trình duyệt gọi khi hội thoại
+    đang hiện (mở trang, đổi tab, có tin mới lúc đang xem) — GET không bao giờ ghi."""
+    _, form = await post_guard(request)
+    cid = str(form.get("c") or "").strip()
+    if not cid:
+        return JSONResponse({"error": "Thiếu hội thoại"}, status_code=400)
+    try:
+        await rpc(request, "manager.conversation_read", {"conversation_id": cid})
+    except RpcError as e:
+        return JSONResponse({"error": err_text(e)}, status_code=404)
+    except DaemonUnavailable as e:
+        return JSONResponse({"error": err_text(e)}, status_code=503)
+    feed = getattr(request.app.state, "mgr_feed", None)
+    if feed is not None and feed.tabs is not None:  # số chưa đọc của tab đổi → `ws.status` mới cho mọi trang island (không chờ event khác)
+        feed.kick_tabs()
+    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+
+
 def tab_state(tasks: dict[str, Any], needs_human: int, busy: int, has_convs: bool) -> tuple[str, str]:
     """Trạng thái một tab luồng → (lớp chấm, chữ cho tooltip/đọc màn hình). Ưu tiên: cần người > đang chạy > còn task chờ > xong.
     "Đang chạy" = điều phối viên đang trả lời/xử lý trong luồng HOẶC có task của luồng đang chạy."""
@@ -169,21 +226,42 @@ def tab_state(tasks: dict[str, Any], needs_human: int, busy: int, has_convs: boo
     return "none", "Chưa có việc"
 
 
-async def _actions(request: Request, agent_id: str) -> list[dict[str, Any]]:
-    """Thẻ `manager.action` gần nhất của điều phối viên (event lưu DB), cũ → mới."""
+async def _actions(request: Request, agent_id: str, workstream: str | None = None) -> list[dict[str, Any]]:
+    """`ACTIONS_LIMIT` thẻ `manager.action` GẦN NHẤT của điều phối viên (event lưu DB), trả về cũ → mới.
+    `workstream`: id luồng → chỉ hành động của run thuộc luồng đó (`run_opts.manager_workstream`); chuỗi rỗng = Sảnh (run không gắn
+    luồng); None = mọi luồng. Daemon chỉ đọc event loại `manager.action`, mới nhất trước — không quét event khác."""
+    params: dict[str, Any] = {"agent_id": agent_id, "types": ["manager.action"], "order": "desc", "limit": ACTIONS_LIMIT}
+    if workstream is not None:
+        params["workstream"] = workstream
     try:
-        evs = await rpc(request, "events.query", {"agent_id": agent_id, "limit": ACTIONS_SCAN}) or []
+        evs = await rpc(request, "events.query", params) or []
     except RpcError:
         return []
     acts = [P.mgr_action_item(e) for e in evs if e.get("type") == "manager.action"]
     return sorted(acts, key=lambda a: str(a.get("ts") or ""))
 
 
-def _timeline(msgs: list[dict[str, Any]], acts: list[dict[str, Any]], qs: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+def own_runs(msgs: list[dict[str, Any]]) -> set[str]:
+    """Run THUỘC hội thoại (có tin người/trả lời/ghi chú ở đây). Run chỉ để lại tin báo chủ động (lượt nhịp báo vào nhiều hội thoại)
+    KHÔNG tính — mọi hành động của nó không tự động thuộc hội thoại này."""
+    return {str(m["run_id"]) for m in msgs if m.get("run_id") and not m.get("notify")}
+
+
+def _timeline(msgs: list[dict[str, Any]], acts: list[dict[str, Any]], qs: list[dict[str, Any]] | None = None,
+              conv_id: str | None = None) -> list[dict[str, Any]]:
     """Tin nhắn + thẻ hành động của các run thuộc hội thoại (+ câu hỏi của điều phối viên), theo thời gian. Thẻ hành động liên tiếp của
-    cùng một lượt gom thành MỘT khối "Đã làm N việc" (UX v2)."""
-    runs = {m.get("run_id") for m in msgs if m.get("run_id")}
-    items = list(msgs) + [a for a in acts if a.get("run_id") in runs]
+    cùng một lượt gom thành MỘT khối "Đã làm N việc" (UX v2). Run chỉ báo chủ động vào đây (lượt nhịp) → chỉ thẻ gắn đúng hội thoại
+    này (`conversation_id` của thẻ notify/câu hỏi); thẻ gắn hội thoại KHÁC không bao giờ hiện."""
+    own = own_runs(msgs)
+    notified = {str(m["run_id"]) for m in msgs if m.get("run_id")} - own
+
+    def mine(a: dict[str, Any]) -> bool:
+        ac, rid = a.get("conversation_id"), str(a.get("run_id") or "")
+        if ac and conv_id and ac != conv_id:
+            return False
+        return rid in own or (rid in notified and bool(conv_id) and ac == conv_id)
+
+    items = list(msgs) + [a for a in acts if mine(a)]
     items += [{"kind": "question", "q": q, "ts": q.get("created_at"), "run_id": q.get("run_id")} for q in qs or []]
 
     def key(it: dict[str, Any]) -> tuple[str, int]:
@@ -262,22 +340,67 @@ def question_from_event(ev: dict[str, Any]) -> dict[str, Any]:
     return q
 
 
+async def _page(request: Request, ctx: dict[str, Any]) -> Response:
+    """Vẽ trang Điều phối. app.js đổi tab/hội thoại gửi `X-Ahub-Partial: grid` → vỏ tối giản `_manager_shell.html` (chỉ lưới + danh
+    sách hội thoại + thông báo; KHÔNG thanh bên/menu nên không hỏi số trên menu — bớt RPC và HTML mỗi lần đổi tab)."""
+    if request.headers.get("x-ahub-partial") != "grid":
+        return await render(request, "manager.html", ctx)
+    sess = session_of(request)
+    base = {"csrf": sess.csrf if sess else "", "flashes": sess.pop_flashes() if sess else [], "badge": {}, "nav": "manager",
+            "path": request.url.path, "layout": "_manager_shell.html"}
+    return ws(request).templates.TemplateResponse(request, "manager.html", {**base, **ctx}, headers={"Cache-Control": "no-store"})
+
+
+UI_COOKIE = "ahub_mgr_ui"  # "old" = người chọn trang Điều phối cũ (lối thoát ?ui=old, giữ MỘT bản phát hành rồi gỡ cùng trang cũ)
+
+
+def wants_old_ui(request: Request) -> bool:
+    """Trang Điều phối cũ (htmx + app.js initManager) thay vì island (mặc định từ GĐ3): `?ui=old`, cookie đã chọn trước đó, hoặc yêu cầu
+    vỏ lưới của app.js cũ (`X-Ahub-Partial: grid` — chỉ trang cũ gửi). `?ui=next|new` = quay về island."""
+    ui = request.query_params.get("ui")
+    if ui in ("next", "new"):
+        return False
+    return ui == "old" or request.headers.get("x-ahub-partial") == "grid" or request.cookies.get(UI_COOKIE) == "old"
+
+
 async def manager_page(request: Request) -> Response:
+    ui = request.query_params.get("ui")
+    if wants_old_ui(request):
+        resp = await _page(request, await page_ctx(request))
+        if ui == "old":  # nhớ lựa chọn: link nội bộ của trang cũ không mang ?ui=old
+            resp.set_cookie(UI_COOKIE, "old", max_age=30 * 86400, httponly=True, samesite="lax", path="/manager")
+        return resp
+    from .coord import coord_page  # island Điều phối (GĐ2/GĐ3 phương án B, web/coord.py)
+
+    resp = await coord_page(request)
+    if request.cookies.get(UI_COOKIE):
+        resp.delete_cookie(UI_COOKIE, path="/manager")
+    return resp
+
+
+async def page_ctx(request: Request) -> dict[str, Any]:
+    """Dữ liệu trang Điều phối (`?c=&w=&new=&run=`) — dùng chung cho trang HTML và `GET /api/manager/snapshot` (manager_feed)."""
     q = request.query_params
-    st = await mgr_state(request)
+    # lời gọi không phụ thuộc nhau chạy đồng thời (perf): trạng thái điều phối viên, hub.status, hội thoại web, thanh bên luồng việc
+    # (hai cái sau chỉ dùng khi đã có điều phối viên; RpcError của chúng đã được nuốt bên trong như trước)
+    # `manager.conversations` chỉ hỏi MỘT lần (limit 500, mọi kênh — trong `_workstreams`); hội thoại web lọc lại từ đó. Daemon cũ chưa có
+    # `workstream.*` → mới hỏi riêng hội thoại web như trước.
+    st, status, wsd = await gather_ordered(mgr_state(request), rpc(request, "hub.status"), _workstreams(request))
+    convs = _web_from(wsd) if wsd.get("enabled") else await _web_convs(request)
     ctx: dict[str, Any] = {"nav": "manager", "m": st, "convs": [], "conv": None, "items": [], "side_actions": [], "pending": None,
                            "agents": [], "templates": []}
-    status = await rpc(request, "hub.status")
     ctx.update({"since": status.get("last_seq") or 0, "epoch": status.get("epoch") or ""})
     if not st["available"] or not st["agent_id"]:
-        ctx["agents"] = [a for a in await rpc(request, "agent.list", {}) or [] if not a.get("archived_at")]
-        try:
-            ctx["templates"] = [t for t in await rpc(request, "template.list") or [] if str(t.get("name") or "").startswith("manager")]
-        except RpcError:
-            pass
-        return await render(request, "manager.html", ctx)
-    convs = await _web_convs(request)
-    wsd = await _workstreams(request)
+
+        async def _templates() -> list[dict[str, Any]]:
+            try:
+                return [t for t in await rpc(request, "template.list") or [] if str(t.get("name") or "").startswith("manager")]
+            except RpcError:
+                return []
+
+        agents, ctx["templates"] = await gather_ordered(rpc(request, "agent.list", {}), _templates())
+        ctx["agents"] = [a for a in agents or [] if not a.get("archived_at")]
+        return ctx
     ws_id = str(q.get("w") or "").strip() or None
     if q.get("c") and not ws_id:  # hội thoại thuộc luồng → hiện trong ngữ cảnh luồng
         ws_id = (wsd.get("convs", {}).get(q.get("c")) or {}).get("workstream_id")
@@ -287,78 +410,92 @@ async def manager_page(request: Request) -> Response:
         except RpcError:
             ws_id = None
     if ws_id and not q.get("c") and not q.get("new"):  # ?w= → hội thoại web gần nhất của luồng (chưa có → mới trong luồng)
-        try:
-            wc = await rpc(request, "manager.conversations", {"channel": CHANNEL, "workstream": ws_id, "limit": 1}) or []
-        except RpcError:
-            wc = []
+        # đã có trong danh sách WS_CONV_LIMIT hội thoại — không hỏi lại daemon
+        wc = sorted([P.mgr_conv(c) for c in (wsd.get("convs") or {}).values()
+                     if isinstance(c, dict) and c.get("workstream_id") == ws_id and c.get("channel") == CHANNEL],
+                    key=lambda c: str(c.get("updated_at") or ""), reverse=True)
+        if not wc and (not wsd.get("enabled") or len(wsd.get("convs") or {}) >= WS_CONV_LIMIT):  # danh sách bị cắt → hỏi đúng luồng này
+            try:
+                wc = await rpc(request, "manager.conversations", {"channel": CHANNEL, "workstream": ws_id, "limit": 1}) or []
+            except RpcError:
+                wc = []
         cid = wc[0]["id"] if wc else None
     else:
         lobby = wsd.get("lobby") if wsd.get("enabled") else convs
         cid = None if q.get("new") else (q.get("c") or (lobby[0]["id"] if lobby else None))
-    msgs: list[dict[str, Any]] = []
-    if cid:
-        try:
-            raw = await rpc(request, "manager.history", {"conversation_id": cid, "limit": HISTORY_LIMIT}) or []
-            msgs = [m for m in (P.mgr_message(x) for x in raw if isinstance(x, dict)) if m]
-        except RpcError as e:
-            if q.get("c"):
-                sess = session_of(request)
-                if sess:
-                    sess.flash("error", f"Không mở được cuộc trò chuyện {cid}: {err_text(e)}")
-            cid = None
-    acts = await _actions(request, st["agent_id"])
     from .app import questions as _questions
 
-    conv_qs = [q for q in await _questions(request, "all", agent_id=st["agent_id"]) if cid and q.get("conversation_id") == cid and q["status"] != "cancelled"]
-    items = _timeline(msgs, acts, conv_qs)
+    async def _history() -> list[dict[str, Any]] | RpcError:
+        if not cid:
+            return []
+        try:
+            raw = await rpc(request, "manager.history", {"conversation_id": cid, "limit": HISTORY_LIMIT}) or []
+        except RpcError as e:
+            return e
+        return [m for m in (P.mgr_message(x) for x in raw if isinstance(x, dict)) if m]
+
+    async def _wsx() -> dict[str, Any] | None:
+        if not ws_id:
+            return None
+        try:
+            return await rpc(request, "workstream.get", {"id": ws_id})
+        except RpcError:
+            return None
+
+    # lịch sử hội thoại, thẻ hành động, câu hỏi, chi tiết luồng: độc lập với nhau → đồng thời
+    hist, acts, all_qs, wsx = await gather_ordered(_history(), _actions(request, st["agent_id"], ws_id or ""),
+                                                   _questions(request, "all", agent_id=st["agent_id"]), _wsx())
+    msgs: list[dict[str, Any]] = []
+    if isinstance(hist, RpcError):
+        if q.get("c"):
+            sess = session_of(request)
+            if sess:
+                sess.flash("error", f"Không mở được cuộc trò chuyện {cid}: {err_text(hist)}")
+        cid = None
+    else:
+        msgs = hist
+    conv_qs = [q for q in all_qs if cid and q.get("conversation_id") == cid and q["status"] != "cancelled"]
+    items = _timeline(msgs, acts, conv_qs, cid)
     # tin cuối của người chưa có trả lời + run còn chạy → khung "đang trả lời" (chữ chạy tới qua SSE)
-    pending = None
-    pinfo: dict[str, Any] = {}
     want = q.get("run") or next((m.get("run_id") for m in reversed(msgs) if m["kind"] == "user"), None)
-    if want and not any(m["kind"] == "manager" and m.get("run_id") == want for m in msgs):
+
+    async def _pending() -> tuple[str | None, dict[str, Any]]:
+        if not want or any(m["kind"] == "manager" and m.get("run_id") == want for m in msgs):
+            return None, {}
+        pend: str | None = None
         try:
             run = await rpc(request, "run.get", {"id": want})
             if P.is_live_run(run):
-                pending = run["id"]
-                pinfo = pending_info(await rpc(request, "events.query", {"run_id": pending, "limit": PENDING_SCAN}) or [])
+                pend = run["id"]  # như trước: events.query lỗi vẫn giữ khung "đang trả lời" (không có tool/checklist)
+                # PENDING_SCAN event GẦN NHẤT (run dài hơn thế: đọc từ đầu sẽ ra tool/checklist cũ) → đảo lại cũ → mới cho pending_info
+                evs = await rpc(request, "events.query", {"run_id": pend, "limit": PENDING_SCAN, "order": "desc"}) or []
+                return pend, pending_info(list(reversed(evs)))
         except RpcError:
             pass
-    wsx = None
-    if ws_id:
-        try:
-            wsx = await rpc(request, "workstream.get", {"id": ws_id})
-        except RpcError:
-            wsx = None
-    if cid:
-        try:
-            await rpc(request, "manager.conversation_read", {"conversation_id": cid})
-            for c in wsd.get("lobby") or []:
-                if c["id"] == cid:
-                    c["unread"] = 0
-        except (RpcError, DaemonUnavailable):
-            pass
+        return pend, {}
+
+    # GET không ghi gì: "đã đọc" do trình duyệt POST /manager/read sau khi hiện hội thoại (app.js). Ở đây chỉ HIỂN THỊ hội thoại đang
+    # mở là đã đọc (không đếm vào số chưa đọc của tab/thanh bên).
+    pending, pinfo = await _pending()
+    _viewing(wsd, cid)
     cur_conv = (wsd.get("convs") or {}).get(cid) if cid else None
     ws_convs = [P.mgr_conv(c) | {"channel": c.get("channel"), "running": bool(c.get("running"))} for c in (wsd.get("convs") or {}).values()
                 if wsx and c.get("workstream_id") == wsx["id"] and c.get("channel") != "heartbeat"]
     ws_convs.sort(key=lambda c: str(c.get("updated_at") or ""), reverse=True)
     ctx.update({"convs": convs, "conv": cid, "items": items, "side_actions": list(reversed(acts))[:12], "pending": pending, "pinfo": pinfo,
-                "conv_runs": sorted({m["run_id"] for m in msgs if m.get("run_id")} | ({pending} if pending else set())),
+                "conv_runs": sorted(own_runs(msgs) | ({pending} if pending else set())),
                 "wsd": wsd, "wsx": wsx, "ws_convs": ws_convs, "cur_conv": cur_conv,
                 "ws_web_convs": [c | {"unread": 0 if c["id"] == cid else int(((wsd.get("convs") or {}).get(c["id"]) or {}).get("unread") or 0)}
                                  for c in ws_convs if c.get("channel") == CHANNEL],
-                "cur_title": (cur_conv or {}).get("title")})
-    return await render(request, "manager.html", ctx)
+                "cur_title": (cur_conv or {}).get("title"), "ws_id": ws_id, "conv_qs": conv_qs, "msgs": msgs})
+    return ctx
 
 
 async def partial_tabs(request: Request) -> Response:
     """Hàng tab luồng (htmx/app.js làm mới khi có run bắt đầu/kết thúc, tin trả lời, luồng đổi — và hỏi lại định kỳ cho task)."""
     cid = str(request.query_params.get("c") or "").strip()
-    if cid:  # hội thoại đang mở trên màn hình: tin mới tới trong lúc xem không tính là chưa đọc (giống lúc tải trang)
-        try:
-            await rpc(request, "manager.conversation_read", {"conversation_id": cid})
-        except (RpcError, DaemonUnavailable):
-            pass
     wsd = await _workstreams(request)
+    _viewing(wsd, cid)  # hội thoại đang mở: tin mới tới trong lúc xem không HIỆN là chưa đọc (ghi "đã đọc" = POST /manager/read)
     wid = str(request.query_params.get("w") or "").strip()
     wsx = (wsd.get("by_id") or {}).get(wid) if wid else None
     sess = session_of(request)
@@ -449,9 +586,9 @@ async def manager_stop(request: Request) -> Response:
 
     if not rid:
         return done("Thiếu lượt cần dừng", 400)
-    st = await mgr_state(request)
-    try:
-        run = await rpc(request, "run.get", {"id": rid}) or {}
+    try:  # chỉ cần biết điều phối viên là ai (không hỏi trạng thái agent) — song song với run.get
+        st, run = await gather_ordered(mgr_state(request, with_row=False), rpc(request, "run.get", {"id": rid}))
+        run = run or {}
     except RpcError as e:
         return done(err_text(e), 404)
     except DaemonUnavailable as e:
@@ -477,7 +614,7 @@ async def manager_stop(request: Request) -> Response:
     return done("Đã dừng điều phối viên")
 
 
-DRAFT_EVERY_S = 0.15  # P1-1: bản nháp markdown của câu trả lời đang chạy chữ — tối đa ~7 lần/giây mỗi luồng SSE
+DRAFT_EVERY_S = 0.5  # P1-1: bản nháp markdown của câu trả lời đang chạy chữ — tối đa 2 lần/giây mỗi luồng SSE (chữ thô vẫn tới ngay qua delta)
 DRAFT_MAX = 24_000  # chữ đang chạy dài hơn → thôi gửi nháp (đỡ CPU), client chỉ nối delta thô
 STREAM_KEEP = 200_000  # trần bộ đệm chữ của một lượt (RAM)
 
@@ -513,7 +650,7 @@ def _converter(request: Request, clock: Any = None) -> Any:
         if not text.strip() or len(text) > DRAFT_MAX or (not force and now() - b["at"] < DRAFT_EVERY_S):
             return []
         b["at"] = now()
-        return [{"t": "draft", "run": rid, "seq": seq, "html": P.md(text)}]
+        return [{"t": "draft", "run": rid, "seq": seq, "html": P.md(text, cache=False)}]  # nháp đổi liên tục → không chiếm LRU
 
     def conv(ev: dict[str, Any]) -> list[dict[str, Any]]:
         out = _conv(ev)
@@ -580,7 +717,8 @@ def _converter(request: Request, clock: Any = None) -> Any:
         if t == "manager.action":
             it = P.mgr_action_item(ev)
             group = {"kind": "actions", "run_id": rid, "items": [it], "ok": it["ok"], "ts": it.get("ts")}
-            return [{"t": "action", "run": rid, "html": str(mod.item(group)), "one": str(mod.item(it)), "ok": it["ok"], "side": str(mod.side_action(it))}]
+            return [{"t": "action", "run": rid, "conv": it.get("conversation_id"), "html": str(mod.item(group)), "one": str(mod.item(it)),
+                     "ok": it["ok"], "side": str(mod.side_action(it))}]
         if t.startswith("question.") and t != "question.reminder":
             q = question_from_event(ev)
             if not q.get("conversation_id"):
@@ -603,12 +741,12 @@ def _converter(request: Request, clock: Any = None) -> Any:
 
 
 async def sse_manager(request: Request) -> Response:
-    st = await mgr_state(request)
+    st = await mgr_state(request, with_row=False)
     if not st.get("agent_id"):
         raise HTTPException(404, "Chưa có điều phối viên")
     q = request.query_params
     params = {"agent_id": st["agent_id"], "since_seq": int(q.get("since") or 0), "epoch": q.get("epoch") or None, "level": "detail"}
-    return StreamingResponse(_stream(request, params, _converter(request)), media_type="text/event-stream",
+    return StreamingResponse(_stream(request, params, _converter(request), stamp=True), media_type="text/event-stream",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
@@ -699,10 +837,16 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
 def routes() -> list[Any]:
     from starlette.routing import Route
 
+    from . import manager_feed
+    from .coord import routes as _coord_routes
+
     return [
+        *_coord_routes(),  # /static/coord/<tệp>.js — mã island đã thu gọn (đứng trước mount /static)
+        *manager_feed.routes(),  # hợp đồng v2 (GĐ1): /api/manager/snapshot|watch|act, /sse/manager/v2
         Route("/manager", manager_page),
         Route("/manager/send", manager_send, methods=["POST"]),
         Route("/manager/stop", manager_stop, methods=["POST"]),
+        Route("/manager/read", manager_read, methods=["POST"]),
         Route("/partials/manager", partial_status),
         Route("/partials/manager/tabs", partial_tabs),
         Route("/sse/manager", sse_manager),

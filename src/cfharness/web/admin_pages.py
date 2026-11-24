@@ -51,20 +51,30 @@ async def nav_available(request: Request) -> bool:  # tương thích: mục "T�
 
 
 async def _admin_call(request: Request, method: str, params: dict[str, Any] | None = None) -> Any:
+    """VIS-02: người không phải quản trị → 404 giống route không tồn tại (daemon trả 'không có method')."""
+    from ..rpc import METHOD_NOT_FOUND
+
     try:
         return await rpc(request, method, params or {})
     except RpcError as e:
-        if "cfharness-admin" in str(e):
-            raise HTTPException(403, "Chỉ người quản trị máy (nhóm cfharness-admin)") from None
+        if e.code == METHOD_NOT_FOUND or "cfharness-admin" in str(e):
+            raise HTTPException(404) from None
         raise
 
 
+async def _require_admin_nav(request: Request) -> None:
+    if not (await nav_badges(request)).get("admin"):
+        raise HTTPException(404)
+
+
 async def overview_page(request: Request) -> Response:
+    await _require_admin_nav(request)
     res = await _admin_call(request, "admin.overview")
     return await render(request, "admin_overview.html", {"nav": "admin", "ov": res, "states": STATE_VI})
 
 
 async def users_page(request: Request) -> Response:
+    await _require_admin_nav(request)
     from ..admin_watch import ALERT_VI
 
     res = await _admin_call(request, "admin.users")
@@ -97,6 +107,7 @@ async def user_page(request: Request) -> Response:
     from ..admin_overview import USER_RE
     from ..admin_watch import ALERT_VI
 
+    await _require_admin_nav(request)
     u = request.path_params["user"]
     if not USER_RE.match(u):
         raise HTTPException(404, "Không có user này")
@@ -118,6 +129,7 @@ async def user_page(request: Request) -> Response:
 
 
 async def alerts_page(request: Request) -> Response:
+    await _require_admin_nav(request)
     from ..admin_watch import ALERT_VI
 
     res = await _admin_call(request, "admin.alerts")
@@ -125,6 +137,7 @@ async def alerts_page(request: Request) -> Response:
 
 
 async def audit_page(request: Request) -> Response:
+    await _require_admin_nav(request)
     from ..admin_overview import USER_RE
 
     u = request.query_params.get("user") or None
@@ -135,7 +148,7 @@ async def audit_page(request: Request) -> Response:
 
 
 async def machine_page(request: Request) -> Response:
-    res = await rpc(request, "admin.self")
+    res = await _admin_call(request, "admin.self")  # VIS-07: trang minh bạch tắt → 404
     exp = res.get("export") or {}
     return await render(request, "admin_machine.html", {"nav": "machine", "r": res,
                                                         "preview_json": json.dumps(exp.get("preview") or {}, ensure_ascii=False, indent=2, sort_keys=True),

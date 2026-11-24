@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Job {{ j.kind }}{% endblock %}
+{% block content %}
+<h1>{{ j.kind }} · {{ j.target or "" }} {{ pill(j.state) }}</h1>
+<div id="job" {% if j.state in ("queued", "running") %}data-reload="3"{% endif %}>
+<ol class="steps">
+{% for st in j.steps %}
+<li class="step {{ st.state }}"><div>{{ pill(st.state) }} <b>{{ st.title }}</b></div>{% if st.log %}<pre class="log">{{ st.log }}</pre>{% endif %}</li>
+{% endfor %}
+</ol>
+</div>
+{% if j.state == "succeeded" and j.kind in ("user.create", "user.restore") and can(sess, "user_lifecycle") %}
+<div class="card"><p>Link đăng ký TOTP cho user chỉ hiện <b>một lần</b> — bấm để xem rồi gửi cho user qua kênh riêng.</p>
+{{ op_form("user.totp_link", "Hiện link TOTP", {"job_id": j.id}, next="/jobs/" ~ j.id, cls="primary") }}</div>
+{% endif %}
+{% if j.error %}<div class="flash err">{{ j.error }}</div>{% endif %}
+{% if j.state == "failed" and can(sess, "job") %}
+<div class="row">
+  {{ form_open("job.retry", "Thử lại từ bước " ~ (j.resume_from or ""), next="/jobs/" ~ j.id, cls="inline") }}
+    <input type="hidden" name="p.id" value="{{ j.id }}">
+    {% if j.needs_secrets %}<input type="password" name="p.secrets.claude_token" placeholder="dán lại token Claude" autocomplete="off">{% endif %}
+    <button class="btn primary">Thử lại từ bước này</button>
+  </form>
+  {{ op_form("job.cancel", "Huỷ và dọn", {"id": j.id, "cleanup:bool": "true"}, confirm="Huỷ job và hoàn tác các bước đã làm?", cls="danger", next="/jobs/" ~ j.id) }}
+  {{ op_form("job.cancel", "Huỷ (giữ nguyên)", {"id": j.id}, next="/jobs/" ~ j.id) }}
+</div>
+{% endif %}
+{% endblock %}

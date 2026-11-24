@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Tài khoản Claude{% endblock %}
+{% block content %}
+<h1>Tài khoản Claude</h1>
+<p class="muted">Token <code>claude setup-token</code> lưu trong kho của admind — không bao giờ hiện lại. Gán cho hub = ghi vào kho secret của hub và khởi động lại daemon.</p>
+<table class="grid"><thead><tr><th>Tên</th><th>Trạng thái</th><th>Tuổi token</th><th>User</th><th>Ghi chú hạn mức</th><th></th></tr></thead><tbody>
+{% for a in rows %}
+<tr><td><b>{{ a.name }}</b></td><td>{{ pill(a.state) }}</td><td>{% if a.age_days is not none %}{{ a.age_days | int }} ngày{% if a.old %} <span class="pill bad">sắp hết hạn</span>{% endif %}{% else %}—{% endif %}</td>
+<td class="small">{{ a.users }}{% if a.user_names %}: {{ a.user_names | join(", ") }}{% endif %}</td><td class="small">{{ a.quota_note }}</td>
+<td class="actions">{% if can(sess, "claude") %}
+  {{ op_form("claude.check", "Kiểm", {"id": a.id}) }}
+  <details class="inline"><summary class="btn">Gán</summary>
+    {{ form_open("claude.assign", "Gán tài khoản " ~ a.name, cls="inline", confirm="Gán tài khoản này cho các user đã chọn? (khởi động lại daemon của họ)") }}
+      <input type="hidden" name="p.account_id" value="{{ a.id }}">
+      <select name="p.users:multi" multiple size="5">{% for u in users if u.state in ("active", "suspended") %}<option value="{{ u.os_user }}">{{ u.os_user }}</option>{% endfor %}</select>
+      <button class="btn">Gán</button></form></details>
+  <details class="inline"><summary class="btn">Xoay token</summary>
+    {{ form_open("claude.rotate", "Xoay token " ~ a.name, cls="inline", confirm="Thay token và ghi lại cho mọi user đang dùng?") }}
+      <input type="hidden" name="p.id" value="{{ a.id }}"><input type="password" name="p.token" placeholder="sk-ant-oat01-…" autocomplete="off" required>
+      <button class="btn">Xoay</button></form></details>
+  {% if not a.users %}{{ op_form("claude.remove", "Gỡ", {"id": a.id}, confirm="Gỡ tài khoản " ~ a.name ~ " khỏi kho?", cls="danger") }}{% endif %}
+{% endif %}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">Kho trống.</td></tr>{% endfor %}
+</tbody></table>
+{% if can(sess, "claude") %}
+<section class="card"><h2>Thêm tài khoản</h2>
+{{ form_open("claude.account_add", "Thêm tài khoản Claude", cls="grid-form") }}
+  <label>Tên <input name="p.name" required placeholder="vd Claude Max #1"></label>
+  <label>Token <input type="password" name="p.token" autocomplete="off" required placeholder="sk-ant-oat01-…"></label>
+  <label>Ghi chú hạn mức <input name="p.quota_note"></label>
+  <button class="btn primary">Thêm</button>
+</form></section>
+{% endif %}
+{% endblock %}

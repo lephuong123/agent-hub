@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Cảnh báo{% endblock %}
+{% block content %}
+<div class="row"><h1>Cảnh báo</h1>
+<a class="btn ghost" href="/alerts{% if not show_all %}?all=1{% endif %}">{{ "Chỉ đang mở" if show_all else "Gồm cả đã xử lý" }}</a></div>
+<table class="grid"><thead><tr><th>Mức</th><th>Đối tượng</th><th>Cảnh báo</th><th>Trạng thái</th><th>Mở lúc</th><th>Ghi chú</th><th></th></tr></thead><tbody>
+{% for a in rows %}
+<tr>
+  <td><span class="pill {{ 'bad' if a.level == 'crit' else ('warn' if a.level == 'warn' else 'info') }}">{{ a.level }}</span></td>
+  <td>{% if a.subject_kind == "user" %}<a href="/users/{{ a.subject }}">{{ a.subject_name }}</a>{% else %}{{ a.subject_kind }}: {{ a.subject_name }}{% endif %}</td>
+  <td>{{ a.label }}</td><td>{{ pill(a.state) }}{% if a.muted %} <span class="pill">tắt tiếng</span>{% endif %}</td>
+  <td>{{ a.opened_at | ago }}</td><td class="small">{{ a.note }}</td>
+  <td class="actions">{% if can(sess, "monitor") and a.state != "resolved" %}
+    {% if a.state == "on" %}{{ form_open("alert.ack", "Xác nhận", cls="inline") }}<input type="hidden" name="p.id" value="{{ a.id }}"><input name="p.note" placeholder="ghi chú"><button class="btn">Xác nhận</button></form>{% endif %}
+    {{ op_form("alert.mute", "Tắt tiếng 4 giờ", {"id": a.id, "hours:int": 4}) }}
+    {{ op_form("alert.resolve", "Đóng", {"id": a.id}) }}
+  {% endif %}</td>
+</tr>
+{% else %}<tr><td colspan="7" class="muted">Không có cảnh báo.</td></tr>
+{% endfor %}
+</tbody></table>
+{% endblock %}

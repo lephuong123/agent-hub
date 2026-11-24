@@ -24,7 +24,7 @@
   ("Làm việc", [("manager", "/manager", "chat", "Điều phối"), ("inbox", "/inbox", "inbox", "Cần bạn"), ("overview", "/", "home", "Tổng quan"), ("search", "/search", "search", "Tìm kiếm")]),
   ("Đội ngũ", [("agents", "/agents", "bot", "Agent"), ("teams", "/teams", "team", "Team"), ("tasks", "/tasks", "task", "Công việc"), ("runs", "/runs", "run", "Lượt chạy"), ("schedules", "/schedules", "calendar", "Lịch chạy")]),
   ("Học & chất lượng", [("learnings", "/learnings", "learn", "Tự học"), ("skills", "/skills", "star", "Skill"), ("memory", "/memory", "graph", "Memory")]),
-  ("Hệ thống", [("mcp", "/mcp", "plug", "MCP"), ("systems", "/systems", "power", "Hệ thống ngoài"), ("costs", "/costs", "dollar", "Chi phí")] + ([("admin", "/admin/overview", "terminal", "Tổng quan máy"), ("admin_users", "/admin/users", "team", "Người dùng máy")] if badge.admin else []) + ([("machine", "/machine", "shield", "Quản trị máy")] if badge.machine else []) + [("permissions", "/permissions", "shield", "Quyền đã cấp"), ("audit", "/audit", "log", "Nhật ký"), ("logs", "/logs", "terminal", "Nhật ký hệ thống"), ("settings", "/settings", "settings", "Cài đặt")]),
+  ("Hệ thống", [("mcp", "/mcp", "plug", "MCP"), ("systems", "/systems", "power", "Hệ thống ngoài"), ("costs", "/costs", "dollar", "Chi phí")] + ([("admin", "/admin/overview", "terminal", "Tổng quan máy"), ("admin_users", "/admin/users", "team", "Người dùng máy")] if badge.admin else []) + ([("machine", "/machine", "shield", "Quản trị máy")] if badge.machine else []) + ([("team_inbox", "/team-inbox", "task", "Việc được giao" ~ (" (" ~ badge.team_inbox ~ ")" if badge.team_inbox else ""))] if badge.team_inbox is number else []) + [("permissions", "/permissions", "shield", "Quyền đã cấp"), ("audit", "/audit", "log", "Nhật ký"), ("logs", "/logs", "terminal", "Nhật ký hệ thống"), ("perf", "/perf", "zap", "Hiệu năng"), ("settings", "/settings", "settings", "Cài đặt")]),
 ] %}
 <div class="shell{{ ' noside' if not csrf }}">
   {% if csrf %}
@@ -46,7 +46,7 @@
     </nav>
     {% block side_extra %}{% endblock %}
     <div class="side-foot">
-      {% if badge.admin_estop %}<a href="/machine" class="btn danger solid sm side-btn" title="Người quản trị máy đã bật ESTOP — chỉ họ gỡ được">{{ _m.icon('stop') }}<span class="lbl">ESTOP quản trị máy</span></a>
+      {% if badge.admin_estop %}<span class="btn danger solid sm side-btn" title="Hub đang tạm dừng — liên hệ quản trị">{{ _m.icon('stop') }}<span class="lbl">Hub đang tạm dừng</span></span>
       {% elif badge.estop %}<a href="/settings#estop" class="btn danger solid sm side-btn" title="Dừng khẩn cấp đang bật">{{ _m.icon('stop') }}<span class="lbl">ESTOP đang bật</span></a>{% endif %}
       <a href="/settings#desktop-app" class="side-dl" title="Tải ứng dụng máy tính Cfharness Desktop (macOS, Windows)">{{ _m.icon('download') }}<span class="lbl">Tải app máy tính</span></a>
       <div class="side-user">
@@ -64,7 +64,7 @@
       <div class="mtop-right">
         {{ view_toggle('view-toggle-m', 'view-toggle') }}
         <a class="btn ghost sm icon" href="/manager?new=1" title="Cuộc trò chuyện mới" aria-label="Cuộc trò chuyện mới">{{ _m.icon('pen-new') }}</a>
-        {% if badge.admin_estop %}<a href="/machine" class="pill danger strong">{{ _m.icon('stop') }}ESTOP quản trị</a>
+        {% if badge.admin_estop %}<span class="pill danger strong" title="Liên hệ quản trị">{{ _m.icon('stop') }}Hub đang tạm dừng</span>
         {% elif badge.estop %}<a href="/settings#estop" class="pill danger strong">{{ _m.icon('stop') }}ESTOP</a>{% endif %}
         {% if badge.down %}<span class="pill danger">daemon tắt</span>{% endif %}
       </div>
@@ -84,7 +84,7 @@
   <details class="tab-more">
     <summary>{{ _m.icon('menu') }}<span>Thêm</span></summary>
     <div class="tab-sheet">
-      {% for key, href, ic, label in [("overview", "/", "home", "Tổng quan"), ("search", "/search", "search", "Tìm kiếm"), ("schedules", "/schedules", "calendar", "Lịch chạy"), ("teams", "/teams", "team", "Team"), ("tasks", "/tasks", "task", "Công việc"), ("learnings", "/learnings", "learn", "Tự học"), ("skills", "/skills", "star", "Skill"), ("memory", "/memory", "graph", "Memory"), ("mcp", "/mcp", "plug", "MCP"), ("costs", "/costs", "dollar", "Chi phí")] + ([("admin", "/admin/overview", "terminal", "Tổng quan máy"), ("admin_users", "/admin/users", "team", "Người dùng máy")] if badge.admin else []) + ([("machine", "/machine", "shield", "Quản trị máy")] if badge.machine else []) + [("permissions", "/permissions", "shield", "Quyền đã cấp"), ("audit", "/audit", "log", "Nhật ký"), ("logs", "/logs", "terminal", "Nhật ký hệ thống"), ("settings", "/settings", "settings", "Cài đặt")] %}
+      {% for key, href, ic, label in [("overview", "/", "home", "Tổng quan"), ("search", "/search", "search", "Tìm kiếm"), ("schedules", "/schedules", "calendar", "Lịch chạy"), ("teams", "/teams", "team", "Team"), ("tasks", "/tasks", "task", "Công việc"), ("learnings", "/learnings", "learn", "Tự học"), ("skills", "/skills", "star", "Skill"), ("memory", "/memory", "graph", "Memory"), ("mcp", "/mcp", "plug", "MCP"), ("costs", "/costs", "dollar", "Chi phí")] + ([("admin", "/admin/overview", "terminal", "Tổng quan máy"), ("admin_users", "/admin/users", "team", "Người dùng máy")] if badge.admin else []) + ([("machine", "/machine", "shield", "Quản trị máy")] if badge.machine else []) + ([("team_inbox", "/team-inbox", "task", "Việc được giao" ~ (" (" ~ badge.team_inbox ~ ")" if badge.team_inbox else ""))] if badge.team_inbox is number else []) + [("permissions", "/permissions", "shield", "Quyền đã cấp"), ("audit", "/audit", "log", "Nhật ký"), ("logs", "/logs", "terminal", "Nhật ký hệ thống"), ("perf", "/perf", "zap", "Hiệu năng"), ("settings", "/settings", "settings", "Cài đặt")] %}
       <a href="{{ href }}" class="{{ 'on' if navkey == key }}">{{ _m.icon(ic) }}<span>{{ label }}</span></a>
       {% endfor %}
       <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn ghost" type="submit">{{ _m.icon('logout') }}<span>Thoát</span></button></form>
@@ -95,6 +95,15 @@
 <div class="toasts" id="toasts" role="status" aria-live="polite">
   {% for kind, text in flashes %}<div class="flash {{ kind }}">{{ _m.icon('check' if kind == 'ok' else 'alert') }}<span class="t">{{ text }}</span><button type="button" class="toast-x" aria-label="Đóng">{{ _m.icon('x', 'sm') }}</button></div>{% endfor %}
 </div>
+{#- Panel xem file trượt từ phải (static/files.js): bấm "Xem" ở chip file → nạp /files/view?…&panel=1 vào đây, chat/lượt chạy vẫn ở bên. -#}
+<aside class="fpanel" id="fpanel" hidden aria-label="Xem file" tabindex="-1">
+  <div class="fpanel-bar">
+    <span class="fpanel-title" id="fpanel-title">Xem file</span>
+    <a class="btn icon ghost sm" id="fpanel-tab" href="#" target="_blank" rel="noopener" title="Mở trong tab mới" aria-label="Mở trong tab mới">{{ _m.icon('external') }}</a>
+    <button type="button" class="btn icon ghost sm" id="fpanel-x" title="Đóng (Esc)" aria-label="Đóng panel xem file">{{ _m.icon('x') }}</button>
+  </div>
+  <div class="fpanel-body" id="fpanel-body"></div>
+</aside>
 <dialog id="confirm-dlg" class="dlg">
   <form method="post" id="confirm-form">
     <h2>Xác nhận</h2>
@@ -108,6 +117,7 @@
   </form>
 </dialog>
 <script src="{{ static(htmx) }}"></script>
+<script src="{{ static("perf.js") }}"></script>
 <script src="{{ static("app.js") }}"></script>
 <script src="{{ static("files.js") }}"></script>
 <script src="{{ static("voice.js") }}"></script>

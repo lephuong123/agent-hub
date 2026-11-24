@@ -162,6 +162,9 @@ class TaskDispatcher:
         self._kick_scheduled = False
         self._ticking = False
         self._loop_task: asyncio.Task | None = None
+        from .integrate import Integrator
+
+        self.integrator = Integrator(hub)  # luồng D: tự cô lập task con vào worktree + ghép về nhánh tích hợp
         hub.bus.add_listener(self._on_bus)
 
     # ------------------------------------------------------------------ infra
@@ -557,16 +560,12 @@ class TaskDispatcher:
     def _lock_block(self, t: dict[str, Any], agent_id: str, session_id: str | None, read_only: bool) -> str | None:
         if read_only or not self.hub.config.get("guard.repo_lock"):
             return None
-        from ..runs import _agent_read_only
+        from ..workspace import task_lock_target
 
-        ag = self.store.get_agent(agent_id) or {}
-        if ag and _agent_read_only(ag):
-            return None  # FR-RT-12: agent chỉ đọc không lấy khoá (giống RunManager._lock_key)
-        path, kind = self._workspace(t)
-        if path is None:
-            path, kind = ag.get("workspace_default"), "dir"
-        key = self.hub.runs.locks.key_for(path, kind) if path else None
-        if key and (self.hub.runs.locks.blocked_for(key, session_id) is not None or self.hub.runs.lock_pending(key, session_id)):
+        ag = self.store.get_agent(agent_id)
+        # B1: CÙNG hàm tính khoá với run (RunManager.lock_keys) — agent chỉ đọc, kind worktree, extra_write_roots, workspace_default
+        keys = self.hub.runs.lock_keys(task_lock_target(t), ag)[1]
+        if keys and (self.hub.runs.locks.blockers(keys, session_id) or self.hub.runs.lock_pending(keys, session_id)):
             return "workspace_locked"
         return None
 
@@ -578,12 +577,19 @@ class TaskDispatcher:
         try:
             self._reconcile_claims()
             self._reconcile_running()
+            self._reconcile_integration()
             self._promote()
             self._dispatch_triage()
             self._dispatch_review()
             self._dispatch_ready()
         finally:
             self._ticking = False
+
+    def _reconcile_integration(self) -> None:
+        try:
+            self.integrator.reconcile()
+        except Exception:  # pragma: no cover - lỗi ghép không được làm hỏng cả tick
+            log.exception("đối soát nhánh tích hợp lỗi")
 
     def _rows(self, sql: str, args: tuple = ()) -> list[dict[str, Any]]:
         return [self.store._row("tasks", r) for r in self.conn.execute(sql, args)]  # type: ignore[misc]
@@ -745,6 +751,17 @@ class TaskDispatcher:
                 reason = self.budget_block(agent_id, t.get("team_id"))
             retry = self.store.get_run(t["retry_from_run_id"]) if t.get("retry_from_run_id") else None
             resume = retry is not None and retry.get("outcome") in RESUMABLE and retry.get("started_at") and retry.get("agent_id") == agent_id
+            if reason is None and not resume:
+                # luồng D: tách task con vào worktree riêng ngay trước khi chạy (theo khoá THẬT lúc này); tổ tiên cô lập chưa ghép → chờ
+                reason = self.integrator.wait_reason(t)
+                if reason is None:
+                    cur = t
+                    iso = self.integrator.maybe_isolate(t, agent_id, lock_blocked=lambda: self._lock_block(cur, agent_id, None, False) is not None)
+                    if iso is not None and iso.get("status") == "blocked":  # cô lập bắt buộc mà thất bại → task bị chặn, không chạy
+                        self._refresh_root(iso)
+                        continue
+                    if iso is not None:
+                        t = iso
             if reason is None:
                 reason = self._lock_block(t, agent_id, retry["session_id"] if resume else None, read_only=False)
             if reason is None and self._capacity_left() <= 0:
@@ -957,6 +974,10 @@ class TaskDispatcher:
                               retry_from_run_id=run["id"] if oc in RESUMABLE else None)
 
     def _after_done(self, t: dict[str, Any]) -> None:
+        try:
+            self.integrator.on_done(t)  # luồng D: ghép task con cô lập / task merge TRƯỚC khi thăng task con và xét task gốc
+        except Exception:  # pragma: no cover - lỗi ghép bất ngờ: task gốc không xong được (gate) thay vì làm hỏng xử lý kết quả run
+            log.exception("ghép task %s vào nhánh tích hợp lỗi", t.get("id"))
         self._promote()
         self._refresh_root(t)
 
@@ -974,17 +995,47 @@ class TaskDispatcher:
                 self.tasks.set_status(rid, "blocked", reason=f"mọi task con ({len(every)}) đã bị huỷ — giao lại, đóng hoặc archive task gốc")
             return
         if subs and all(s["status"] == "done" for s in subs):
+            try:
+                gate = self.integrator.gate(root, subs)  # luồng D: mọi task con cô lập phải được ghép vào nhánh tích hợp trước
+            except Exception as e:  # lỗi bất ngờ khi ghép: chặn task gốc kèm lý do thay vì ném lại ở mỗi tick
+                log.exception("xét ghép nhánh tích hợp của task gốc %s lỗi", rid)
+                self.integrator._block_root(rid, f"ghép nhánh tích hợp lỗi ({type(e).__name__}: {str(e)[:200]}) — xem log hub, xử lý rồi "
+                                                 f"`cfharness task unblock {rid}`")
+                return
+            if gate is not None:
+                if gate[0] == "blocked":
+                    self.integrator._block_root(rid, gate[1])
+                elif root["status"] == "blocked":
+                    self.tasks.set_status(rid, "running", reason=gate[1])
+                return
+            try:
+                fin = self.integrator.finalize(root)
+            except Exception as e:
+                log.exception("hoàn tất nhánh tích hợp của task gốc %s lỗi", rid)
+                self.integrator._block_root(rid, f"hoàn tất nhánh tích hợp lỗi ({type(e).__name__}: {str(e)[:200]}) — xem log hub, xử lý rồi "
+                                                 f"`cfharness task unblock {rid}`")
+                return
             res = []
             for s in subs:
                 res.append({"task_id": s["id"], "key": s.get("plan_key"), "title": s["title"], "assignee": s.get("assignee_agent_id"),
                             "summary": s.get("result_summary"), "result": s.get("result_json")})
             leaves = [s for s in subs if not self.tasks.children(s["id"])]
             final = "\n\n".join((s.get("result_summary") or "") for s in leaves).strip()
-            self.tasks.set_status(rid, "done", reason="mọi task con đã done", result_summary=compose_root(subs),  # gộp Đã làm/Còn mở/Cần bạn của task con
-                                  result_json={"subtasks": res, "final": final})
+            rj: dict[str, Any] = {"subtasks": res, "final": final}
+            if fin is not None:
+                rj["integration"] = fin["result"]
+            self.tasks.set_status(rid, "done", reason="mọi task con đã done",  # gộp Đã làm/Còn mở/Cần bạn của task con (+ nhánh tích hợp)
+                                  result_summary=compose_root(subs, open_extra=(fin or {}).get("open_extra"), need_extra=(fin or {}).get("need_extra")),
+                                  result_json=rj)
             return
         blocked = [s for s in subs if s["status"] == "blocked"]
         if blocked and root["status"] != "blocked":
+            mf = (blocked[0].get("workspace") or {}).get("merge_for") if isinstance(blocked[0].get("workspace"), dict) else None
+            if mf:  # task merge (luồng D) bị chặn → nói rõ việc người phải làm
+                ws = blocked[0]["workspace"]
+                self.tasks.set_status(rid, "blocked", reason=f"task merge {blocked[0]['id']} (ghép việc của {mf} vào nhánh tích hợp) blocked: "
+                                      f"{blocked[0].get('block_reason')} — ghép tay trong {ws.get('path')} rồi `cfharness task unblock {rid}`")
+                return
             self.tasks.set_status(rid, "blocked", reason=f"task con {blocked[0]['id']} blocked: {blocked[0].get('block_reason')}")
         elif not blocked and root["status"] == "blocked":
             self.tasks.set_status(rid, "running", reason="task con hết blocked")
@@ -1021,8 +1072,8 @@ class TaskDispatcher:
         for s in subs:
             child = self.tasks.create(
                 {"team": t["team_id"], "title": s["title"], "body": s["body"], "assignee": s["assignee"], "role": s["role"],
-                 "parents": [ids[p] for p in s["parents"]], "workspace": t.get("workspace"), "overrides": t.get("overrides"), "priority": t.get("priority"),
-                 "origin_task_id": t["id"], "plan_key": s["key"], "decompose": False},
+                 "parents": [ids[p] for p in s["parents"]], "workspace": self._subtask_workspace(t, s), "overrides": t.get("overrides"),
+                 "priority": t.get("priority"), "origin_task_id": t["id"], "plan_key": s["key"], "decompose": False},
                 created_by=f"agent:{run['agent_id']}",
             )
             ids[s["key"]] = child["id"]
@@ -1035,6 +1086,38 @@ class TaskDispatcher:
             self.tasks.set_status(t["id"], "blocked", reason="lead không tạo task con nào")
             return
         self._refresh_root({"origin_task_id": t["id"]})  # task con tạo qua hub-self có thể đã xong trước khi lead kết thúc
+
+    def _subtask_workspace(self, t: dict[str, Any], s: dict[str, Any]) -> Any:
+        """Workspace của task con theo kế hoạch lead = workspace task gốc (hoặc mặc định của team). Subtask `isolate: true`
+        (PLAN_SCHEMA, §C docs/dev-notes/workspace-parallel.md) → ghi cờ `workspace.isolate = true` để luồng D tạo worktree riêng;
+        bản thân cờ này không đổi cách chạy. Workspace không phải mapping có `kind` → bỏ qua cờ (không có repo để tách)."""
+        from .integrate import strip_internal
+
+        ws = strip_internal(t.get("workspace"))  # trạng thái tích hợp của task gốc không đi theo task con
+        if not s.get("isolate"):
+            return ws
+        base = ws if ws is not None else self.teams.policies(t.get("team_id")).workspace
+        if not isinstance(base, dict) or not base.get("kind"):
+            return ws
+        return {**base, "isolate": True}
+
+    def _lead_worktree(self, t: dict[str, Any], wt: Any) -> dict[str, Any]:
+        """`worktree` của hub-self `task_create` (lead): chỉ trên repo của task gốc — `repo` bỏ trống = repo đó, khác repo → từ chối
+        (lead không mở worktree ở repo ngoài phạm vi việc của mình). Đường dẫn/nhánh do `ensure_worktree_meta` kiểm như mọi worktree."""
+        from ..workspace import git_root
+
+        if not isinstance(wt, dict) or not str(wt.get("branch") or "").strip():
+            raise HubError("worktree cần {branch, base?, path?}")
+        ws = t.get("workspace") if isinstance(t.get("workspace"), dict) else None
+        base = ws if ws is not None else self.teams.policies(t.get("team_id")).workspace if t.get("team_id") else None
+        meta = (base or {}).get("worktree") if isinstance(base, dict) else None
+        src = (meta or {}).get("repo") or (base or {}).get("path") if isinstance(base, dict) else None
+        root = git_root(str(src)) if src else None
+        if root is None:
+            raise HubError("worktree: workspace của task gốc không phải repo git — không tạo worktree được")
+        if wt.get("repo") and git_root(str(wt["repo"])) != root:
+            raise HubError(f"worktree: repo phải là repo của task gốc ({root})")
+        return {k: wt[k] for k in ("branch", "base", "path") if wt.get(k)} | {"repo": root}
 
     def _on_review(self, t: dict[str, Any], run: dict[str, Any]) -> None:
         oc = self._outcome(run)
@@ -1144,10 +1227,14 @@ class TaskDispatcher:
                 pt = self.tasks.row(p)
                 if pt.get("origin_task_id") != tid:
                     raise HubError(f"parent {p} không phải task con của {tid}")
-            child = self.tasks.create(
-                {"team": t["team_id"], "title": args.get("title"), "body": args.get("body") or "", "assignee": args.get("assignee"), "role": args.get("role"),
-                 "parents": parents, "workspace": t.get("workspace"), "overrides": t.get("overrides"), "origin_task_id": tid, "decompose": False},
-                created_by=author,
-            )
-            return {"task_id": child["id"], "status": child["status"]}
+            isolate = args.get("isolate")
+            if isolate is not None and not isinstance(isolate, bool):
+                raise HubError("isolate phải là true/false")
+            data = {"team": t["team_id"], "title": args.get("title"), "body": args.get("body") or "", "assignee": args.get("assignee"),
+                    "role": args.get("role"), "parents": parents, "workspace": self._subtask_workspace(t, {"isolate": bool(isolate)}),
+                    "overrides": t.get("overrides"), "origin_task_id": tid, "decompose": False}
+            if args.get("worktree") is not None:
+                data["worktree"] = self._lead_worktree(t, args["worktree"])
+            child = self.tasks.create(data, created_by=author)
+            return {"task_id": child["id"], "status": child["status"], "warnings": child.get("warnings") or []}
         raise HubError(f"tool hub-self không hỗ trợ: {op}")

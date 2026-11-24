@@ -12,7 +12,112 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ### Sửa lỗi
 - Không gian số (cổng cfharness): nhiều run ghi vào CÙNG một thư mục chung giờ chạy song song (trước đây run sau phải chờ run trước xong, kể cả khi sửa tệp khác nhau). Mỗi run vẫn có cây làm việc riêng; hai run cùng sửa một tệp → bản xung đột riêng, không ghi đè. Thay đổi một run vừa đẩy lên được kéo về cây của run kia và agent được báo là "run khác" sửa. Muốn chạy tuần tự như cũ: `cfharness config set filehub.lane.serialize_runs true`.
+
+---
+
+## v0.2.31 — 2026-11-24
+
+### Trang Điều phối mới: đổi tab tức thì, không gián đoạn (#200)
+- **`/manager` nay là trang Điều phối dựng lại bằng Preact.** Đổi qua lại luồng/hội thoại đã mở không tải lại trang và không nối lại luồng sự kiện: giữ nguyên chữ đang gõ (kể cả sau F5), tệp đính kèm và vị trí cuộn của từng tab. Đo trên hub demo: đổi sang tab đã mở ~210–310 ms → ~41 ms, mở tab lần đầu 50–130 ms.
+- **Chạy chữ mượt**: câu trả lời hiện markdown ngay khi đang gõ (bảng, code, danh sách; link lọc qua DOMPurify) rồi thay bằng đúng bản đã lưu khi xong — nội dung không đổi sau khi tải lại. Cuộn "dính đáy" chỉ bỏ khi chính bạn cuộn lên, có nút "Tin mới nhất"; hội thoại 2.000 tin mở ~50 ms, tin cũ vẽ dần khi cuộn lên, không nhảy bố cục. Mở/đóng panel xem tệp không làm lệch chỗ đang đọc.
+- **Duyệt và trả lời ngay trong hội thoại**: thẻ thao tác chờ duyệt có Cho phép một lần / Từ chối, trả lời câu hỏi không tải lại trang; kết quả hiện ngay, mạng lỗi thì trả về như cũ và bấm lại an toàn (không bị làm hai lần). Tin bạn gửi từ máy/tab khác hiện ngay ở mọi tab đang mở hội thoại đó. Dải cảnh báo khi ESTOP đang bật.
+- **Một luồng sự kiện cho cả trang** (`/sse/manager/v2`, ảnh chụp `/api/manager/snapshot`): mỗi sự kiện có id, nối lại (mất mạng, máy ngủ) không mất/không trùng tin, tự tải lại khi hở quá xa; trạng thái mọi luồng đẩy tới ngay thay cho hỏi lại mỗi 20 s. Hợp đồng: `docs/dev-notes/dieu-phoi-island.md`.
+- **Trang cũ cũng nhanh hơn** (vẫn mở được bằng `/manager?ui=old`, trình duyệt nhớ lựa chọn, `?ui=new` để quay lại): server chỉ vẽ phần lưới khi đổi tab, hàng tab cập nhật tại chỗ, chỉ làm mờ khi chờ quá 400 ms, "đã đọc" ghi bằng POST riêng, khung "đang trả lời" của lượt dài hiện đúng tool/checklist mới nhất.
+- **Web nhẹ hơn**: tệp tĩnh có phiên bản được cache hẳn, trang/JS nén gzip; chấm "đang chạy" và nút mic nhấp nháy không còn vẽ lại cả khung hình. Thư viện JS (Preact, htm, signals, streaming-markdown, DOMPurify) đóng gói sẵn, ghim phiên bản, không tải từ CDN.
+- RPC `events.query` nhận thêm `since`/`epoch`; event hub mới `manager.message` (tin người gửi cho điều phối viên). Hub demo: tin có `[demo]` cho câu trả lời chạy chữ ~100 token/s kèm tool, thẻ duyệt và câu hỏi.
+
+### Run và daemon ổn định hơn (#201)
+- **Run đã trả lời xong không còn bị tính quá giờ vì task nền**: khi một lệnh Bash chạy lâu bị Claude CLI chuyển sang chạy nền (vd `git fetch` treo vì mất mạng), CLI không thoát sau `result`, nên run bị giữ tới hạn `max_runtime_s` (30 phút) rồi ghi `timed_out` dù điều phối viên đã trả lời. Nay CLI im lặng quá `runtime.claude.exit_grace_s` (mặc định 60 s) sau `result` thì hub dừng tiến trình (gồm cả task nền) và giữ kết quả theo `result`.
+- **Daemon bị treo thì để lại dấu vết**: thread watchdog mới phát hiện event loop của daemon không phản hồi quá `perf.loop_stall_dump_s` (mặc định 15 s; 0 = tắt) và ghi stack mọi thread vào `logs/faults.log` ngay lúc đang treo (tối đa 3 lần mỗi lần treo), kèm dòng `loop.stall` / `loop.stall_end` trong hub.log. Trên Windows trước đây không có cách nào lấy stack (`daemon dump-stacks` chỉ có trên macOS/Linux).
+
+### Lưu ý khi cập nhật
+- Không có migration DB hay cấu hình phải sửa tay (hai setting mới `runtime.claude.exit_grace_s`, `perf.loop_stall_dump_s` có mặc định). Sau khi cập nhật, tải lại tab web đang mở để nhận giao diện mới.
+- Giao diện Điều phối cũ (`?ui=old`) sẽ bị gỡ ở bản phát hành sau.
+
+---
+
+## v0.2.30 — 2026-11-23
+
+### Điều phối: tin không còn lẫn giữa các luồng (#193, #192)
+- **Điều phối: tin của luồng này không còn hiện ở luồng khác.** Lượt nhịp không biết hội thoại gốc giờ chỉ báo/hỏi về Sảnh (hoặc trong chính luồng của việc), không đoán "cuộc người hoạt động gần nhất" ở luồng bất kỳ; áp dụng cả khi trả lời câu hỏi và khi lịch mất hội thoại chỉ định. Trang Điều phối không kéo thẻ hành động của hội thoại khác vào hội thoại đang mở, "Hành động gần đây" chỉ thêm thẻ đã qua bộ lọc, và chuyển luồng ngay sau khi gửi không còn làm hỏng nháp/URL của luồng mới. Script chỉ đọc `scripts/list_misrouted_notices.py` liệt kê tin cũ bị đoán sai.
+- **Trang Điều phối — "Hành động gần đây" đúng và theo luồng**: trước đây panel đọc 3.000 sự kiện CŨ NHẤT của điều phối viên (nên hiện việc từ cả tuần trước); nay đọc thẳng các thẻ hành động mới nhất, chỉ của luồng đang xem (Sảnh = hành động không gắn luồng). TUI `manager` cũng đọc thẻ hành động mới nhất.
+
+### Web và hub nhanh hơn, bớt khựng (#192, #196, #197, #195)
+- **Web/TUI bớt khựng khi hub có nhiều dữ liệu**: daemon chạy SQLite ngay trên vòng sự kiện, nên một truy vấn chậm làm đứng mọi RPC và luồng SSE (đổi tab, chữ chạy của trả lời khựng 0,2–3,7 s trên hub.db 1,5 GB). Thêm index cho bảng `runs` (migration v32), danh sách run không còn tải cột `diff` (patch chỉ đọc khi mở một run), chi phí hôm nay của `agent.list` gộp một truy vấn, đếm sự kiện học của `top` dùng index, trang Điều phối chỉ hỏi trạng thái của điều phối viên (RPC mới `tui.agent_state`). Đo trên bản sao DB thật: `run.list` 3,8 s → 5 ms, `hub.status` 55 → 3 ms.
+- **Truy vấn nặng không còn làm đứng cả hub**: các RPC chỉ đọc nặng (`run.list`, `events.query`, `task.list`, `learn.feed`, `learn.proposals`, báo cáo `report.*`, `approval.stats`, `audit.list|activity`, `system.list`) chạy trên luồng đọc riêng với kết nối SQLite chỉ đọc thay vì trên vòng sự kiện của daemon — trong lúc chúng chạy, RPC khác và luồng SSE (đổi tab, chữ chạy của trả lời) vẫn trôi. Đo trên bản sao hub.db 1,5 GB: vòng sự kiện bị chặn lâu nhất khi gọi `report.get` 1,2 s → ~20 ms, `learn.feed` 0,9 s → ~20 ms, `system.list` 2,6 s → ~40 ms; `hub.ping` chạy song song trả trong < 1 ms. Số đo mới `loop.lag` (độ trễ vòng sự kiện, trang `/perf` và `cfharness perf`) + cảnh báo `loop.lag` trong log khi vượt `perf.loop_lag_warn_ms` (mặc định 250 ms).
+- **Chuyển trang và đổi luồng trên web nhanh hơn**: trang Điều phối hỏi daemon đồng thời thay vì lần lượt ~15 lần; số trên menu (duyệt, câu hỏi, ESTOP) được nhớ 2 giây theo phiên nên chuyển tab liên tục không hỏi lại (bấm nút nào cũng làm mới ngay); web giữ lại kết nối tới daemon thay vì mở mới mỗi lần; daemon nhớ ngắn hạn chuỗi tiến trình cha khi kiểm quyền người (Windows tốn 20–35 ms mỗi lần). Hub demo: `/manager` ~65 → ~26–36 ms, đổi luồng ~68 → ~23–28 ms, `/runs` 7 → 3 RPC.
+- **Tab web ở nền không còn hỏi daemon**: các khung tự làm mới (Tổng quan mỗi 3 s, trạng thái điều phối viên mỗi 10 s, thanh run, cập nhật, chuyển hub, Slack chờ duyệt) ngừng gửi request khi tab bị ẩn và tải lại đúng một lần khi bạn quay về tab; cách hỏi dự phòng 15 s của bảng công việc (khi SSE mất) cũng vậy. Daemon phục vụ mọi request trên một vòng sự kiện nên tab nền để quên làm chậm cả người đang dùng.
+
+### Đo hiệu năng (#191)
+- **Đo hiệu năng — xem phần nào chậm** (bật sẵn, gần như không tốn): trang web mới **Hiệu năng** (`/perf`, menu Hệ thống) có bảng "chậm nhất" (p50/p95/max trong 5–60 phút) cho trình duyệt (tải trang, request htmx, chuyển tab/luồng, độ trễ SSE, long task), web (từng route) và RPC daemon (từng method); mỗi response web có header `Server-Timing` (devtools → Network → Timing: thời gian RPC, render); request chậm hơn `perf.slow_ms` (mặc định 1500 ms) ghi `http.slow` vào log web. Terminal: `cfharness perf`. Cấu hình `perf.enabled|slow_ms|window_min`. Chi tiết: `docs/dev-notes/perf-monitor.md`.
+
+### Agent làm song song trên cùng repo: khoá đúng, worktree tự động, tự ghép nhánh, khoá theo file (#194)
+Trước đây một agent sửa 1 file là cả repo (hoặc cả thư mục) bị khoá suốt run; đo trên một hub thật: ~10% lượt khởi chạy task phải chờ, ~38 giờ/4 tuần.
+- **Sửa lỗi khoá**: task `worktree` kiểu cũ không còn khoá repo chính (task "running" mà run nằm hàng đợi); khoá của session không còn run sống tự được nhả (kể cả sau khi daemon khởi động lại); run chờ duyệt quá `guard.lock_waiting_ttl_s` (mặc định 4 giờ) nhả khoá; `extra_write_roots` giờ cũng được khoá; thư mục không phải git: thư mục cha và con xung đột đúng; không còn `bypassPermissions` khi cwd là checkout chính.
+- **Lệnh mới** `cfharness workspace locks|unlock <path> [--force]` (chỉ người) và event `workspace.lock_acquired|lock_released|lock_blocked`.
+- **Vòng đời worktree**: task lưu metadata worktree (nhánh, base, trạng thái `node_modules`); tên thư mục không trùng; cảnh báo `core.longpaths`; `node_modules` dùng junction/symlink khi lockfile giống checkout chính (`workspace.deps`); gỡ worktree an toàn junction. Lệnh `cfharness worktree list|clean [--dry-run]`.
+- **Rule chung trong prompt**: hub chèn khối "Workspace rules" vào mọi run có quyền ghi (ưu tiên hơn SOUL cũ): ở worktree của hub hay ở checkout chính, không tự `git worktree add` trên checkout chính, không `git add -A`/`commit -a`. Tắt: `prompt.workspace_rules=false`.
+- **Tự cô lập & tự ghép** (`workspace.isolate` = `never|auto|always`, mặc định `auto`; ghi đè theo team/task; kế hoạch lead + `task_create` có `isolate`): subtask ghi cùng repo được hub tách worktree riêng trên nhánh `cfh/<root>/<task>`, xong thì tự merge vào `cfh/<root>/integration` (xung đột lockfile/khoảng trắng tự xử; còn lại tạo task "Merge:"; không được thì chặn task gốc, báo người). Hub KHÔNG push; chỉ fast-forward checkout chính khi bật `workspace.integrate.fast_forward`.
+- **Khoá theo file (tuỳ chọn)**: `guard.repo_lock: files` — nhiều agent sửa cùng repo, khác file; trùng file → agent đến sau bị từ chối ngay; file bị sửa ngoài → yêu cầu đọc lại; lệnh git/npm đổi trạng thái chung cần giữ repo độc quyền tạm thời; diff/revert của run chỉ gồm file nó đã giữ. Xem `cfharness workspace locks`.
+
+### Lưu ý khi cập nhật
+- Migration DB **v32** (thêm index cho bảng `runs`) tự chạy khi daemon khởi động; trên hub.db lớn (~1,5 GB) lần khởi động đầu có thể lâu hơn vài giây.
+- Daemon cũ + web mới vẫn chạy (trang Điều phối tự quay về `tui.snapshot` khi daemon chưa có `tui.agent_state`), nhưng nên khởi động lại cả daemon lẫn web sau khi cập nhật để có đủ thay đổi.
+- Muốn xem lại tin cũ bị đoán sai hội thoại trước bản này: `uv run python scripts/list_misrouted_notices.py --all` (chỉ đọc, không sửa dữ liệu).
+- Migration DB **v33** (bảng `file_leases`, #194). Mặc định hành vi khoá giữ như cũ (`guard.repo_lock: repo`); `workspace.isolate: auto` chỉ tác động subtask của task gốc.
+- Worktree cũ trong `_wt` không tự xoá: xem `cfharness worktree list`, dọn bằng `cfharness worktree clean`.
+- Chi tiết thiết kế: `docs/dev-notes/workspace-parallel.md`.
+
+---
+
+## v0.2.29 — 2026-11-22
+
+### Super Admin Console — quản trị mọi user, hub, tên miền từ `superadmin.<miền>` (#175, #177–#187)
+- **Tiến trình mới `cfharness admind`** (root, LaunchDaemon) + **web SAC** (`cfharness superadmin serve`, user hệ thống `_cfh_sac`): đăng nhập 2 lớp (Cloudflare Access + mật khẩu/TOTP), vai trò Super Admin / Operator / Auditor / Team Lead, step-up TOTP cho thao tác quan trọng, Super Admin thứ hai duyệt thao tác tới hạn, nhật ký quản trị chuỗi băm.
+- **Người dùng & hub**: nhập hub có sẵn, tạo user mới bằng wizard (thay `setup-hub-user.sh`, chạy từng bước, thử lại được), tạm khoá / mở khoá / thu hồi / khôi phục / xoá hẳn có sao lưu, khởi động lại / chẩn đoán / xem log / cập nhật (từng hub, hàng loạt, theo đợt), cấp lại TOTP, gỡ khoá đăng nhập, nhập CSV, hồ sơ 360°.
+- **Tên miền**: tạo/thu hồi/đổi tên DNS qua API Cloudflare đúng zone + ingress tunnel có kiểm và tự quay lại khi lỗi, kiểm sức khoẻ 10 phút, phát hiện lệch.
+- **Giám sát**: tổng quan, cảnh báo (gửi Telegram/Slack/email của quản trị), ESTOP toàn máy/user/nhóm/team (có hẹn tự gỡ), tài nguyên máy.
+- **Báo cáo hằng ngày** (hub xuất lúc 23:59, gửi 08:00) + tuần/tháng; **Team user**: bảng việc, giao việc vào hub thành viên, Nhận/Từ chối/Nộp, duyệt/trả lại.
+- **Chính sách** theo máy/mặc định/nhóm/team/user có phiên bản, mô phỏng, rollback; **kho tài khoản Claude** gán hàng loạt, xoay token.
+- Tài liệu: `docs/dev-notes/superadmin.md` (triển khai), `docs/acceptance/superadmin.md` (nghiệm thu).
+
+### Hub: ẩn quản trị với người dùng thường, việc được giao, báo cáo ngày (#181, #183)
+- Người không thuộc nhóm quản trị **không còn thấy** "Tổng quan máy", "Người dùng máy", "Quản trị máy" (trang trả 404), lệnh `cfharness admin` và RPC `admin.*`. ESTOP do quản trị bật chỉ hiện "Hub đang tạm dừng — liên hệ quản trị" (không mã lý do).
+- Trang **Việc được giao** (`/team-inbox`) khi máy có Team user: Nhận (giao cho agent/điều phối viên), Từ chối kèm lý do, Nộp kết quả. Tin Telegram/Slack khi có việc mới.
+- `cfharness web unlock-login`: gỡ khoá đăng nhập sai mà không khởi động lại web.
+- Hub có thư mục riêng ở `/Users/Shared/cfharness/status/<u>/` xuất thêm `profile.json` và `report/<u>/<ngày>.json` (mức chi tiết việc chỉ khi quản trị bật theo quy định nội bộ).
+
+### Xem file ngay cạnh cuộc trò chuyện (panel trượt, #176)
+- Bấm **Xem** ở file agent đã đọc/ghi giờ mở **panel trượt từ bên phải** (giống claude.ai) thay vì tab mới — chat / diễn biến lượt chạy vẫn ở bên trái. Đóng bằng × hoặc Esc; nút ↗ hoặc Ctrl/⌘+bấm để mở tab riêng như trước. Trên điện thoại panel phủ toàn màn.
+- File **Markdown** (`.md`) hiện bản **đã trình bày đẹp** (tiêu đề, bảng, khối mã, checklist); nút **Mã nguồn** để xem lại mã thô có số dòng. Lựa chọn được nhớ cho lần sau.
+
+### Sửa lỗi (#188)
+- Super Admin: giao việc Team không còn lỗi quyền ghi hộp thư khi admind chạy không phải root (máy dev, CI); admind chạy root như bình thường thì không đổi.
+
+### Lưu ý khi cập nhật
+- Trang "Quản trị máy" (`/machine`) phía user mặc định **ẩn**; quản trị bật lại bằng công tắc minh bạch trên SAC (`visibility.transparency`).
+- Muốn dùng SAC: làm theo `docs/dev-notes/superadmin.md` §"Triển khai" (cần sudo trên máy chủ). Không cài admind thì hub vẫn chạy như cũ.
+
+---
+
+## v0.2.28 — 2026-11-21
+
+### Sửa lỗi (#173)
 - Cập nhật trên macOS (launchd) không còn báo nhầm "khởi động lại daemon lỗi (mã 1)" khi daemon mới khởi động chậm vài giây: lệnh chờ daemon giờ thử lại khi daemon chưa kịp trả lời thay vì thoát lỗi.
+
+### Gỡ OAuth + proxy MCP do hub tự giữ — OAuth MCP từ nay do `claude` giữ theo tài khoản (`docs/dev-notes/plan-mcp-claude-native.md` PR4 giai đoạn B, #174)
+- Hub không còn tự đăng nhập OAuth cho MCP server, không làm mới token, không chèn `Authorization: Bearer` vào cấu hình MCP của run và không chạy proxy loopback nữa. Server cần đăng nhập OAuth thêm vào claude theo tài khoản: Cài đặt › Tài khoản Claude › **Thêm MCP** (hoặc `cfharness mcp claude add <tên> --account <id> --url <url>` rồi `cfharness mcp claude login <tên> --account <id>`). Trang **Danh mục MCP** với server cần OAuth chỉ hướng sang đó, không cài nguồn hub nữa; `cfharness mcp add --oauth` và ô "Đăng nhập OAuth" ở trang MCP báo lỗi hướng dẫn.
+- `cfharness mcp login|logout`, nút **Kết nối / Ngắt kết nối** và RPC `mcp.oauth_*` đã gỡ — trong bản này chúng chỉ trả lỗi hướng dẫn chuyển sang claude.
+- Server OAuth kiểu cũ (nguồn hub, `auth: oauth`) còn trong registry: trang MCP hiện nhãn **cần chuyển sang claude** kèm form **Chuyển sang claude**; run của agent gán server đó bị từ chối trước khi chạy với lỗi nêu tên server và lệnh chuyển (event `mcp.unavailable{status: needs_migration}`); `cfharness hub doctor` báo lỗi; daemon ghi một dòng cảnh báo lúc khởi động. Hub không tự xoá dòng hay token nào.
+- Không đổi: MCP stdio và MCP http dùng header/secret tĩnh (nguồn hub) chạy như cũ.
+
+### MCP do `claude` quản lý: che secret + đăng ký trên web (#174)
+- Bảo mật: giá trị header/env/tham số/mật khẩu trong url của MCP do `claude` quản lý (`.claude.json` của cấu hình mặc định và mọi tài khoản, `remote-settings.json`) nay được che theo giá trị ở log, event, transcript run — kể cả khi server MCP in lại header trong thông báo lỗi; nạp lúc daemon khởi động và mỗi lần run bắt đầu (đọc lại khi file đổi).
+- Web: ở Cài đặt › Tài khoản Claude › MCP của tài khoản, server có trong cấu hình claude mà hub chưa đăng ký có nút **Đăng ký cho hub** (tuỳ chọn **Tin cậy**, có xác nhận); server trỏ về chính hub không đăng ký được. Form agent gắn nhãn `claude` cho MCP nguồn claude.
+
+### Lưu ý khi cập nhật
+- Server MCP OAuth kiểu cũ **ngừng chạy** (agent gán nó bị từ chối) tới khi chuyển sang claude. Xem server cần chuyển: `cfharness hub doctor` (mục "MCP OAuth do hub giữ") hoặc trang MCP. Chuyển từng server: `cfharness mcp migrate-to-claude <tên> --account <id>` (web: trang MCP của server → **Chuyển sang claude**), rồi đăng nhập ở hàng tài khoản trong Cài đặt — hub giữ nguyên trust, tool chặn/luôn hỏi duyệt, nhãn tool và agent đã gán; token OAuth cũ bị xoá sau khi đăng nhập claude thành công. Không dùng server nữa: `cfharness mcp rm <tên>`. Khoá cấu hình `mcp.oauth_proxy.*` và `mcp_client.oauth_callback_port` không còn tác dụng (config.yaml còn các khoá này vẫn đọc bình thường, có thể xoá).
+- Trên hub có server OAuth kiểu cũ: vào trang MCP của server đó, bấm **Chuyển sang claude**, chọn tài khoản, rồi đăng nhập ở Cài đặt › Tài khoản Claude › MCP của tài khoản (hoặc `cfharness mcp migrate-to-claude <tên> --account <id>`).
 
 ---
 

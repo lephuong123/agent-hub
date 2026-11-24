@@ -81,7 +81,11 @@ async def test_unknown_voice_value_ignored(env):
 async def test_web_voice_header_and_controls(menv):
     await menv.login()
     await designate(menv)
+    # island (mặc định): nút giọng nói do composer vẽ phía client (giữ đúng id) — trang phải nạp voice.js + cho phép micro
     r = await menv.client.get("/manager")
+    assert r.status_code == 200 and 'id="coord"' in r.text and "/static/voice.js" in r.text
+    assert "microphone=(self)" in r.headers["permissions-policy"]
+    r = await menv.client.get("/manager?ui=old")  # trang cũ (lối thoát một bản phát hành)
     assert r.status_code == 200
     pp = r.headers["permissions-policy"]
     assert "microphone=(self)" in pp and "camera=()" in pp

@@ -1,4 +1,4 @@
-"""RPC của M3 trên daemon: `team.*`, `task.*`, `taskself.call` (hub-self MCP), `run.revert|diff`, `workspace.locks`,
+"""RPC của M3 trên daemon: `team.*`, `task.*`, `taskself.call` (hub-self MCP), `run.revert|diff`, `workspace.locks|unlock`,
 `report.*`, `agent.clone|export|import`, `mcp.team_run`, `mcp.task_events`; `estop.set` nhận thêm `team`.
 
 `register_rpc(daemon)` gọi TRƯỚC `mcp_server.rpc.register_rpc` (để method thay đổi trạng thái được bọc audit —
@@ -202,6 +202,16 @@ class OrchestrationRpc:
                 out["patch"] = Path(diff["patch_path"]).read_text(encoding="utf-8")
         return out
 
+    def workspace_leases(self, p: dict[str, Any]) -> dict[str, Any]:
+        """Chế độ khoá + khoá repo CHIA SẺ + lease theo file (luồng E, `guard.repo_lock: files`) — chỉ đọc. Dọn lease/khoá của session
+        không còn run sống trước khi trả."""
+        locks = self.hub.runs.locks
+        leases = getattr(locks, "leases", None)
+        locks.sweep()
+        if leases is not None:
+            leases.sweep()
+        return {"mode": locks.mode(), "shared": locks.list_shared(), "leases": leases.list() if leases is not None else []}
+
     def run_revert(self, p: dict[str, Any]) -> Any:
         """`cfharness run revert <run>` (FR-RT-12): áp ngược diff của run, chỉ khi file không bị sửa tiếp.
         Run lane (diff kind=lane): hoàn tác TRÊN Không gian số bằng phiên bản/thùng rác (`LaneService.revert_run`) — trả coroutine
@@ -229,11 +239,16 @@ class OrchestrationRpc:
         if busy:
             raise Conflict(f"session của run còn đang chạy (run {busy[0]}, {busy[1]}) — dừng trước khi revert")
         key = run.get("workspace_key")
+        others: list[str] | None = None
         if key:
-            holder = self.hub.runs.locks.holder(key)
+            holder = self.hub.runs.locks.holder(key)  # người giữ ĐỘC QUYỀN (chế độ repo); người giữ chia sẻ (files) không chặn cả repo
             if holder and holder.get("session_id") != run.get("session_id"):
                 raise Conflict(f"repo {key} đang bị run {holder.get('run_id')} khoá ghi — chờ run đó xong")
-        res = revert(diff, self.hub.runs.checkpoint_dir(run["id"]), dry_run=bool(p.get("dry_run")))
+        if diff.get("scope") == "leases":  # luồng E (B7): diff chỉ gồm file run đã lease; không hoàn tác file session khác đang lease
+            leases = getattr(self.hub.runs.locks, "leases", None)
+            rk = diff.get("root") or key  # gốc checkpoint = khoá repo (git_root, realpath)
+            others = [r["rel"] for r in leases.others(str(rk), run.get("session_id")) if r["path"]] if leases is not None and rk else []
+        res = revert(diff, self.hub.runs.checkpoint_dir(run["id"]), dry_run=bool(p.get("dry_run")), leased_by_others=others)
         if not p.get("dry_run"):
             self.hub.store.update_run(run["id"], {"reverted_at": now_iso()})
             ev = make_event("run.reverted", run["agent_id"], {"files": res["reverted"], "warnings": res["warnings"]}, run_id=run["id"])
@@ -335,6 +350,8 @@ class OrchestrationRpc:
             "run.diff": self.run_diff,
             "run.revert": self.run_revert,
             "workspace.locks": lambda p: h.runs.locks.list(),
+            "workspace.leases": self.workspace_leases,
+            "workspace.unlock": lambda p: h.runs.unlock(path=p.get("path"), key=p.get("key"), force=bool(p.get("force"))),
             "report.get": self.report_get,
             "report.cost": self.report_cost,
             "report.hangs": self.report_hangs,

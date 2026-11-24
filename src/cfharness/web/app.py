@@ -14,6 +14,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import mimetypes
 import re
 import time
 from dataclasses import dataclass, field
@@ -28,6 +29,7 @@ from starlette.exceptions import HTTPException
 from starlette.requests import Request, cookie_parser
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
@@ -39,6 +41,7 @@ from ..rpc import METHOD_NOT_FOUND, DaemonUnavailable, RpcError
 from ..tui.client import AsyncHubClient, subscribe
 from ..tui.model import STATUS_ORDER
 from . import desktop as _desktop
+from . import perf_pages as _perf_pages
 from . import present as P
 from . import settings_schema as _settings
 from .public import LoginLimiter, client_ip, public_hosts
@@ -140,6 +143,8 @@ class WebState:
     # directory hub (C5, web/desktop.py): giới hạn lần sai token + trần lần trả danh mục — chỉ RAM
     dir_limiter: Any = field(default_factory=lambda: _desktop.directory_limiter())
     dir_window: Any = field(default_factory=lambda: _desktop.SuccessWindow())
+    perf: _perf_pages.WebPerf = field(default_factory=_perf_pages.WebPerf)  # đo hiệu năng (perf.py, web/perf_pages.py) — chỉ RAM
+    badge_gen: int = 0  # thế hệ cache số trên menu (`nav_badge`): POST của người tăng → mọi phiên hỏi lại daemon
 
     @property
     def public_hosts(self) -> set[str]:
@@ -183,16 +188,41 @@ class WebState:
         return out
 
 
+# ES module `.mjs` (static/vendor — island Điều phối): Windows thường đăng ký `.mjs` là text/plain → trình duyệt từ chối module (MIME chặt +
+# nosniff). Ghi đè bảng MIME của tiến trình trước khi StaticFiles đoán kiểu.
+mimetypes.add_type("text/javascript", ".mjs")
+STATIC_IMMUTABLE = b"public, max-age=31536000, immutable"  # tệp tĩnh có phiên bản trong URL (`static_url`)
+GZIP_MIN = 1024  # byte — response nhỏ hơn không nén (SSE `text/event-stream` không bao giờ nén: GZipMiddleware tự loại trừ)
+
+
+class GzipMiddleware:
+    """Nén gzip response (HTML/JS/CSS/JSON) — trừ luồng SSE (`/sse/`, mọi bản starlette: bản cũ chưa tự loại `text/event-stream`) và
+    tải gói hub (đã nén, rất lớn). ASGI thuần, đặt TRONG Guard (header bảo mật/Cache-Control vẫn được gắn)."""
+
+    SKIP = ("/sse/", "/hub-transfer")
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+        self.gz = GZipMiddleware(app, minimum_size=GZIP_MIN)
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope["type"] == "http" and not str(scope.get("path") or "").startswith(self.SKIP):
+            await self.gz(scope, receive, send)
+        else:
+            await self.app(scope, receive, send)
+
+
 class GuardMiddleware:
     """ASGI thuần (không đệm response → SSE chạy được): kiểm Host, gắn phiên, chặn khi chưa đăng nhập, thêm header bảo mật."""
 
-    # callback OAuth: state là lớp bảo vệ (web/mcp_oauth.py); well-known: app desktop nhận diện hub (chỉ {kind, schema, app_api})
+    # well-known: app desktop nhận diện hub (chỉ {kind, schema, app_api}) — callback OAuth MCP của hub đã gỡ (v0.2.28)
     # directory: công khai nhưng có token (C5, hub admin — web/desktop.directory: sai → 404, giới hạn tốc độ)
-    PUBLIC = ("/login", "/enroll", "/favicon.ico", "/mcp/oauth/callback", "/.well-known/cfharness.json",
+    PUBLIC = ("/login", "/enroll", "/favicon.ico", "/.well-known/cfharness.json",
               "/.well-known/cfharness-directory")
     # JSON do trang gọi bằng fetch (polling): chưa đăng nhập → 401 (không chuyển hướng), không gia hạn phiên — như /sse/, /partials/
     # `/app/` = API cho app desktop (web/desktop.py: /app/badge) — 401 dạng JSON
-    API = ("/office/state", "/office/approval/", "/office/question/", "/office/chat", "/office/do/", "/app/")  # tiền tố
+    # `/api/manager/` = hợp đồng v2 trang Điều phối (manager_feed.py) — island đọc JSON, hết phiên → 401 rồi tự tải lại trang
+    API = ("/office/state", "/office/approval/", "/office/question/", "/office/chat", "/office/do/", "/app/", "/api/manager/")  # tiền tố
 
     def __init__(self, app: Any, state: WebState) -> None:
         self.app = app
@@ -206,6 +236,7 @@ class GuardMiddleware:
         path = scope.get("path") or "/"
         host = headers.get("host", "").lower()
         hsts = self.state.is_public(host)  # web public chỉ https (tunnel TLS) → trình duyệt luôn dùng https cho host này
+        versioned = path.startswith("/static/") and b"v=" in (scope.get("query_string") or b"")
 
         async def send_headers(msg: dict) -> None:
             if msg["type"] == "http.response.start":
@@ -215,8 +246,12 @@ class GuardMiddleware:
                 if hsts and b"strict-transport-security" not in names:
                     h.append((b"strict-transport-security", b"max-age=31536000"))
                 if b"cache-control" not in names:
-                    # tĩnh: luôn hỏi lại server (ETag → 304) để bản cập nhật có hiệu lực ngay; còn lại: không lưu
-                    h.append((b"cache-control", b"no-cache" if path.startswith("/static/") else b"no-store"))
+                    # tĩnh có `?v=<mtime>` (static_url): đổi tệp là đổi URL → cache vĩnh viễn, không hỏi lại. Tĩnh không phiên bản: luôn
+                    # hỏi lại server (ETag → 304) để bản cập nhật có hiệu lực ngay. Còn lại: không lưu.
+                    if path.startswith("/static/"):
+                        h.append((b"cache-control", STATIC_IMMUTABLE if versioned else b"no-cache"))
+                    else:
+                        h.append((b"cache-control", b"no-store"))
                 msg = {**msg, "headers": h}
             await send(msg)
 
@@ -235,7 +270,7 @@ class GuardMiddleware:
             _desktop.note_app_ua(headers.get("user-agent", ""))  # C7: chỉ ghi log, không đổi giao diện
         sid = cookie_parser(headers.get("cookie", "")).get(self.state.cookie)
         # polling/SSE không gia hạn phiên — chỉ thao tác của người (trang, POST) mới gia hạn
-        poll = path.startswith(("/sse/", "/partials/")) or path.startswith(self.API)
+        poll = path.startswith(("/sse/", "/partials/")) or path.startswith(self.API) or path == _perf_pages.BEACON_PATH  # beacon không gia hạn
         # GET JSON của cảnh 3D không gia hạn; POST /office/do (thao tác của người) thì có
         sess = self.state.auth.get(sid, touch=not poll or (path.startswith(self.API) and scope.get("method") != "GET"))
         scope.setdefault("state", {})["session"] = sess
@@ -250,10 +285,17 @@ class GuardMiddleware:
             await resp(scope, receive, send_headers)
             return
         tok = WEB_CLIENT.set(web_client_meta(self.state, scope, headers, host, sid if sess is not None else None, sess))
+        # thao tác của người (POST…) có thể đổi số duyệt/câu hỏi/ESTOP → bỏ cache số trên menu, trước VÀ sau khi xử lý (trang GET chạy
+        # song song lúc POST đang xử lý không giữ số cũ). Beacon hiệu năng không đổi gì.
+        mutating = scope.get("method") not in ("GET", "HEAD", "OPTIONS") and path != _perf_pages.BEACON_PATH
+        if mutating:
+            invalidate_nav_badge(self.state)
         try:
             await self.app(scope, receive, send_headers)
         finally:
             WEB_CLIENT.reset(tok)
+            if mutating:
+                invalidate_nav_badge(self.state)
 
 
 # L3 (plan-logging.md A2): metadata client của yêu cầu đang xử lý → `params._client` của mọi RPC (AsyncHubClient cred="web"). CHỈ băm
@@ -372,6 +414,17 @@ async def rpc(request: Request, method: str, params: dict[str, Any] | None = Non
     return res
 
 
+async def gather_ordered(*aws: Awaitable[Any]) -> list[Any]:
+    """Chạy các lời gọi ĐỘC LẬP đồng thời (asyncio.gather) nhưng giữ ngữ nghĩa lỗi của bản tuần tự: chờ TẤT CẢ xong rồi ném lỗi của
+    lời gọi đầu tiên (theo thứ tự đối số) bị lỗi — không phải lỗi nào tới trước. Mỗi task chép contextvar của request → `perf.CURRENT`
+    (cùng một `ReqTiming`) và `WEB_CLIENT` vẫn đúng; `rpc;dur` trong Server-Timing khi đó là TỔNG thời gian các RPC (có thể > `app`)."""
+    res = await asyncio.gather(*aws, return_exceptions=True)
+    for r in res:
+        if isinstance(r, BaseException):
+            raise r
+    return list(res)
+
+
 def err_text(e: Exception) -> str:
     if isinstance(e, RpcError):
         msg = e.message
@@ -389,25 +442,59 @@ def err_text(e: Exception) -> str:
     return str(e)
 
 
+NAV_BADGE_TTL_S = 2.0  # chuyển tab liên tục không hỏi lại daemon; số đếm/ESTOP trễ tối đa 2 s (POST của người → làm mới ngay)
+NAV_BADGE_KEY = "_nav_badge"
+
+
+async def _nav_badge_core(request: Request) -> dict[str, Any]:
+    """approval.list + estop.get + question.list + hub.frozen — 4 lời gọi độc lập, chạy đồng thời. Lỗi (RpcError/daemon dừng/OSError)
+    của một trong ba cái đầu → `{"down": True}` như trước; `hub.frozen` thiếu (daemon cũ) → None."""
+
+    async def _frozen() -> Any:
+        try:  # chuyển nhà (hub_freeze.py): banner "đã chuyển sang máy khác" — daemon cũ chưa có method thì bỏ qua
+            return ((await rpc(request, "hub.frozen")) or {}).get("migrated_to")
+        except RpcError:
+            return None
+
+    try:
+        pend, es, qs, migrated = await gather_ordered(rpc(request, "approval.list", {"limit": 500}), rpc(request, "estop.get"),
+                                                      questions(request, "open"), _frozen())
+    except (RpcError, DaemonUnavailable, OSError):
+        return {"down": True}
+    return {"approvals": len(pend or []), "waiting_human": sum(1 for a in pend or [] if a.get("status") == "waiting_human"),
+            "estop": bool((es or {}).get("on")), "admin_estop": bool((es or {}).get("admin")), "questions": len(qs),
+            "migrated_to": migrated}
+
+
+async def nav_badge(request: Request, sess: Session) -> dict[str, Any]:
+    """Số trên menu cho mọi trang. Cache NAV_BADGE_TTL_S theo PHIÊN (`Session.extra`, chỉ RAM — phiên khác không dùng chung) và theo
+    `WebState.badge_gen` (mọi POST của người tăng → bỏ cache, xem GuardMiddleware). Không cache trạng thái "daemon dừng" (lên lại là
+    thấy ngay). Mục admin/hộp việc chỉ hỏi khi daemon chạy (chúng tự cache 60 s / 30 s)."""
+    st = ws(request)
+    now = time.monotonic()
+    hit = sess.extra.get(NAV_BADGE_KEY)
+    if hit and hit[1] == st.badge_gen and now - hit[0] < NAV_BADGE_TTL_S:
+        return dict(hit[2])
+    gen = st.badge_gen
+    badge = await _nav_badge_core(request)
+    if badge.get("down"):
+        sess.extra.pop(NAV_BADGE_KEY, None)
+        return badge
+    adm, inbox = await gather_ordered(_admin_pages.nav_badges(request), _inbox_pages.badge(request))
+    badge.update(adm)
+    badge.update(inbox)
+    sess.extra[NAV_BADGE_KEY] = (now, gen, dict(badge))
+    return badge
+
+
+def invalidate_nav_badge(state: "WebState") -> None:
+    state.badge_gen += 1
+
+
 async def render(request: Request, name: str, ctx: dict[str, Any] | None = None, status: int = 200) -> Response:
     st = ws(request)
     sess = session_of(request)
-    badge: dict[str, Any] = {}
-    if sess is not None:
-        try:
-            pend = await rpc(request, "approval.list", {"limit": 500})
-            es = await rpc(request, "estop.get")
-            badge = {"approvals": len(pend or []), "waiting_human": sum(1 for a in pend or [] if a.get("status") == "waiting_human"),
-                     "estop": bool((es or {}).get("on")), "admin_estop": bool((es or {}).get("admin")),
-                     "questions": len(await questions(request, "open"))}
-            try:  # chuyển nhà (hub_freeze.py): banner "đã chuyển sang máy khác" — daemon cũ chưa có method thì bỏ qua
-                badge["migrated_to"] = ((await rpc(request, "hub.frozen")) or {}).get("migrated_to")
-            except RpcError:
-                badge["migrated_to"] = None
-        except (RpcError, DaemonUnavailable, OSError):
-            badge = {"down": True}
-        if not badge.get("down"):
-            badge.update(await _admin_pages.nav_badges(request))
+    badge: dict[str, Any] = await nav_badge(request, sess) if sess is not None else {}
     base = {"csrf": sess.csrf if sess else "", "flashes": sess.pop_flashes() if sess else [], "badge": badge, "nav": "", "htmx": HTMX,
             "path": request.url.path}
     return st.templates.TemplateResponse(request, name, {**base, **(ctx or {})}, status_code=status)
@@ -495,6 +582,24 @@ def _ua_label(request: Request) -> str:
     return ua_label(_ua(request))
 
 
+UNLOCK_FILE = "web-unlock"  # `cfharness web unlock-login` chạm file này (ACC-02) → web xoá khoá đăng nhập sai ở lần thử kế tiếp
+
+
+def unlock_path(paths: HubPaths) -> Path:
+    return paths.home / "auth" / UNLOCK_FILE
+
+
+def _maybe_unlock(st: Any) -> None:
+    try:
+        m = unlock_path(st.paths).stat().st_mtime
+    except (OSError, AttributeError):
+        return
+    if m > float(getattr(st, "_unlock_seen", 0.0)):
+        st._unlock_seen = m
+        st.limiter = LoginLimiter(**{k: getattr(st.limiter, k) for k in ("ip_max_failures", "global_max_failures", "window_s", "lockout_s",
+                                                                           "day_max_failures", "day_lockout_s")}, clock=st.limiter.clock)
+
+
 def _lock_text(left: float) -> str:
     return f"Đăng nhập tạm khoá do nhập sai quá nhiều lần — thử lại sau {max(1, int(left // 60) + 1)} phút."
 
@@ -503,6 +608,7 @@ async def _code_attempt(request: Request, check: Callable[[], bool], method: str
     """Một lần thử mã TOTP qua bộ giới hạn tốc độ → (đúng?, lỗi hiển thị, mã HTTP)."""
     st = ws(request)
     ip = _ip(request)
+    _maybe_unlock(st)
     lk = st.limiter.locked(ip)
     if lk is not None:
         await _audit_login(request, "web.login_failed", {"ip": ip, "method": method, "reason": f"locked_{lk[1]}"})
@@ -1586,8 +1692,8 @@ ACTIONS: dict[str, Action] = {
     "golden_suggestion_reject": Action("golden.suggestion_reject", lambda f: {"id": _req(f, "id")}, lambda r, f: f"Đã bỏ đề xuất {f.get('id')}"),
     "digest_run": Action("digest.run", lambda f: {"no_send": True}, "Đã tạo bản tin học"),
     # ---- MCP
-    "mcp_add": Action("mcp.add", lambda f: {"config": _mcp_config(f), "probe": not f.get("oauth")}, lambda r, f: _mcp_ok(r),
-                      goto=lambda r, f: f"/mcp/{(r or {}).get('name')}" if f.get("oauth") else "/mcp", danger=True,
+    "mcp_add": Action("mcp.add", lambda f: {"config": _mcp_config(f), "probe": True}, lambda r, f: _mcp_ok(r),
+                      goto=lambda r, f: "/mcp", danger=True,
                       confirm=lambda f: _mcp_confirm(f)),
     "mcp_probe": Action("mcp.probe", lambda f: {"name": _req(f, "name")}, lambda r, f: _probe_msg(r)),
     "mcp_remove": Action("mcp.remove", lambda f: {"name": _req(f, "name"), "force": f.get("force") == "1"}, lambda r, f: f"Đã xoá MCP {f.get('name')} (khôi phục được)",
@@ -1642,9 +1748,7 @@ def _mcp_config(f: FormData) -> dict[str, Any]:
         parts = shlex.split(_req(f, "command", "lệnh chạy"))
         cfg["command"], cfg["args"] = parts[0], parts[1:]
     else:
-        cfg["url"] = _req(f, "url", "URL")
-        if f.get("oauth"):
-            cfg["auth"] = {"type": "oauth"}  # đăng nhập bằng nút Kết nối ở trang server (web/mcp_oauth.py)
+        cfg["url"] = _req(f, "url", "URL")  # server cần OAuth: thêm vào claude theo tài khoản (Cài đặt → Tài khoản Claude), không ở đây
     env: dict[str, str] = {}
     for line in str(f.get("env") or "").splitlines():
         if "=" in line:
@@ -1808,7 +1912,9 @@ def _sse(obj: dict[str, Any]) -> str:
     return f"data: {data}\n\n"
 
 
-async def _stream(request: Request, params: dict[str, Any], convert: Callable[[dict[str, Any]], list[dict[str, Any]]]) -> AsyncIterator[str]:
+async def _stream(request: Request, params: dict[str, Any], convert: Callable[[dict[str, Any]], list[dict[str, Any]]], *,
+                  stamp: bool = False) -> AsyncIterator[str]:
+    """`stamp`: gắn `ets` (ts của event, ISO) vào message CUỐI của mỗi event → static/perf.js đo độ trễ giao event (perf-monitor.md)."""
     st = ws(request)
     q: asyncio.Queue = asyncio.Queue(maxsize=20_000)
     sub = subscribe(st.client, params)
@@ -1844,7 +1950,10 @@ async def _stream(request: Request, params: dict[str, Any], convert: Callable[[d
             if "end" in msg:
                 yield _sse({"t": "end", "reason": (msg["end"] or {}).get("reason") or "closed"})
                 break
-            for out in convert(msg):
+            outs = convert(msg)
+            if stamp and outs and isinstance(outs[-1], dict) and isinstance(msg.get("ts"), str):
+                outs[-1] = {**outs[-1], "ets": msg["ts"]}
+            for out in outs:
                 yield _sse(out)
     finally:
         sub.close()
@@ -1964,7 +2073,7 @@ async def sse_run(request: Request) -> Response:
         except RpcError:
             evs = []
         prime = [e for e in evs if not (str(e.get("epoch")) == str(epoch) and int(e.get("seq") or 0) > since)]
-    return StreamingResponse(_stream(request, params, _run_converter(ws(request).templates, prime=prime)), media_type="text/event-stream",
+    return StreamingResponse(_stream(request, params, _run_converter(ws(request).templates, prime=prime), stamp=True), media_type="text/event-stream",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
@@ -1977,7 +2086,7 @@ async def sse_firehose(request: Request) -> Response:
 
     st = await rpc(request, "hub.status")
     params = {"level": "summary", "since_seq": max(0, int(st.get("last_seq") or 0) - 300), "epoch": st.get("epoch")}
-    return StreamingResponse(_stream(request, params, conv), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+    return StreamingResponse(_stream(request, params, conv, stamp=True), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 # Bảng Công việc realtime (docs/dev-notes/tasks-realtime.md): chỉ báo "vẽ lại", trình duyệt gom loạt rồi tải /partials/tasks
@@ -2005,7 +2114,7 @@ async def sse_tasks(request: Request) -> Response:
 
     st = await rpc(request, "hub.status")  # không phát lại: trang vừa vẽ (hoặc nối lại → client tự tải lại một lần)
     params = {"level": "summary", "since_seq": int(st.get("last_seq") or 0), "epoch": st.get("epoch")}
-    return StreamingResponse(_stream(request, params, conv), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+    return StreamingResponse(_stream(request, params, conv, stamp=True), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 # ============================================================================ lỗi
@@ -2102,8 +2211,21 @@ def static_url(name: str) -> str:
     return f"/static/{name}?v={v}"
 
 
+class TimedTemplates(Jinja2Templates):
+    """Jinja2Templates đo thời gian render (Starlette render ngay trong `TemplateResponse`) → phân rã request (perf.py)."""
+
+    def TemplateResponse(self, *args: Any, **kw: Any) -> Any:  # noqa: N802 - tên API của Starlette
+        from ..perf import note_render
+
+        t0 = time.perf_counter()
+        try:
+            return super().TemplateResponse(*args, **kw)
+        finally:
+            note_render((time.perf_counter() - t0) * 1000.0)
+
+
 def make_templates() -> Jinja2Templates:
-    t = Jinja2Templates(directory=str(HERE / "templates"))
+    t = TimedTemplates(directory=str(HERE / "templates"))
     env = t.env
     env.autoescape = True
     env.globals.update({"agent_status": P.agent_status, "run_status": P.run_status, "task_status": lambda s: P.TASK_STATUS.get(s or "", (s or "—", "muted")),
@@ -2161,7 +2283,6 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/audit", audit_page),
         *_debug_routes(),  # /logs "Nhật ký hệ thống" + /trace/{id} — chỉ đọc (web/debug_pages.py, L6)
         Route("/settings", settings_page),
-        *_mcp_oauth.routes(),  # /do/mcp_connect + /mcp/oauth/callback — TRƯỚC /do/{name}
         Route("/do/{name}", do_action, methods=["POST"]),
         Route("/sse/run/{id}", sse_run),
         Route("/sse/firehose", sse_firehose),
@@ -2179,14 +2300,18 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_backup_pages.routes(),  # /partials/backup — thẻ "Sao lưu" ở Cài đặt (backup.py)
         *_support_pages.routes(),  # /partials/support + /support + tải gói một lần — "Gói chẩn đoán" (support_bundle.py, L7)
         *_transfer_pages.routes(),  # /hub-transfer — xuất/nhập toàn bộ hub (hub_transfer_web.py, web/transfer_pages.py)
+        *_inbox_pages.routes(),  # /team-inbox — "Việc được giao" từ Team user (team_inbox.py)
         *_admin_pages.routes(),  # /admin/overview — "Tổng quan máy" (chỉ đọc, admin_overview.py)
         *_desktop.routes(),  # /.well-known/cfharness.json + /app/badge — app desktop (web/desktop.py, docs/dev-notes/desktop-app.md)
         *_file_pages.routes(),  # /files/view|raw|open — xem/mở file agent đã thao tác (web/file_pages.py, docs/dev-notes/file-open.md)
+        *_perf_pages.routes(),  # /perf "Hiệu năng", /perf.json, POST /perf/beacon — đo hiệu năng (web/perf_pages.py, perf-monitor.md)
         Mount("/static", app=StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
     app = Starlette(routes=routes, exception_handlers={HTTPException: http_error, RpcError: rpc_error, DaemonUnavailable: rpc_error})
     app.state.web = state
+    app.add_middleware(GzipMiddleware)  # TRONG cùng: HTML/JS/CSS/JSON nén khi trình duyệt nhận gzip
     app.add_middleware(GuardMiddleware, state=state)
+    app.add_middleware(_perf_pages.PerfMiddleware, state=state)  # NGOÀI cùng: đo cả Guard; Server-Timing (web/perf_pages.py)
     return app
 
 
@@ -2194,11 +2319,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
 from . import manager as _mgr  # noqa: E402
 
 _mgr.register_actions(ACTIONS, Action, _req)
-from . import mcp_oauth as _mcp_oauth  # noqa: E402
-
-_mcp_oauth.register_actions(ACTIONS, Action, _req)
-
-# Trang MCP mở rộng (sửa server, tool, danh mục): thao tác `mcp_edit`
+# Trang MCP mở rộng (sửa server, tool, danh mục): thao tác `mcp_edit` + `mcp_migrate_claude` (OAuth kiểu cũ → claude)
 from . import mcp_pages as _mcpp  # noqa: E402
 
 _mcpp.register_actions(ACTIONS, Action, _req)
@@ -2243,6 +2364,10 @@ _filehub_pages.register_actions(ACTIONS, Action, _req)
 from . import admin_pages as _admin_pages  # noqa: E402
 
 _admin_pages.register_actions(ACTIONS, Action, _req)
+# "Việc được giao" (Team user của Super Admin Console): /inbox + inbox_accept|reject|submit — team_inbox.py
+from . import inbox_pages as _inbox_pages  # noqa: E402
+
+_inbox_pages.register_actions(ACTIONS, Action, _req)
 # Xem/mở file agent đã thao tác (chip file): /files/view, /files/raw, POST /files/open — RPC file.read|file.open của daemon
 from . import file_pages as _file_pages  # noqa: E402
 

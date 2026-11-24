@@ -10,8 +10,9 @@ duyệt danh mục MCP Registry và cài.
 - `GET|POST /mcp/browse/install?name=&opt=`: form cài dựng từ mục registry. Trường `isSecret` = ô mật khẩu → `secret.set`
   (tên `MCP_<server>_<khoá>`), cấu hình chỉ giữ `${TÊN}`. Gửi: `mcp.add{probe:false}` → `secret.set` → `mcp.probe` (cùng RPC với
   thêm tay; trust mặc định untrusted). Giá trị secret không bao giờ được vẽ lại vào HTML (kể cả khi lỗi / cần xác nhận).
-  Remote cần OAuth → cài với `auth: {type: oauth}` (không probe vì chưa có token) rồi đưa về trang server để bấm Kết nối
-  (luồng OAuth: `web/mcp_oauth.py`, docs/dev-notes/mcp-oauth.md).
+  Remote cần OAuth → KHÔNG cài ở đây (OAuth do hub giữ đã gỡ từ v0.2.28): trang hướng sang Cài đặt → Tài khoản Claude (`mcp.claude_add`).
+- Server OAuth kiểu cũ (nguồn hub, `mcp_client/legacy_oauth.py`): thẻ «Cần chuyển sang claude» + ACTIONS `mcp_migrate_claude`
+  (`mcp.migrate_to_claude`, xác nhận, audit web).
 Mọi thao tác ghi: `post_guard` (CSRF + Origin + khoá phiên WT-1), `_audit.channel=web` qua `rpc(..., audit=True)`.
 """
 
@@ -128,6 +129,43 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
     """Thêm thao tác ghi của trang MCP mở rộng vào `ACTIONS` (mcp.update ∈ HUMAN_ONLY; daemon audit theo `_audit.channel=web`)."""
     actions["mcp_edit"] = Action("mcp.update", edit_params, edit_ok, confirm=edit_confirm, danger=True,
                                  goto=lambda r, f: f"/mcp/{f.get('name')}")
+    # plan-mcp-claude-native PR4: server OAuth kiểu cũ của hub → MCP do claude quản lý theo tài khoản (mcp.migrate_to_claude ∈ HUMAN_ONLY)
+    actions["mcp_migrate_claude"] = Action("mcp.migrate_to_claude", _migrate_params, _migrate_ok, confirm=_migrate_confirm, danger=True,
+                                           goto=_migrate_goto)
+
+
+_ACCT_RE = re.compile(r"^(machine|a_[0-9a-f]{8})$")
+
+
+def _migrate_params(f: Any) -> dict[str, Any]:
+    name, acct = str(f.get("name") or ""), str(f.get("account_id") or "").strip()
+    if not NAME_RE.match(name):
+        raise ValueError("tên MCP server không hợp lệ")
+    if not _ACCT_RE.match(acct):
+        raise ValueError("chọn tài khoản Claude")
+    return {"name": name, "account_id": acct}
+
+
+def _migrate_confirm(f: Any) -> str:
+    who = str(f.get("account_label") or f.get("account_id") or "")
+    return (f"Chuyển MCP {f.get('name')} sang claude (tài khoản «{who}»)? Hub thêm server vào cấu hình claude của tài khoản này, registry "
+            "đổi sang nguồn claude (GIỮ trust, tool, luôn hỏi duyệt, agent gán), rồi mở lượt đăng nhập ở hàng tài khoản trong Cài đặt. "
+            "Token OAuth cũ của hub bị xoá sau khi đăng nhập claude thành công. Agent gán server này chỉ dùng được nó khi tài khoản đang dùng "
+            "có server.")
+
+
+def _migrate_ok(r: Any, f: Any) -> str:
+    r = r if isinstance(r, dict) else {}
+    msg = f"Đã chuyển MCP {r.get('name') or f.get('name')} sang claude (tài khoản {r.get('account_label') or f.get('account_id')})"
+    msg += ". Đăng nhập: bấm «Mở trang đăng nhập» rồi dán URL chuyển hướng" if r.get("login") else ". Đăng nhập ở mục «MCP của tài khoản»"
+    for w in r.get("warnings") or []:
+        msg += f". {w}"
+    return msg
+
+
+def _migrate_goto(r: Any, f: Any) -> str:
+    acct = str(f.get("account_id") or "")
+    return f"/settings#acct-mcp-{acct}" if _ACCT_RE.match(acct) else "/settings#accounts"
 
 
 # ============================================================================ bảng tool
@@ -280,7 +318,9 @@ async def _migrate_accounts(request: Request, cfg: dict[str, Any]) -> list[dict[
     chỉ tài khoản token (`machine` lưu header rõ trong ~/.claude.json). Không phải server OAuth của hub / daemon cũ → None."""
     from ..rpc import DaemonUnavailable
 
-    if cfg.get("source") == "claude" or (cfg.get("auth") or {}).get("type") != "oauth":
+    from ..mcp_client.legacy_oauth import needs_migration
+
+    if not needs_migration(cfg):
         return None
     try:
         res = await rpc(request, "account.list", {}) or {}
@@ -363,15 +403,7 @@ async def _install_ctx(request: Request, reg_name: str, opt_id: str | None) -> d
             for fld in o.get(lst) or []:
                 fld["fkey"] = _field_key(prefix, str(fld.get(attr) or ""))
     opt = next((o for o in opts if o.get("id") == opt_id), opts[0] if opts else None)
-    from ..mcp_client.oauth_cli import DEFAULT_PORT
-    from .app import ws
-    from .mcp_oauth import redirect_uri, redirect_uri_for
-
-    # app OAuth tạo tay ở nhà cung cấp phải khai đúng redirect URI: web (nút Kết nối — tên miền public nếu đang vào qua đó) và
-    # `cfharness mcp login` (loopback)
-    redirect_uris = list(dict.fromkeys([redirect_uri_for(request, ws(request)), redirect_uri(ws(request).port), f"http://127.0.0.1:{DEFAULT_PORT}/callback"]))
-    return {"entry": res.get("server") or {}, "options": opts, "opt": opt, "suggested": res.get("suggested_name") or "mcp",
-            "redirect_uris": redirect_uris}
+    return {"entry": res.get("server") or {}, "options": opts, "opt": opt, "suggested": res.get("suggested_name") or "mcp"}
 
 
 async def install_page(request: Request) -> Response:
@@ -406,6 +438,9 @@ def build_install(opt: dict[str, Any], entry: dict[str, Any], form: FormData) ->
         return raw
 
     if opt["kind"] == "remote":
+        if opt.get("needs_oauth"):  # OAuth do hub giữ đã gỡ (v0.2.28) — server OAuth thêm vào claude theo tài khoản
+            raise ValueError("server cần đăng nhập OAuth — thêm vào claude theo tài khoản ở Cài đặt → Tài khoản Claude → «Thêm MCP» "
+                             f"(URL {opt.get('url')}); hub không còn tự giữ OAuth")
         url = str(form.get("url") or opt["url"]).strip()
         for var in opt.get("variables") or []:
             v = str(form.get(_field_key("v.", var["name"])) or var.get("default") or "").strip()
@@ -424,24 +459,6 @@ def build_install(opt: dict[str, Any], entry: dict[str, Any], form: FormData) ->
                 headers[h["name"]] = v
         if headers:
             cfg["headers"] = headers
-        if opt.get("needs_oauth"):  # chưa có token → không probe lúc cài; người bấm Kết nối ở trang server
-            auth: dict[str, Any] = {"type": "oauth"}
-            if opt.get("oauth_client") == "manual":  # nhà cung cấp không cho tự đăng ký client (DCR)
-                cid = str(form.get("oauth_client_id") or "").strip()
-                if not cid:
-                    raise ValueError("thiếu client_id của app OAuth")
-                if not re.fullmatch(r"[\x21-\x7e]{1,300}", cid):
-                    raise ValueError("client_id không hợp lệ")
-                auth["client_id"] = cid
-                csec = str(form.get("oauth_client_secret") or "").strip()
-                if csec:
-                    if is_ref(csec):
-                        auth["client_secret_ref"] = csec
-                    else:
-                        sn = secret_name(name, "OAUTH_CLIENT_SECRET")
-                        secrets[sn] = csec
-                        auth["client_secret_ref"] = f"${{{sn}}}"
-            cfg["auth"] = auth
     else:
         try:
             parts = shlex.split(str(form.get("command") or "").strip())
@@ -475,8 +492,6 @@ def build_install(opt: dict[str, Any], entry: dict[str, Any], form: FormData) ->
 def install_confirm(cfg: dict[str, Any], secrets: dict[str, str]) -> str:
     what = (cfg.get("command", "") + " " + " ".join(cfg.get("args") or [])).strip() if cfg["transport"] == "stdio" else cfg.get("url", "")
     trust = "TIN CẬY (tool ghi chạy không cần duyệt)" if cfg["trust"] == "trusted" else "cần duyệt"
-    if cfg.get("auth"):
-        return f"Cài MCP server {cfg['name']} ({trust})?\nServer cần đăng nhập OAuth — cài xong bấm Kết nối ở trang server:\n{what}"
     return (f"Cài MCP server {cfg['name']} ({trust})?\nHub sẽ CHẠY NGAY để kiểm tra, ngoài sandbox, dưới quyền của bạn:\n{what}"
             + (f"\nSecret sẽ lưu vào secret store: {', '.join(sorted(secrets))}" if secrets else ""))
 
@@ -491,7 +506,7 @@ async def install_submit(request: Request) -> Response:
     # giá trị form để vẽ lại khi lỗi — KHÔNG gồm trường bí mật
     secret_keys = {_field_key("h.", h["name"]) for h in opt.get("headers") or [] if h.get("secret")} | \
                   {_field_key("e.", e["name"]) for e in opt.get("env") or [] if e.get("secret")} | \
-                  {_field_key("a.", a["key"]) for a in opt.get("arg_fields") or [] if a.get("secret")} | {"oauth_client_secret"}
+                  {_field_key("a.", a["key"]) for a in opt.get("arg_fields") or [] if a.get("secret")}
     keep = {k: v for k, v in carry(form) if k not in secret_keys}
 
     async def again(err: str) -> Response:
@@ -522,9 +537,6 @@ async def install_submit(request: Request) -> Response:
             return flash_redirect(request, f"/mcp/{cfg['name']}", "error", f"Đã thêm MCP {cfg['name']} nhưng chưa lưu được secret {sn}: {err_text(e)}")
     from .app import _probe_msg
 
-    if cfg.get("auth"):  # chưa có token → probe chắc chắn 401; người bấm Kết nối ở trang server (probe chạy sau khi đăng nhập)
-        return flash_redirect(request, safe_next(f"/mcp/{cfg['name']}#oauth", "/mcp"), "ok",
-                              f"Đã cài MCP {added.get('name')} — bấm Kết nối để đăng nhập OAuth")
     try:
         pr = await rpc(request, "mcp.probe", {"name": cfg["name"]})
         msg = f"Đã cài MCP {added.get('name')} — {_probe_msg(pr)}"

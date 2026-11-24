@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -73,7 +74,8 @@ def system_prompt_for(hub: "Hub", run: dict[str, Any], agent: dict[str, Any]) ->
     from ..browser import effective_mode
 
     text = build_system_prompt(agent["id"], soul, blocks, charter=team_charter(hub, run.get("team_id")), browser=effective_mode(agent, hub.config),
-                               cli_ref=_manager_cli_ref(hub, agent["id"]), shared_folders=_shared_folders(hub), pdf_note=_pdf_note(hub))
+                               cli_ref=_manager_cli_ref(hub, agent["id"]), shared_folders=_shared_folders(hub), pdf_note=_pdf_note(hub),
+                               workspace_rules=_workspace_rules(hub, run, agent))
     _warn_if_large(hub, agent["id"], text)
     save_prompt(hub, text)
     return text, info
@@ -91,6 +93,97 @@ def _warn_if_large(hub: "Hub", agent_id: str, text: str) -> None:
         import logging
 
         logging.getLogger("cfharness.learning").warning("system prompt của %s vượt ngưỡng %d: %s", agent_id, limit, size_summary(text))
+
+
+def _workspace_rules(hub: "Hub", run: dict[str, Any], agent: dict[str, Any]) -> str | None:
+    """Khối "Workspace rules" (prompt.workspace_rules_block) — lỗi không chặn run."""
+    try:
+        from ..prompt import workspace_rules_block
+
+        return workspace_rules_block(workspace_context(hub, run, agent)) or None
+    except Exception:  # pragma: no cover - khối phụ hỏng không chặn run
+        import logging
+
+        logging.getLogger("cfharness.learning").exception("không dựng được khối workspace rules cho %s", agent.get("id"))
+        return None
+
+
+def _in_git(path: Path) -> bool:
+    """Thư mục (hoặc tổ tiên) có `.git` (thư mục ở checkout chính, file ở worktree) — không gọi git (rẻ, dựng prompt mỗi run)."""
+    try:
+        p = path.expanduser().resolve()
+    except OSError:  # pragma: no cover
+        return False
+    for d in (p, *p.parents):
+        if (d / ".git").exists():
+            return True
+    return False
+
+
+def _inside(child: str, parent: str) -> bool:
+    """`child` là thư mục con của `parent` (task cô lập của luồng D chạy ở thư mục con tương ứng trong worktree)."""
+    try:
+        c, p = os.path.normcase(os.path.realpath(child)), os.path.normcase(os.path.realpath(parent))
+    except (OSError, ValueError):  # pragma: no cover
+        return False
+    return c.startswith(p.rstrip(os.sep) + os.sep)
+
+
+def _same_path(a: str, b: str) -> bool:
+    try:
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    except (OSError, ValueError):  # pragma: no cover
+        return False
+
+
+def workspace_context(hub: "Hub", run: dict[str, Any], agent: dict[str, Any]) -> dict[str, Any] | None:
+    """Ngữ cảnh workspace cho khối "Workspace rules" (docs/dev-notes/workspace-parallel.md §C). None = không chèn khối:
+    `prompt.workspace_rules` tắt; run chỉ đọc (run_opts.read_only / agent chỉ đọc / review học); thư mục chung Không gian số;
+    scratch thuần (không `extra_write_roots`); cwd không phải repo git.
+
+    Worktree hub cấp: `tasks.workspace.worktree` (metadata luồng B: branch/base/repo/path/deps) khi cwd của run đúng là worktree đó;
+    kind `worktree` cũ (`claude --worktree`) → worktree không metadata. Task cũ không có metadata → coi như checkout (an toàn)."""
+    if not hub.config.get("prompt.workspace_rules"):
+        return None
+    from ..runs import _agent_read_only, _in_agent_workspaces
+
+    opts = run.get("run_opts") or {}
+    if opts.get("read_only") or opts.get("learning_review") or _agent_read_only(agent):
+        return None
+    if opts.get("workspace_kind") == "filehub" or opts.get("filehub_lane"):
+        return None
+    home = Path(agent["home_path"])
+    cwd: Path | None = None
+    if run.get("cwd"):
+        cwd = Path(str(run["cwd"]))
+        if _in_agent_workspaces(cwd, home):
+            cwd = None  # scratch cố định của agent (M7)
+    elif agent.get("workspace_default") and not str(agent["workspace_default"]).startswith("filehub:"):
+        cwd = Path(str(agent["workspace_default"]))
+    from ..guard.locks import repo_lock_mode
+
+    mode = repo_lock_mode(hub.config)
+    ctx: dict[str, Any] = {"locked": mode == "repo"}
+    if mode == "files":
+        ctx["file_leases"] = True
+    if cwd is not None:
+        ws: Any = None
+        if run.get("task_id"):
+            try:
+                r = hub.store.conn.execute("SELECT workspace FROM tasks WHERE id=?", (run["task_id"],)).fetchone()
+                ws = json.loads(r[0]) if r and r[0] else None
+            except Exception:  # pragma: no cover - task lạ/JSON hỏng → coi như không có metadata
+                ws = None
+        meta = ws.get("worktree") if isinstance(ws, dict) else None
+        if isinstance(meta, dict) and (not meta.get("path") or _same_path(str(meta["path"]), str(cwd)) or _inside(str(cwd), str(meta["path"]))):
+            ctx["worktree"] = meta
+        elif opts.get("workspace_kind") == "worktree":
+            ctx["worktree"] = {}
+        elif _in_git(cwd):
+            ctx["checkout"] = "cwd"
+    if opts.get("extra_write_roots") and "checkout" not in ctx:
+        ctx["checkout"] = "extra"
+    return ctx if ("worktree" in ctx or "checkout" in ctx) else None
 
 
 def _pdf_note(hub: "Hub") -> str | None:

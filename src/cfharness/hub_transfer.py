@@ -107,7 +107,7 @@ MAX_SECRETS_BLOB = 48 * 1024 * 1024
 # Bảng tri thức thuộc ledger: không viết lại đường dẫn tay (chỉ đếm, báo cáo) — rollback/ghim canary phải còn khớp blob ledger
 KNOWLEDGE_TABLES = ("mem_*",)
 # Trạng thái gắn với MÁY cũ trong hub_state — luôn xoá khi nhập (khoá, rate limit, phiên bản CLI, đăng nhập claude, job launchd, offset bot…)
-MACHINE_STATE = ("repo_locks", "browser_locks", "rate_limit", "rate_limit_gate", "rate_limit_gates", "rate_limit_by_account",
+MACHINE_STATE = ("repo_locks", "repo_locks_shared", "browser_locks", "rate_limit", "rate_limit_gate", "rate_limit_gates", "rate_limit_by_account",
                  "pyenv_baseline", "cli_compat", "cli_unknown_rate", "auth_block", "claude_account_checks", "admin_watch.active",
                  "accounts.claudeai",  # phiên claude.ai theo tài khoản — thư mục claude-config/ không bao giờ đi theo gói (gắn với máy)
                  "mcp.claude_seen",  # server MCP lạ đã gặp ở run bỏ strict, theo thư mục cấu hình claude của MÁY này (runs._remember_claude_seen)
@@ -122,7 +122,9 @@ MACHINE_STATE = ("repo_locks", "browser_locks", "rate_limit", "rate_limit_gate",
                  # filehub (Không gian số): tạm dừng đồng bộ là của MÁY cũ; lần nhập trước của chính nguồn (cần đăng nhập lại)
                  "filehub.paused", "import_filehub",
                  # cổng cfharness (filehub/lane/): cursor luồng sự kiện + cây mồ côi của MÁY cũ
-                 "filehub.lane")
+                 "filehub.lane",
+                 # workspace song song: sổ worktree do hub tạo (đường dẫn của máy cũ; máy mới không có worktree đó → không dọn gì)
+                 "worktrees.registry")
 # filehub: thư mục chung Không gian số đi qua CỔNG CFHARNESS (khoá `FILEHUB_LANE_*` ở secret store: `clone` bỏ, `move` giữ —
 # transfer_secrets). Đồng bộ 2 chiều cũ (H5 gỡ): token thiết bị `secrets/filehub/` + `filehub/` KHÔNG BAO GIỜ vào gói; gói CŨ còn cấu hình
 # đồng bộ → khi nhập: bỏ khoá cấu hình của đồng bộ (`SYNC_ONLY_KEYS`), thư mục đồng bộ thành "cần chuyển" (`mode: sync`, bản sao không đụng),
@@ -809,6 +811,10 @@ def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], fo
             out["state_cleared"] = keys
             if apply and keys:
                 conn.executemany("DELETE FROM hub_state WHERE key=?", [(k,) for k in keys])
+        if "file_leases" in tabs:  # lease theo file (luồng E) = trạng thái tạm của máy cũ như `repo_locks_shared` → luôn xoá
+            out["file_leases_cleared"] = conn.execute("SELECT COUNT(*) FROM file_leases").fetchone()[0]
+            if apply and out["file_leases_cleared"]:
+                conn.execute("DELETE FROM file_leases")
         now = now_iso()
         if "runs" in tabs:
             sts = CLONE_RUN_STATUSES if mode == "clone" else ("running",)

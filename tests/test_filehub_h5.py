@@ -232,6 +232,12 @@ async def test_rename_remove_link_on_lane_folder(hub_home, lane):
         assert r["url"] == f"https://kgs.example.test/files/{items['Báo cáo'].id}"
         d.hub.runs.runtime().release(rid)
         await wait_status(d, rid, ("completed",))
+        # status=completed được ghi TRƯỚC khi run đóng cây lane (await) và nhả khoá thư mục → chờ run rời `active`
+        # (pop và nhả khoá cùng một đoạn đồng bộ), nếu không máy chậm (CI macOS) gặp "đang có run".
+        for _ in range(500):
+            if rid not in d.hub.runs.active:
+                break
+            await asyncio.sleep(0.02)
         await rpc(d, "filehub.remove", {"name": "Dự án"})
         assert not d.hub.filehub.all_folders()
     finally:

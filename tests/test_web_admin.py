@@ -67,7 +67,7 @@ async def test_admin_users_pages_and_estop_action(hub_home, shared, as_admin):
         assert not (shared / "control" / "estop").exists()  # mã lý do lạ bị từ chối
         env.hub.admin_control.check()
         html = (await env.client.get("/costs")).text
-        assert "ESTOP quản trị" in html  # banner phía user (admin cũng là một hub user)
+        assert "Hub đang tạm dừng" in html  # banner trung tính phía user (VIS-04; admin cũng là một hub user)
         r = await env.post("/do/admin_estop_off", {"user": ME, "confirm": "yes", "next": "/admin/users"})
         assert r.status_code == 303 and not (shared / "control" / f"estop.{ME}").exists()
     finally:
@@ -83,13 +83,21 @@ async def test_machine_page_user_side(hub_home, shared):
         env.hub.admin_control.check()
         await env.login()
         html = (await env.client.get("/costs")).text
-        assert 'href="/machine"' in html and 'href="/admin/users"' not in html  # user thường: không có menu admin
-        assert (await env.client.get("/admin/users")).status_code == 403
-        page = (await env.client.get("/machine")).text
-        assert "ĐANG BẬT" in page and "security" in page and "boss" in page and "estop_on" in page
-        assert "&#34;schema&#34;: 2" in page or '"schema": 2' in page  # đúng JSON sẽ xuất
+        # VIS-02/04: user thường — không menu quản trị, không trang /machine (minh bạch tắt mặc định), banner trung tính
+        assert 'href="/machine"' not in html and 'href="/admin/users"' not in html
+        assert "Hub đang tạm dừng" in html and "security" not in html and "boss" not in html
+        nf = await env.client.get("/khong-co-trang-nay")
+        for path in ("/admin/users", "/admin/overview", "/admin/alerts", "/admin/audit", f"/admin/users/{ME}", "/machine"):
+            r = await env.client.get(path)
+            assert r.status_code == 404 and r.text == nf.text, path  # giống hệt route không tồn tại
         settings = (await env.client.get("/settings")).text
-        assert "người quản trị máy" in settings and "Tắt ESTOP" not in settings  # không có nút gỡ giả
+        assert "Hub đang tạm dừng" in settings and "Tắt ESTOP" not in settings and "/machine" not in settings
+        # VIS-07: bật trang minh bạch → user thấy "Quản trị máy" và dữ liệu về mình
+        (shared / "control" / "visibility.json").write_text(json.dumps({"schema": 1, "activity": False, "transparency": True}))
+        env.app.state.web._admin_nav = None
+        page = (await env.client.get("/machine")).text
+        assert "ĐANG BẬT" in page and "security" in page and "estop_on" in page
+        assert "&#34;schema&#34;: 2" in page or '"schema": 2' in page  # đúng JSON sẽ xuất
     finally:
         await _stop(env)
 

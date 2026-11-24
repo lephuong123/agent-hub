@@ -23,7 +23,7 @@ from cfharness import hub_transfer as T
 from cfharness import redact
 from cfharness import transfer_secrets as S
 from cfharness.errors import HubError
-from cfharness.mcp_client import oauth
+from cfharness.mcp_client import legacy_oauth as oauth
 from cfharness.paths import HubPaths
 
 from test_hub_transfer import _rewrite_pkg, make_source
@@ -156,9 +156,7 @@ def test_import_clone_drops_bots_and_oauth_keeps_static_and_accounts(tmp_path, m
     from cfharness.secrets import SecretStore
 
     store = SecretStore(sd)
-    assert oauth.load_record(store, "srv") is None  # → mcp.oauth_status = not_connected: đăng nhập lại
-    cfg = SimpleNamespace(name="srv", url="https://mcp.example/x", auth=SimpleNamespace(type="oauth", client_id=None))
-    assert oauth.status_of(store, cfg)["status"] == "not_connected"
+    assert oauth.load_record(store, "srv") is None  # bản ghi OAuth hub kiểu cũ (gỡ từ v0.2.28) — clone không mang
 
 
 def test_redaction_after_import_comes_from_secret_store(tmp_path, monkeypatch):

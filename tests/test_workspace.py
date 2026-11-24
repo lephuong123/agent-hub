@@ -154,7 +154,7 @@ async def test_task_run_checkpoint_diff_and_rpc_revert(make_hub, repo):
     t = hub.tasks.create({"assignee": "coder", "title": "edit", "body": "edit files", "workspace": str(repo)})
     assert t["warnings"] == []
     await settle(lambda: hub.tasks.row(t["id"])["status"] == "done")
-    run = hub.store.list_runs()[0]
+    run = hub.store.get_run(hub.store.list_runs()[0]["id"])  # list_runs không mang cột diff (perf) — chi tiết lấy theo id
     assert run["workspace_key"] == str(repo.resolve()) and run["checkpoint"]["head"] and run["checkpoint"]["branch"] == "main"
     assert {f["path"] for f in run["diff"]["files"]} == {"b.txt", "new.txt", "d.txt"}
     assert hub.runs.locks.list() == {}  # khoá đã nhả

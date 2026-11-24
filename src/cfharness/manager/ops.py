@@ -146,8 +146,10 @@ class ManagerOps:
         return int(r[0]) if r and r[0] is not None else None
 
     def _action(self, op: str, args: dict[str, Any], *, ok: bool = True, summary: str | None = None, audit_id: int | None = None,
-                error: str | None = None, res: Any = None) -> None:
+                error: str | None = None, res: Any = None, conversation_id: str | None = None) -> None:
         payload = {"tool": op, "target": self._target(op, args, res), "summary": (summary or op)[:300], "audit_id": audit_id, "ok": ok}
+        if conversation_id:  # hành động gắn với MỘT hội thoại (notify/câu hỏi) → web chỉ hiện thẻ ở đúng hội thoại đó
+            payload["conversation_id"] = conversation_id
         if error:
             payload["error"] = error[:500]
         self.hub.publish(make_event("manager.action", self.mid, payload, run_id=self.run["id"]))
@@ -662,7 +664,7 @@ class ManagerOps:
     def op_ask_owner(self, a: dict[str, Any]) -> Any:
         conv = self._owner_conversation()
         q = self.hub.questions.open(self.run, a.get("question"), a.get("options"), multi=bool(a.get("multi")), source="manager", conversation_id=conv)
-        self._action("ask_owner", a, summary=f"hỏi người: {q['text'][:120]}")
+        self._action("ask_owner", a, summary=f"hỏi người: {q['text'][:120]}", conversation_id=conv)
         return {"question_id": q["id"], "status": q["status"], "note": "Asked. End your turn; the owner's answer arrives as an owner message."}
 
     async def op_ask_owner_permission(self, a: dict[str, Any]) -> Any:
@@ -686,7 +688,7 @@ class ManagerOps:
                 return {"question_id": q["id"], "status": q["status"], "note": "Already asked and still waiting. End your turn."}
         q = self.hub.questions.open(self.run, owner_actions.question_text(desc, a.get("reason")), owner_actions.OPTIONS, source="manager",
                                     conversation_id=conv, action=action)
-        self._action("ask_owner_permission", a, summary=f"xin phép người: {kind} {action.get('target')}")
+        self._action("ask_owner_permission", a, summary=f"xin phép người: {kind} {action.get('target')}", conversation_id=conv)
         return {"question_id": q["id"], "status": q["status"], "asked": desc[:400],
                 "note": "Asked. End your turn now; the owner's decision and the result arrive as an owner message."}
 
@@ -716,11 +718,13 @@ class ManagerOps:
         except Exception:  # pragma: no cover - định tuyến không được làm hỏng lượt
             return None
 
-    def _target_conv(self, task_id: Any = None) -> tuple[dict[str, Any] | None, bool]:
+    def _target_conv(self, task_id: Any = None, *, heartbeat_ok: bool = False) -> tuple[dict[str, Any] | None, bool]:
         """Hội thoại nhận tin chủ động / câu hỏi của run này → (hội thoại, có_phải_đoán).
         1) run chat: chính hội thoại của nó. 2) lượt heartbeat: hội thoại đã giao `task_id` (hub tra, không tin chữ của agent) — nếu
         task thuộc LUỒNG mà hội thoại đó không thuộc luồng ấy (giao từ sảnh) → hội thoại của luồng. 3) mọi sự kiện của lượt cùng MỘT
-        hội thoại gốc (`run_opts.tick_convs`). 4) nhịp của một luồng → hội thoại của luồng. 5) đoán: cuộc người hoạt động gần nhất (`guessed`)."""
+        hội thoại gốc (`run_opts.tick_convs`). 4) nhịp của một luồng → hội thoại của luồng. 5) đoán (`guessed`) — KHÔNG chéo luồng
+        (`ManagerService.fallback_conversation`): run/task thuộc luồng → chỉ trong luồng đó; không luồng → cuộc người gần nhất ở Sảnh;
+        Sảnh chưa có cuộc nào → (`heartbeat_ok`, chỉ notify) chính hội thoại nhịp chung của lượt, không thì None."""
         opts = self.run.get("run_opts") or {}
         own = self._human_conv(opts.get("manager_conversation"))
         if own:
@@ -743,7 +747,32 @@ class ManagerOps:
         c = self._ws_conv(opts.get("manager_workstream"))
         if c:
             return c, False
-        return self.svc._home_conversation(), True
+        wid = opts.get("manager_workstream") or (self.svc.ws.of_task(task_id) if task_id else None)
+        c = self._human_conv((self.svc.fallback_conversation(wid) or {}).get("id"))
+        if c:
+            return c, True
+        if heartbeat_ok:
+            hb = self._own_heartbeat_conv()
+            if hb:
+                return hb, True
+        return None, True
+
+    def _own_heartbeat_conv(self) -> dict[str, Any] | None:
+        """Hội thoại nhịp CHUNG (không thuộc luồng còn sống) của chính lượt này — chỗ cất tin khi Sảnh chưa có cuộc nào của người."""
+        from .service import HEARTBEAT_CHANNEL
+
+        cid = (self.run.get("run_opts") or {}).get("manager_conversation")
+        if not cid:
+            return None
+        try:
+            c = self.svc._conv_row(str(cid))
+        except NotFound:
+            return None
+        if c["channel"] != HEARTBEAT_CHANNEL or c.get("archived_at") or c["agent_id"] != self.mid:
+            return None
+        if c.get("workstream_id") and self.svc.ws.maybe(c["workstream_id"]):
+            return None
+        return c
 
     def _owner_conversation(self) -> str | None:
         conv, _ = self._target_conv()
@@ -755,22 +784,25 @@ class ManagerOps:
         text = str(a.get("text") or "").strip()
         if not text:
             raise HubError("notify_owner cần text")
-        # lượt heartbeat: về hội thoại đã giao task (`task_id`) / hội thoại gốc duy nhất của các sự kiện; không biết → đoán
-        # "hội thoại người hoạt động gần nhất" (`guessed` — Slack gửi DM, không chen vào thread của việc khác)
-        conv, guessed = self._target_conv(a.get("task_id"))
+        # lượt heartbeat: về hội thoại đã giao task (`task_id`) / hội thoại gốc duy nhất của các sự kiện; không biết → đoán TRONG luồng
+        # của run/task, không luồng thì ở Sảnh (`guessed` — Slack gửi DM, không chen vào thread của việc khác)
+        conv, guessed = self._target_conv(a.get("task_id"), heartbeat_ok=True)
         cid = conv["id"] if conv else None
-        if cid:
-            self.svc._add_msg(cid, "notify", text, self.run["id"])
+        mid = self.svc._add_msg(cid, "notify", text, self.run["id"]) if cid else None
+        # cất vào hội thoại nhịp (Sảnh chưa có cuộc nào của người) → kênh chat coi như chưa có hội thoại: gửi mọi chat như trước
+        chan = conv["channel"] if conv and conv["channel"] != "heartbeat" else None
         kind = str(a.get("kind") or "info")
         audit_id = self.hub.audit.record("manager.notify", self.mid, self.run["id"], {"text": text[:1000], "kind": kind, "conversation_id": cid},
                                          actor=self.actor, channel="manager", target=cid, summary="manager.notify")
         self.hub.publish(make_event("manager.reply", self.mid, {"conversation_id": cid, "run_id": self.run["id"], "text": text[:TEXT_MAX],
+                                                               **({"message_id": mid} if mid else {}),
                                                                **({"truncated": True} if len(text) > TEXT_MAX else {}),
-                                                               "channel": conv["channel"] if conv else None, "kind": "notify", "notify_kind": kind, "ok": True,
+                                                               "channel": chan, "kind": "notify", "notify_kind": kind, "ok": True,
                                                                "conversation_guessed": bool(conv) and guessed},
                                     run_id=self.run["id"]))
-        self._action("notify_owner", a, summary=f"báo người: {text[:120]}", audit_id=audit_id)
-        return {"delivered_to": conv["channel"] if conv else None, "conversation_id": cid, "note": None if conv else "no human conversation yet — stored as event only"}
+        self._action("notify_owner", a, summary=f"báo người: {text[:120]}", audit_id=audit_id, conversation_id=cid)
+        return {"delivered_to": chan, "conversation_id": cid,
+                "note": None if chan else ("no human conversation yet — kept in the heartbeat log" if conv else "no human conversation yet — stored as event only")}
 
 
     # ================================================================== LUỒNG VIỆC (workstreams.py)

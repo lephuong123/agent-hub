@@ -58,7 +58,7 @@ Test: `tests/test_multi_instance.py` (22 ca, không gọi `claude`, không cần
   nguyên. Đổi tên cookie = mọi phiên web đang mở phải đăng nhập lại một lần sau khi cập nhật.
 
 ### 5. Callback OAuth của `mcp login`
-- `mcp_client.oauth_callback_port` (mặc định 33418, 0 = OS chọn); `--port` thắng config. Giữ mặc định CỐ ĐỊNH vì `redirect_uri`
+- (ĐÃ GỠ v0.2.28 — OAuth MCP do claude giữ) `mcp_client.oauth_callback_port` (mặc định 33418, 0 = OS chọn); `--port` thắng config. Giữ mặc định CỐ ĐỊNH vì `redirect_uri`
   ổn định → bản đăng ký DCR dùng lại được (`docs/dev-notes/mcp-oauth.md` §6); cổng bận vẫn tự rơi về cổng ngẫu nhiên như trước.
   Hai hub cùng user OS chạy `mcp login` đồng thời: đặt cổng khác cho hub thứ hai.
 

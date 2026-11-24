@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Người dùng{% endblock %}
+{% block content %}
+<div class="row"><h1>Người dùng</h1>
+  {% if can(sess, "user_lifecycle") %}
+    {% if has_op("user.create") %}<a class="btn primary" href="/users/new">+ Tạo user</a>{% endif %}
+    <a class="btn" href="/users/import">Nhập user có sẵn</a>
+    <a class="btn ghost" href="/groups">Nhóm</a>
+    {% if has_op("user.import_csv") %}<a class="btn ghost" href="/users/bulk">Nhập CSV</a>{% endif %}
+  {% endif %}
+</div>
+<form method="get" class="filters">
+  <input name="q" placeholder="tìm tên, email" value="{{ q.q or '' }}">
+  <select name="state"><option value="">mọi trạng thái</option>
+    {% for st in ("active", "suspended", "revoked", "creating", "create_failed", "deleted") %}<option value="{{ st }}" {% if q.state == st %}selected{% endif %}>{{ state_pill(st)[0] }}</option>{% endfor %}
+  </select>
+  <select name="group_id"><option value="">mọi nhóm</option>{% for g in groups %}<option value="{{ g.id }}" {% if q.group_id == g.id %}selected{% endif %}>{{ g.name }}</option>{% endfor %}</select>
+  <button class="btn">Lọc</button>
+  <a class="btn ghost" href="/users?format=csv">Xuất CSV</a>
+  <a class="btn ghost" href="/users/export">Xuất hồ sơ</a>
+</form>
+<form method="post" action="/op/estop.on" id="bulk" data-confirm="Bật ESTOP cho các user đã chọn?">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="p.scope" value="user"><input type="hidden" name="label" value="ESTOP hàng loạt">
+<table class="grid">
+<thead><tr><th></th>
+{% for col, label in (("os_user", "User"), ("full_name", "Họ tên"), ("group", "Nhóm"), ("hostname", "Tên miền"), ("state", "Trạng thái"), ("version", "Phiên bản"), ("cost_today", "Chi phí hôm nay"), ("cost_month", "Tháng"), ("budget_pct", "% ngân sách"), ("running", "Run"), ("approvals", "Chờ duyệt"), ("alerts", "Cảnh báo")) %}
+<th><a href="?sort={{ col }}&desc={{ '0' if q.sort == col and q.desc == '1' else '1' }}">{{ label }}</a></th>
+{% endfor %}</tr></thead>
+<tbody>
+{% for u in rows %}
+<tr>
+  <td><input type="checkbox" name="p.ids:multi" value="{{ u.os_user }}" aria-label="chọn {{ u.os_user }}"></td>
+  <td><a href="/users/{{ u.id }}"><b>{{ u.os_user }}</b></a>{% if u.estop %} <span class="pill bad">ESTOP</span>{% endif %}</td>
+  <td>{{ u.full_name }}</td><td>{{ u.group }}</td>
+  <td class="small">{% if u.hostname %}<a href="https://{{ u.hostname }}" rel="noopener noreferrer" target="_blank">{{ u.hostname }}</a>{% else %}—{% endif %}</td>
+  <td>{{ pill(u.state) }} {% if u.state == "active" %}{{ pill(u.hub_status) }}{% endif %}</td>
+  <td>{{ u.version or "—" }}</td><td>{{ u.cost_today | money }}</td><td>{{ u.cost_month | money }}</td>
+  <td>{% if u.budget_pct is not none %}{{ "%.0f" | format(u.budget_pct) }}%{% else %}—{% endif %}</td>
+  <td>{{ u.running or 0 }}</td><td>{{ u.approvals or 0 }}</td>
+  <td>{% if u.alerts %}<span class="pill bad">{{ u.alerts }}</span>{% else %}0{% endif %}</td>
+</tr>
+{% else %}<tr><td colspan="13" class="muted">Chưa có user — dùng “Nhập user có sẵn” để đưa các hub đang chạy vào SAC.</td></tr>
+{% endfor %}
+</tbody></table>
+{% if rows and can(sess, "estop_on") %}
+<div class="row">
+  <select name="p.reason_code">{% for r in ("maintenance", "security", "budget", "policy", "incident", "other") %}<option>{{ r }}</option>{% endfor %}</select>
+  <button class="btn danger">Bật ESTOP cho user đã chọn</button>
+</div>
+{% endif %}
+</form>
+{% endblock %}

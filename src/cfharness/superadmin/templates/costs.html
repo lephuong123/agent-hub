@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Chi phí{% endblock %}
+{% block content %}
+<h1>Chi phí {{ days }} ngày — {{ r.total | money }}</h1>
+<nav class="tabs">{% for k, label in (("user", "Theo user"), ("group", "Theo nhóm"), ("team", "Theo team"), ("claude", "Theo tài khoản Claude"), ("day", "Theo ngày")) %}<a href="?by={{ k }}&days={{ days }}" class="{% if by == k %}on{% endif %}">{{ label }}</a>{% endfor %}
+<a href="?by={{ by }}&days={{ days }}&format=csv">Xuất CSV</a></nav>
+<form method="get" class="filters"><input type="hidden" name="by" value="{{ by }}"><select name="days">{% for n in (7, 30, 90, 365) %}<option value="{{ n }}" {% if n == days %}selected{% endif %}>{{ n }} ngày</option>{% endfor %}</select><button class="btn">Xem</button></form>
+<table class="grid"><thead><tr><th>{{ {"user": "User", "group": "Nhóm", "team": "Team", "claude": "Tài khoản Claude", "day": "Ngày"}[by] }}</th><th>USD</th><th></th></tr></thead><tbody>
+{% for x in r.rows %}<tr><td>{{ x.key }}</td><td>{{ x.usd | money }}</td><td class="wide"><svg class="chart bar" viewBox="0 0 100 6" preserveAspectRatio="none" role="img" aria-label="{{ x.usd }}"><rect x="0" y="0" height="6" width="{{ (x.usd / mx * 100) | round(1) }}"></rect></svg></td></tr>
+{% else %}<tr><td colspan="3" class="muted">Chưa có số liệu.</td></tr>{% endfor %}
+</tbody></table>
+<p class="muted small">Ước tính từ số liệu hub xuất (chi phí ngày lớn nhất mỗi user mỗi ngày) — không phải hoá đơn Anthropic.</p>
+{% endblock %}

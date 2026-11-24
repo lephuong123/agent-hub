@@ -102,13 +102,12 @@ def format_message(ev: HubEvent) -> str | None:
         if p.get("state") == "resolved":
             return f"✅ Quản trị máy — *{user}*{hub}: đã hết cảnh báo «{ALERT_VI[code]}»"
         return f"🛎 Quản trị máy — *{user}*{hub}: {ALERT_VI[code]}\nXem: `cfharness admin users show {user}`"
-    if ev.type == "hub.admin_estop":
-        from ..admin_control import REASON_CODES
-
-        rc = p.get("reason_code") if p.get("reason_code") in REASON_CODES else "unknown"
+    if ev.type == "team.inbox_new":  # Team user (team_inbox.py): chỉ báo có việc — nội dung việc xem trên web của hub
+        return "📥 Có việc mới được giao từ team — mở hub → Việc được giao (/team-inbox) để Nhận hoặc Từ chối."
+    if ev.type == "hub.admin_estop":  # VIS-04: thông báo trung tính — không mã lý do, không tên/đường dẫn quản trị
         if p.get("on"):
-            return f"🛑 Người quản trị máy đã BẬT ESTOP cho hub của bạn (mã: {rc}) — run mới bị chặn, run đang chạy đã dừng."
-        return "▶️ Người quản trị máy đã gỡ ESTOP — hub chạy lại bình thường."
+            return "🛑 Hub đang tạm dừng — liên hệ quản trị. Run mới bị chặn, run đang chạy đã dừng."
+        return "▶️ Hub chạy lại bình thường."
     if ev.type.startswith("filehub."):  # thư mục chung Không gian số — dòng chữ CỐ ĐỊNH, link là chữ (không nút)
         return _filehub_text(ev.type, p, agent)
     if ev.type == "auth.denied":

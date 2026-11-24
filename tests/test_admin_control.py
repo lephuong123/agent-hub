@@ -114,12 +114,12 @@ async def test_admin_estop_blocks_stops_and_user_cannot_clear(hub_home, shared):
         assert hub.store.get_run(run["id"])["status"] != "running"
         with pytest.raises(Blocked) as ei:
             hub.runs.submit("w1", "nữa")
-        assert "quản trị máy" in str(ei.value) and ei.value.data["admin_estop"]["reason_code"] == "incident"
+        assert "tạm dừng" in str(ei.value) and ei.value.data["admin_estop"]["reason_code"] == "incident"
         # user tắt ESTOP của mình: KHÔNG gỡ được cờ admin
         from m7_fake import rpc
 
         r = await rpc(d, "estop.set", {"on": False})
-        assert r["admin_estop"]["on"] and "quản trị máy" in r["note"]
+        assert r["admin_estop"]["on"] and "tạm dừng" in r["note"]
         assert hub.runs.estop["on"] and hub.runs.estop["admin"]["reason_code"] == "incident"
         assert hub.status()["estop"]["on"]
         with pytest.raises(Blocked):
@@ -160,7 +160,7 @@ async def test_estop_set_rpc_requires_admin_and_human(hub_home, shared, as_admin
         ac._GETGROUPS = lambda: []
         with pytest.raises(HubError) as ei:
             await rpc(d, "admin.estop_set", {"on": True, "all": True})
-        assert "cfharness-admin" in str(ei.value) and not (shared / "control" / "estop").exists()
+        assert "không có method admin.estop_set" in str(ei.value) and not (shared / "control" / "estop").exists()
     finally:
         await close(d)
 
@@ -172,6 +172,12 @@ async def test_admin_self_transparency(hub_home, shared):
     try:
         ac.set_flag(True, ME, reason_code="maintenance", by="boss")
         d.hub.admin_control.check()
+        from cfharness.errors import HubError
+
+        with pytest.raises(HubError, match="không có method admin.self"):  # VIS-07: trang minh bạch tắt mặc định
+            await rpc(d, "admin.self")
+        assert (await rpc(d, "admin.nav")) == {"is_admin": False, "managed": False}
+        (shared / "control" / "visibility.json").write_text(json.dumps({"transparency": True}))
         r = await rpc(d, "admin.self")
         assert r["user"] == ME and r["admin_estop"]["on"] and r["admin_estop"]["reason_code"] == "maintenance"
         assert r["admin_log"][0]["action"] == "estop_on" and r["admin_log"][0]["by"] == "boss"
@@ -180,6 +186,6 @@ async def test_admin_self_transparency(hub_home, shared):
         assert sanitize(r["export"]["preview"]) == r["export"]["preview"] and r["export"]["preview"]["schema"] == 2  # chưa đặt origin/tên → schema 2 (admin cũ đọc được)
         assert r["is_admin"] is False  # user thường vẫn xem được trang minh bạch của chính mình
         nav = await rpc(d, "admin.nav")
-        assert nav["is_admin"] is False and nav["admin_estop"]["on"]
+        assert nav["is_admin"] is False and nav["managed"] is True
     finally:
         await close(d)

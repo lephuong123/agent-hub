@@ -74,10 +74,10 @@ def _setup(d, tmp_path: Path) -> dict[str, Path]:
     p["wt_task"] = _mk(home / "worktrees" / "wt-y")
     c.execute("INSERT INTO tasks (id, title, status, workspace, created_at, updated_at) VALUES (?,?,?,?,?,?)",
               ("t_open", "x", "running", json.dumps({"kind": "worktree", "path": str(p["wt_task"])}), _iso(now), _iso(now)))
-    # git worktree NGOÀI HUB_HOME của task đã xong → chỉ báo
-    p["ext_wt"] = _mk(tmp_path / "repo" / "_wt" / "repo-feat")
+    # git worktree NGOÀI HUB_HOME của task đã xong → chỉ báo (kind `worktree` cũ: path = repo, worktree = <repo>/.claude/worktrees/<id>)
+    p["ext_wt"] = _mk(tmp_path / "repo" / ".claude" / "worktrees" / "t_done")
     c.execute("INSERT INTO tasks (id, title, status, workspace, created_at, updated_at) VALUES (?,?,?,?,?,?)",
-              ("t_done", "y", "done", json.dumps({"kind": "worktree", "path": str(p["ext_wt"])}), _iso(now), _iso(now)))
+              ("t_done", "y", "done", json.dumps({"kind": "worktree", "path": str(tmp_path / "repo")}), _iso(now), _iso(now)))
     # symlink trong workspaces trỏ ra ngoài: không bao giờ là ứng viên
     p["outside"] = _mk(tmp_path / "outside")
     (ws1 / "evil").symlink_to(p["outside"], target_is_directory=True)
@@ -123,7 +123,7 @@ async def test_scan_doctor_and_cleanup_only_orphans_human_only_audited(hub_home,
         assert by["disk"]["level"] == "info" and "logs" in by["disk"]["detail"]
         assert by["cleanup"]["level"] == "warning" and "--cleanup" in by["cleanup"]["fix"]
         assert by["cleanup_stale"]["fix"] == "cfharness hub doctor --cleanup --older-than 30"
-        assert any(k.startswith("task_worktree:") and "git worktree remove" in v["fix"] for k, v in by.items())
+        assert any(k.startswith("task_worktree:") and "cfharness worktree clean" in v["fix"] for k, v in by.items())
         assert "cleanup" in D.text(doc) and "→ cfharness hub doctor --cleanup" in D.text(doc)
         assert all(p[k].is_dir() for k in ("c_arch", "c_gone", "orphan", "wt_orphan"))  # doctor không xoá gì
         assert "conv-c_arch" in D.cleanup_text(rep)

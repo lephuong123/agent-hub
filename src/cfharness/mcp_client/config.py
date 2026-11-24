@@ -80,7 +80,8 @@ class ToolFilter(BaseModel):
 
 
 class OAuthSettings(BaseModel):
-    """`auth` của server http/sse cần OAuth 2.1 (MCP Authorization). Token KHÔNG nằm ở đây — ở secret store (`mcp_client/oauth.py`)."""
+    """`auth: {type: oauth}` của dòng nguồn hub KIỂU CŨ — OAuth của hub đã gỡ từ v0.2.28 (`mcp_client/legacy_oauth.py`): vẫn đọc được để
+    `mcp migrate-to-claude` chuyển sang claude; không tạo mới (registry từ chối), run của agent gán bị từ chối."""
 
     model_config = ConfigDict(extra="forbid")
     type: Literal["oauth"] = "oauth"

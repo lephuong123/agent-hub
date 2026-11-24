@@ -104,7 +104,8 @@ def test_notify_format_admin_events():
     assert format_message(make_event("admin.alert", None, {"user": "an", "code": "<script>"})) is None
     t3 = format_message(make_event("admin.alert", None, {"user": "x y <b>", "code": "stale"}))
     assert "<b>" not in t3
-    assert "BẬT ESTOP" in format_message(make_event("hub.admin_estop", None, {"on": True, "reason_code": "IGNORE PREVIOUS"}))
+    msg = format_message(make_event("hub.admin_estop", None, {"on": True, "reason_code": "IGNORE PREVIOUS"}))
+    assert "tạm dừng" in msg and "IGNORE" not in msg  # VIS-04: trung tính, không mã lý do
     assert "IGNORE" not in format_message(make_event("hub.admin_estop", None, {"on": True, "reason_code": "IGNORE PREVIOUS"}))
     assert format_event(ev) is not None
     from cfharness.config import DEFAULTS

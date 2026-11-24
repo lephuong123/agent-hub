@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% set team = t.team %}
+{% block title %}{{ team.name }}{% endblock %}
+{% block content %}
+<div class="row"><h1>{{ team.name }}</h1><span class="muted">{{ team.slug }}</span>
+  {% if t.overdue %}<span class="pill bad">{{ t.overdue }} việc quá hạn</span>{% endif %}
+  <span class="pill">chi phí hôm nay {{ t.cost_today | money }}</span>
+  <a class="btn ghost" href="/reports?team_id={{ team.id }}">Báo cáo team</a></div>
+{% if team.goal %}<p>{{ team.goal }}</p>{% endif %}
+
+<h2>Bảng việc</h2>
+<div class="kanban">
+{% for c in t.columns %}
+<div class="col"><h3>{{ c.label }} ({{ by_col[c.key] | length }})</h3>
+{% for x in by_col[c.key] %}
+<div class="task">
+  <b>{{ x.title }}</b>{% if x.priority in ("high", "urgent") %} <span class="pill bad">{{ x.priority }}</span>{% endif %}
+  <div class="small muted">{{ x.assignee or "chưa có người" }}{% if x.due %} · hạn {{ x.due }}{% endif %}{% if x.overdue %} <span class="pill bad">quá hạn</span>{% endif %}{% if x.blocked %} <span class="pill warn">chờ việc khác</span>{% endif %}{% if x.progress is not none %} · {{ x.progress }}%{% endif %}</div>
+  {% if x.description %}<details class="small"><summary>Mô tả</summary>{{ x.description }}</details>{% endif %}
+  {% if x.reject_reason %}<div class="small">Từ chối: {{ x.reject_reason }}</div>{% endif %}
+  {% if x.result_path %}<div class="small">Kết quả: <code>{{ x.result_path }}</code></div>{% endif %}
+  {% if can(sess, "team_board") %}
+    {% if x.state in ("unassigned", "pending", "returned") and not x.blocked %}
+      {{ form_open("team.task_assign", "Giao việc", cls="inline", next="/teams/" ~ team.id) }}<input type="hidden" name="p.id" value="{{ x.id }}">
+        <select name="p.assignee">{% for mb in t.members if mb.role != "observer" %}<option value="{{ mb.os_user }}" {% if mb.os_user == x.assignee %}selected{% endif %}>{{ mb.os_user }}</option>{% endfor %}</select>
+        <button class="btn">Giao</button></form>
+    {% endif %}
+    {% if x.state == "review" %}
+      {{ op_form("team.task_review", "Duyệt", {"id": x.id, "approve:bool": "true"}, cls="primary", next="/teams/" ~ team.id) }}
+      {{ form_open("team.task_review", "Trả lại", cls="inline", next="/teams/" ~ team.id) }}<input type="hidden" name="p.id" value="{{ x.id }}"><input type="hidden" name="p.approve:bool" value="false"><input name="p.note" placeholder="nhận xét" required><button class="btn">Trả lại</button></form>
+    {% endif %}
+    {% if x.state != "done" %}{{ op_form("team.task_delete", "Huỷ", {"id": x.id}, confirm="Huỷ việc này?", next="/teams/" ~ team.id) }}{% endif %}
+  {% endif %}
+</div>
+{% endfor %}
+</div>
+{% endfor %}
+</div>
+
+{% if can(sess, "team_board") %}
+<section class="card"><h2>Tạo việc</h2>
+{{ form_open("team.task_create", "Tạo việc", cls="grid-form", next="/teams/" ~ team.id) }}
+  <input type="hidden" name="p.team_id" value="{{ team.id }}">
+  <label>Tiêu đề <input name="p.title" required maxlength="200"></label>
+  <label>Người nhận <select name="p.assignee"><option value="">(chưa giao)</option>
+    {% for mb in t.members if mb.role != "observer" %}<option value="{{ mb.os_user }}">{{ mb.os_user }}{% if mb.skills %} — {{ mb.skills | join(", ") }}{% endif %} · {{ mb.open_tasks }} việc mở</option>{% endfor %}</select></label>
+  <label>Hạn <input type="date" name="p.due"></label>
+  <label>Ưu tiên <select name="p.priority"><option value="normal">bình thường</option><option value="high">cao</option><option value="urgent">gấp</option><option value="low">thấp</option></select></label>
+  <label>Phụ thuộc (chỉ giao khi các việc này xong) <select name="p.depends_on:multi" multiple size="3">{% for x in t.tasks if x.state != "done" %}<option value="{{ x.id }}">{{ x.title }}</option>{% endfor %}</select></label>
+  <label>Mô tả <textarea name="p.description" rows="4"></textarea></label>
+  <button class="btn primary">Tạo việc</button>
+</form>
+<p class="muted small">Việc vào hộp thư hub của người nhận — họ bấm Nhận mới tới agent.</p>
+</section>
+{% endif %}
+
+<section class="card"><h2>Thành viên</h2>
+<table class="grid"><thead><tr><th>User</th><th>Vai trò</th><th>Kỹ năng</th><th>Run đang chạy</th><th>Việc mở</th><th>Chi phí hôm nay</th><th>Cảnh báo</th><th></th></tr></thead><tbody>
+{% for mb in t.members %}
+<tr><td><a href="/users/{{ mb.user_id }}">{{ mb.os_user }}</a> <span class="muted small">{{ mb.full_name }}</span></td><td>{{ {"lead": "Trưởng team", "member": "Thành viên", "observer": "Quan sát"}.get(mb.role, mb.role) }}</td>
+<td class="small">{{ mb.skills | join(", ") }}</td><td>{{ mb.running or 0 }}</td><td>{{ mb.open_tasks }}</td><td>{{ mb.cost_today | money }}</td>
+<td>{% if mb.alerts %}<span class="pill bad">{{ mb.alerts }}</span>{% else %}0{% endif %}</td>
+<td>{% if can(sess, "team_admin") %}{{ op_form("team.member_remove", "Bớt", {"team_id": team.id, "user": mb.os_user}, confirm="Bớt " ~ mb.os_user ~ " khỏi team?", next="/teams/" ~ team.id) }}{% endif %}</td></tr>
+{% endfor %}
+</tbody></table>
+{% if can(sess, "team_admin") %}
+{{ form_open("team.member_set", "Thêm thành viên", cls="row", next="/teams/" ~ team.id) }}
+  <input type="hidden" name="p.team_id" value="{{ team.id }}">
+  <select name="p.user">{% for u in users if u.state == "active" %}<option value="{{ u.os_user }}">{{ u.os_user }} — {{ u.full_name }}</option>{% endfor %}</select>
+  <select name="p.role"><option value="member">Thành viên</option><option value="lead">Trưởng team</option><option value="observer">Quan sát</option></select>
+  <input name="p.skills:list" placeholder="kỹ năng, cách nhau dấu phẩy">
+  <button class="btn primary">Thêm / cập nhật</button>
+</form>
+{% endif %}
+<p class="muted small">Thư mục chung của team: <code>{{ t.folder }}</code> (cấp cho hub thành viên qua Không gian số).</p>
+</section>
+
+{% if can(sess, "team_admin") %}
+<section class="card"><h2>Sửa team</h2>
+{{ form_open("team.upsert", "Sửa team", cls="grid-form", next="/teams/" ~ team.id) }}
+  <input type="hidden" name="p.id" value="{{ team.id }}">
+  <label>Tên <input name="p.name" value="{{ team.name }}" required></label>
+  <label>Mục tiêu <input name="p.goal" value="{{ team.goal }}"></label>
+  <label>Nhóm Telegram (chat id) <input name="p.telegram_chat" value="{{ team.channel.telegram_chat or '' }}"></label>
+  <label>Kênh Slack (id) <input name="p.slack_channel" value="{{ team.channel.slack_channel or '' }}"></label>
+  <label>Ngân sách USD/ngày <input name="p.budget_usd_per_day:float" value="{{ team.budget.usd_per_day or '' }}"></label>
+  <label>Kết thúc <input type="date" name="p.ends_on" value="{{ team.ends_on or '' }}"></label>
+  <label>Mô tả <textarea name="p.description" rows="2">{{ team.description }}</textarea></label>
+  <button class="btn">Lưu</button>
+</form>
+{{ op_form("team.archive", "Giải tán team", {"id": team.id}, confirm="Giải tán team? Lịch sử việc và báo cáo được giữ.", cls="danger") }}
+</section>
+{% endif %}
+{% endblock %}

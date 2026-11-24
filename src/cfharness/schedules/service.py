@@ -598,14 +598,16 @@ class ScheduleService:
 
     # ------------------------------------------------------------------ bắn một lượt
     def _deliver_conv(self, r: dict[str, Any], *, create: bool) -> dict[str, Any] | None:
-        """Hội thoại điều phối viên nhận kết quả: hội thoại chỉ định (nếu còn của manager hiện tại) → hội thoại gần nhất của kênh →
-        hội thoại gần nhất của người. None nếu chưa có điều phối viên (hoặc chưa có hội thoại và `create=False`)."""
+        """Hội thoại điều phối viên nhận kết quả: hội thoại chỉ định (nếu còn của manager hiện tại) → dự phòng KHÔNG chéo luồng
+        (`fallback_conversation`): hội thoại chỉ định thuộc luồng → cuộc gần nhất trong luồng đó, không thì ở Sảnh (ưu tiên kênh của lịch).
+        None nếu chưa có điều phối viên (hoặc chưa có hội thoại và `create=False`)."""
         mgr = self.hub.manager  # type: ignore[attr-defined]
         aid = mgr.agent_id()
         if not aid:
             return None
         dt = r.get("deliver_to") or {}
         ch = dt.get("channel")
+        wid = None
         if dt.get("conversation_id"):
             try:
                 c = mgr._conv_row(str(dt["conversation_id"]))
@@ -614,15 +616,18 @@ class ScheduleService:
             if c is not None and c["agent_id"] == aid and not c.get("archived_at") and c["channel"] != "heartbeat":
                 return c
             ch = ch or (c or {}).get("channel")
+            wid = (c or {}).get("workstream_id")
+            wid = wid if wid and mgr.ws.maybe(wid) else None
         if ch:
-            row = self.conn.execute("SELECT id FROM manager_conversations WHERE channel=? AND agent_id=? AND archived_at IS NULL ORDER BY updated_at DESC LIMIT 1",
-                                    (ch, aid)).fetchone()
-            if row:
-                return mgr._conv_row(row[0])
-            return mgr._new_conv(ch, aid, f"Lịch: {r['name']}") if create else None
-        home = mgr._home_conversation()
+            row = mgr.fallback_conversation(wid, channel=ch)
+            if row is not None and row["channel"] == ch:
+                return row
+            if not create:
+                return None
+            return mgr._new_conv(ch, aid, f"Lịch: {r['name']}", workstream_id=wid)
+        home = mgr.fallback_conversation(wid)
         if home is None and create:
-            return mgr._new_conv("cli", aid, f"Lịch: {r['name']}")
+            return mgr._new_conv("cli", aid, f"Lịch: {r['name']}", workstream_id=wid)
         return home
 
     @traced("schedule")  # L2: điểm vào nội bộ → req_id mới (cha = mã đang bind)

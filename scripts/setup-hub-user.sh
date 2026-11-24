@@ -8,6 +8,7 @@
 #   Kèm thư mục chung Không gian số: thêm KGS=https://trungtamai.cchchn.com — qua CỔNG CFHARNESS (Không gian số chạy cùng máy): dán khoá
 #   cổng của tài khoản (Không gian số › Hồ sơ › Cổng cfharness) là xong — mọi thư mục/workspace khoá được cấp dùng được ngay.
 #   (Đồng bộ 2 chiều cũ đã bỏ; KGS_MODE/KGS_SCOPE/KGS_FOLDER/KGS_WS của bản cũ vẫn nhận nhưng không còn tác dụng.)
+#   Hub ĐÃ có, chỉ nối Không gian số: sudo ONLY_KGS=1 KGS=https://trungtamai.cchchn.com bash scripts/setup-hub-user.sh vanha
 #   Kèm connector claude.ai (Google Drive…) cho agent: thêm CONNECTORS="Google Drive" CONNECTOR_AGENTS="dieu-phoi agent-a" (hoặc "all") — đăng nhập
 #   `claude auth login` (tài khoản claude.ai) cho user hub; token setup-token KHÔNG nạp connector (docs/dev-notes/manager-connectors.md).
 #   Hub ĐÃ có, chỉ nâng cfharness + nối connector (không đụng token/tunnel/TOTP):
@@ -25,11 +26,12 @@ MCP="${4:-8722}"
 DOMAIN="${DOMAIN:-trungtamdhs.com}"   # miền gốc (zone Cloudflare): https://$SUB.$DOMAIN
 SUB="${SUB:-$U}"        # tên miền con: https://$SUB.$DOMAIN
 HOST="$SUB.$DOMAIN"
-VER="${VER:-v0.2.27}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
+VER="${VER:-v0.2.31}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
 CONNECTORS="${CONNECTORS:-}"              # connector claude.ai, phân cách dấu phẩy (vd "Google Drive,Claude Docs"); "auto" = config
                                           # connectors.auto: mọi agent tự nạp mọi connector tài khoản đã Connect; trống = bỏ qua
 CONNECTOR_AGENTS="${CONNECTOR_AGENTS:-}"  # agent bật connector, cách nhau dấu cách, hoặc "all" = mọi agent; GỘP với connector sẵn có; điều phối viên → manager capabilities (cần --mcp trusted)
 ONLY_CONNECTORS="${ONLY_CONNECTORS:-}"    # 1 = hub đã có: chỉ bước 2 (nâng cfharness) + nối connector, rồi dừng
+ONLY_KGS="${ONLY_KGS:-}"                  # 1 = hub đã có: chỉ bước 10 (nối Không gian số qua cổng cfharness), rồi dừng
 KGS="${KGS:-}"          # URL Không gian số để nối thư mục chung (trống = bỏ qua bước 10)
 # Cổng cfharness (docs/dev-notes/plan-filehub-lane.md): nhập khoá cổng (người dùng tạo ở Không gian số › Hồ sơ › Cổng cfharness cho tài
 # khoản của mình — script hỏi bằng getpass, không in); hub tự thêm mọi gốc khoá được cấp. Chỉ khi Không gian số chạy CÙNG máy (loopback).
@@ -111,9 +113,34 @@ for i in ids:
   echo "  Chạy thử một run của agent: event connector.unavailable = connector chưa Connect trên claude.ai; connector.auth_fallback = chưa đăng nhập."
 }
 
+# Bước 10: nối thư mục chung Không gian số qua cổng cfharness (dùng chung cho chạy đủ và ONLY_KGS=1)
+kgs_step() {
+  step "10/11 Thư mục chung Không gian số${KGS:+: $KGS}"
+  if [ -z "$KGS" ]; then ok "bỏ qua (không đặt KGS=<URL Không gian số>)"; return 0; fi
+  for _ in $(seq 1 30); do cfh filehub status >/dev/null 2>&1 && break; sleep 1; done
+  cfh config set filehub.server "$KGS" >/dev/null  # URL web — để dựng link "Mở trên Không gian số"
+  if cfh filehub lane test ${KGS_LANE_NAME:+--server "$KGS_LANE_NAME"} >/dev/null 2>&1; then ok "cổng cfharness đã nối"; else
+    echo "Dán khoá cổng cfharness của tài khoản $U (Không gian số › Hồ sơ › Cổng cfharness — chọn đúng thư mục/workspace cấp cho hub):"
+    # bỏ trống KGS_LANE_URL / KGS_LANE_NAME → hub thử 8223 rồi 8233 và lấy tên cổng theo Không gian số trả lời
+    cfh filehub lane setup ${KGS_LANE_NAME:+--server "$KGS_LANE_NAME"} ${KGS_LANE_URL:+--url "$KGS_LANE_URL"} \
+      || warn "chưa nối được cổng — chạy lại script hoặc dùng web › Cài đặt › Không gian số (chỉ cần dán khoá)"
+  fi
+  # hub TỰ thêm mọi thư mục/workspace khoá được cấp (setup + mỗi lần kiểm tra); thư mục đồng bộ cũ cùng gốc tự chuyển sang cổng
+  cfh filehub lane test ${KGS_LANE_NAME:+--server "$KGS_LANE_NAME"} || true
+  cfh filehub status || true
+}
+
 [ "$(id -u)" = 0 ] || { echo "Chạy bằng sudo: sudo bash $0"; exit 1; }
 [ -n "$ADMIN" ] && [ "$ADMIN" != root ] || { echo "Chạy bằng 'sudo' từ user admin (không chạy trực tiếp bằng root)"; exit 1; }
 cd /
+
+if [ "$ONLY_KGS" = 1 ]; then
+  id "$U" >/dev/null 2>&1 && [ -x "$H/.local/bin/cfharness" ] || { echo "Chưa có hub của $U — chạy script đủ (không ONLY_KGS) trước"; exit 1; }
+  [ -n "$KGS" ] || { echo "ONLY_KGS=1 cần KGS=<URL Không gian số>"; exit 1; }
+  kgs_step
+  printf '\n\033[1;32mXONG.\033[0m Thư mục chung: sudo -u %s -i cfharness filehub status\n' "$U"
+  exit 0
+fi
 
 if [ "${RESET:-}" = 1 ] && id "$U" >/dev/null 2>&1; then
   step "0/11 RESET hub của $U (dừng dịch vụ, cất dữ liệu cũ sang $H/.reset-…)"
@@ -266,20 +293,7 @@ EOF
   fi
 fi
 
-step "10/11 Thư mục chung Không gian số"
-if [ -z "$KGS" ]; then ok "bỏ qua (không đặt KGS=<URL Không gian số>)"; else
-  for _ in $(seq 1 30); do cfh filehub status >/dev/null 2>&1 && break; sleep 1; done
-  cfh config set filehub.server "$KGS" >/dev/null  # URL web — để dựng link "Mở trên Không gian số"
-  if cfh filehub lane test ${KGS_LANE_NAME:+--server "$KGS_LANE_NAME"} >/dev/null 2>&1; then ok "cổng cfharness đã nối"; else
-    echo "Dán khoá cổng cfharness của tài khoản $U (Không gian số › Hồ sơ › Cổng cfharness — chọn đúng thư mục/workspace cấp cho hub):"
-    # bỏ trống KGS_LANE_URL / KGS_LANE_NAME → hub thử 8223 rồi 8233 và lấy tên cổng theo Không gian số trả lời
-    cfh filehub lane setup ${KGS_LANE_NAME:+--server "$KGS_LANE_NAME"} ${KGS_LANE_URL:+--url "$KGS_LANE_URL"} \
-      || warn "chưa nối được cổng — chạy lại script hoặc dùng web › Cài đặt › Không gian số (chỉ cần dán khoá)"
-  fi
-  # hub TỰ thêm mọi thư mục/workspace khoá được cấp (setup + mỗi lần kiểm tra); thư mục đồng bộ cũ cùng gốc tự chuyển sang cổng
-  cfh filehub lane test ${KGS_LANE_NAME:+--server "$KGS_LANE_NAME"} || true
-  cfh filehub status || true
-fi
+kgs_step
 
 connectors_step
 

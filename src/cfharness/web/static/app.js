@@ -17,6 +17,44 @@
     for (var i = 0; i < ok.length; i++) ok[i].remove();
   }, 7000);
 
+  // ------------------------------------------------------------ polling htmx chỉ khi tab đang hiện
+  // Mỗi lượt `hx-trigger="every Ns"` là một RPC tới daemon (vd tui.snapshot 170–370 ms trên hub lớn) mà daemon phục vụ trên MỘT
+  // vòng sự kiện → tab nền làm chậm mọi người. Không dùng bộ lọc `every 3s [document.visibilityState=='visible']`: base.html
+  // đặt allowEval:false (CSP script-src 'self') nên htmx từ chối biểu thức lọc và vẫn hỏi. Ở đây: lượt poll lúc tab ẩn bị huỷ
+  // (htmx vẫn hẹn lượt sau) và phần tử bị đánh dấu "cũ"; tab hiện lại → mỗi phần tử cũ tải lại ĐÚNG MỘT lần.
+  // Lượt poll của htmx 2 gọi handler không kèm event (triggeringEvent rỗng) với elt = chính phần tử có hx-trigger "every …";
+  // click/submit/`mgr-tick from:body` có event, htmx.ajax() không nguồn có elt = body → không bao giờ bị chặn.
+  var POLL_RE = /(^|,)\s*every\s/;
+  var pollStale = typeof Set === "function" ? new Set() : null;
+  var pollLast = typeof WeakMap === "function" ? new WeakMap() : null;
+  function isPoll(d) {
+    var elt = d && d.elt, c = d && d.requestConfig;
+    if (!elt || !c || c.triggeringEvent || !elt.getAttribute) return false;
+    return POLL_RE.test(elt.getAttribute("hx-trigger") || "");
+  }
+  if (pollStale && pollLast) {
+    document.body.addEventListener("htmx:beforeRequest", function (e) {
+      if (!isPoll(e.detail)) return;
+      var elt = e.detail.elt;
+      if (document.hidden) { e.preventDefault(); pollStale.add(elt); return; }
+      // vừa tải lại khi quay về tab → bỏ lượt poll định kỳ rơi ngay sau đó (không gửi đôi)
+      var t = pollLast.get(elt);
+      if (t && Date.now() - t < 1500) e.preventDefault();
+    });
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden || !window.htmx || !pollStale.size) return;
+      var els = Array.from(pollStale);
+      pollStale.clear();
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i], url = el.getAttribute("hx-get");
+        if (!el.isConnected || !url || !POLL_RE.test(el.getAttribute("hx-trigger") || "")) continue;
+        pollLast.set(el, Date.now());
+        // source = chính phần tử → htmx tự áp hx-target/hx-swap của nó, như một lượt poll; có event → không bị coi là poll
+        window.htmx.ajax("GET", url, { source: el, event: new CustomEvent("cfh:poll-resume") }).catch(function () {});
+      }
+    });
+  }
+
   // ------------------------------------------------------------ thời gian tương đối
   function relText(d) {
     var s = Math.round((Date.now() - d.getTime()) / 1000);
@@ -561,7 +599,9 @@
       }, function () {}).then(function () { busy = false; if (again) schedule(400); });
     }
     function schedule(ms) { if (!timer) timer = setTimeout(refresh, ms); }
-    function startPoll() { if (!poll) poll = setInterval(function () { if (!live) schedule(0); }, 15000); }
+    // hỏi lại dự phòng chỉ khi tab đang hiện; quay về tab lúc SSE vẫn chết → tải lại một lần ngay
+    function startPoll() { if (!poll) poll = setInterval(function () { if (!live && !document.hidden) schedule(0); }, 15000); }
+    document.addEventListener("visibilitychange", function () { if (poll && !live && !document.hidden) schedule(0); });
     function connect() {
       es = new EventSource(sseUrl);
       es.onopen = function () {
@@ -587,7 +627,7 @@
   // Mục HTML do server vẽ sẵn (autoescape) — chữ chạy (delta) chỉ gán bằng textContent. Không bao giờ dựng HTML từ chữ của agent.
   // Đổi tab luồng / hội thoại KHÔNG tải lại cả trang: tải /manager?… bằng fetch, thay #mgr-grid + danh sách hội thoại ở thanh bên,
   // pushState; luồng SSE + ô nhập khởi động lại qua mgrBoot(). Lỗi/không phải trang điều phối → điều hướng thường (an toàn).
-  var mgrStop = null, mgrNav = null;
+  var mgrStop = null, mgrNav = null, mgrDimT = null;
   // bản nháp ô nhập theo hội thoại/luồng — sessionStorage (giữ khi đổi tab và khi tải lại trang; riêng từng tab trình duyệt)
   function draftGet(k) { try { return sessionStorage.getItem("cfh_mgr_draft:" + k) || ""; } catch (_) { return ""; } }
   function draftSet(k, v) {
@@ -608,7 +648,8 @@
     if (!a || a.target || a.hasAttribute("download")) return null;
     var u;
     try { u = new URL(a.getAttribute("href"), location.href); } catch (_) { return null; }
-    return u.origin === location.origin && u.pathname === "/manager" ? u.pathname + u.search : null;
+    // `?ui=` (đổi giao diện cũ ↔ island) → tải thật cả trang
+    return u.origin === location.origin && u.pathname === "/manager" && !u.searchParams.get("ui") ? u.pathname + u.search : null;
   }
   function mgrGo(url, push, a) {
     var grid = document.getElementById("mgr-grid");
@@ -618,7 +659,9 @@
     if (mgrNav && mgrNav.abort) mgrNav.abort();
     var ctl = window.AbortController ? new AbortController() : {};
     mgrNav = ctl;
-    grid.classList.add("mgr-loading");
+    // chỉ làm mờ khi chờ lâu (> 400 ms) — đổi tab nhanh thì không nháy
+    clearTimeout(mgrDimT);
+    mgrDimT = setTimeout(function () { if (mgrNav === ctl) grid.classList.add("mgr-loading"); }, 400);
     if (a && a.classList.contains("ws-tab")) {  // đánh dấu tab ngay, không chờ server
       var tabs = document.querySelectorAll("#ws-tabs .ws-tab");
       for (var i = 0; i < tabs.length; i++) tabs[i].classList.toggle("on", tabs[i] === a);
@@ -626,14 +669,15 @@
     var open = document.querySelectorAll("details[open]");
     for (var j = 0; j < open.length; j++) if (!open[j].closest(".mgr-side")) open[j].removeAttribute("open");
     root.classList.remove("mgr-info-open");
-    fetch(url, { credentials: "same-origin", signal: ctl.signal })
+    // X-Ahub-Partial: server chỉ vẽ khung lưới + danh sách hội thoại (không thanh bên/menu, không hỏi số trên menu)
+    fetch(url, { credentials: "same-origin", signal: ctl.signal, headers: { "X-Ahub-Partial": "grid" } })
       .then(function (r) {
         if (!r.ok || new URL(r.url, location.href).pathname !== "/manager") throw new Error("nav");
         return r.text();
       })
       .then(function (html) {
         if (mgrNav !== ctl) return;
-        mgrNav = null;
+        mgrNav = null; clearTimeout(mgrDimT);
         var doc = new DOMParser().parseFromString(html, "text/html");
         var ng = doc.getElementById("mgr-grid"), cur = document.getElementById("mgr-grid");
         if (!ng || !cur) throw new Error("nav");
@@ -655,6 +699,7 @@
       })
       .catch(function (err) {
         if (err && err.name === "AbortError") return;
+        clearTimeout(mgrDimT);
         location.href = url;
       });
   }
@@ -674,8 +719,29 @@
     });
   }
 
+  // Cập nhật hàng tab TẠI CHỖ (không replaceWith cả khối): khớp tab theo href, chỉ đổi tab khác đi — giữ focus, cuộn ngang, hover
+  function patchTabs(cur, n) {
+    cur.setAttribute("data-w", n.getAttribute("data-w") || "");
+    var old = {}, i, c, a;
+    for (i = 0; i < cur.children.length; i++) { c = cur.children[i]; old[c.getAttribute("href") || ("#" + i)] = c; }
+    var want = [];
+    for (i = 0; i < n.children.length; i++) {
+      var nc = n.children[i], key = nc.getAttribute("href") || ("#" + i), oc = old[key];
+      if (oc && oc.tagName === nc.tagName) {
+        delete old[key];
+        if (oc.outerHTML !== nc.outerHTML) {
+          for (a = oc.attributes.length - 1; a >= 0; a--) if (!nc.hasAttribute(oc.attributes[a].name)) oc.removeAttribute(oc.attributes[a].name);
+          for (a = 0; a < nc.attributes.length; a++) if (oc.getAttribute(nc.attributes[a].name) !== nc.attributes[a].value) oc.setAttribute(nc.attributes[a].name, nc.attributes[a].value);
+          if (oc.innerHTML !== nc.innerHTML) oc.innerHTML = nc.innerHTML;  // HTML server vẽ (autoescape), như khi thay cả hàng tab
+        }
+        want.push(oc);
+      } else want.push(document.importNode(nc, true));
+    }
+    for (var k in old) if (old[k].parentNode === cur) old[k].remove();
+    for (i = 0; i < want.length; i++) if (cur.children[i] !== want[i]) cur.insertBefore(want[i], cur.children[i] || null);
+  }
   function initManager(ml) {
-    var mes = null, tabsT = null, tabsPoll = null, retryT = null, backoff = 1000, dead = false;
+    var mes = null, tabsT = null, tabsPoll = null, tabsCtl = null, readCtl = null, retryT = null, backoff = 1000, dead = false;
     var mform = document.getElementById("mgr-form");
     var mtext = document.getElementById("mgr-text");
     var merr = document.getElementById("mgr-err");
@@ -762,6 +828,7 @@
     }
     function handle(m) {
       var r = m.run, s = stick();
+      if (m.t === "reply" && conv && (m.conv === conv || (r && runs[r]))) readDirty = true;  // tin mới trong hội thoại đang xem
       if (m.t === "tick" || m.t === "status" || m.t === "run_end" || m.t === "reply") tabsSoon();
       if (m.t === "status") return;
       if (m.t === "tick") { document.body.dispatchEvent(new Event("mgr-tick")); return; }
@@ -781,7 +848,11 @@
         if (ex) ex.replaceWith(qn); else put(qn, s);
         return;
       }
-      if (m.t === "action") {
+      // tin/thẻ gắn MỘT hội thoại khác (lượt nhịp báo nhiều cuộc, câu trả lời cuối của nhịp ở hội thoại heartbeat) → không bao giờ vào đây
+      if ((m.t === "reply" || m.t === "action") && m.conv && conv && m.conv !== conv) return;
+      var mine = (m.t === "reply" || m.t === "action") && m.conv && conv && m.conv === conv;  // của đúng cuộc này (vd notify từ lượt nhịp)
+      if (r && !runs[r] && !mine) { (early[r] = early[r] || []).push(m); if (early[r].length > 400) early[r].shift(); return; }
+      if (m.t === "action") {  // "Hành động gần đây": chỉ thẻ đã qua bộ lọc run/hội thoại ở trên (không lẫn việc của luồng khác)
         var side = document.getElementById("mgr-actions");
         if (side && m.side && !m.sideDone) {
           m.sideDone = true;
@@ -789,8 +860,6 @@
           var li = fromHTML(m.side); if (li) side.insertBefore(li, side.firstChild);
         }
       }
-      var mine = m.t === "reply" && m.conv && conv && m.conv === conv;  // tin của đúng cuộc trò chuyện này (vd notify từ lượt nhịp)
-      if (r && !runs[r] && !mine) { (early[r] = early[r] || []).push(m); if (early[r].length > 400) early[r].shift(); return; }
       var p = pend[r], q = p ? parts(p) : null;
       if (m.t === "delta" || m.t === "draft" || m.t === "seg") {
         if (!q) return;
@@ -885,22 +954,43 @@
     }
     // hàng tab luồng: chấm "đang chạy / cần bạn / đã xong" — làm mới khi SSE báo run bắt đầu/kết thúc, và hỏi lại mỗi 20 s
     // (task của agent khác không đi qua luồng SSE của điều phối viên)
-    function tabsSoon(ms) { if (!tabsT) tabsT = setTimeout(tabsLoad, ms == null ? 500 : ms); }
+    function tabsSoon(ms) { if (!tabsT && !dead) tabsT = setTimeout(tabsLoad, ms == null ? 500 : ms); }
+    // "đã đọc" là một POST riêng (GET không ghi): khi hội thoại đang HIỆN trên màn hình — lúc mở, và khi có tin mới trong lúc xem
+    var readDirty = !!conv;
+    function markRead() {
+      if (!conv || !mform || !window.fetch || document.hidden) return Promise.resolve();
+      readDirty = false;
+      var fd = new FormData(), cs = mform.querySelector('input[name="csrf"]');
+      fd.append("csrf", cs ? cs.value : ""); fd.append("k", getKey()); fd.append("c", conv);
+      var ctl = readCtl = window.AbortController ? new AbortController() : null;
+      return fetch("/manager/read", { method: "POST", body: fd, credentials: "same-origin", headers: { "X-Ahub-Fetch": "1" },
+                                      signal: ctl ? ctl.signal : undefined })
+        .then(function () {}, function () {});
+    }
     function tabsLoad() {
       tabsT = null;
       var el = document.getElementById("ws-tabs");
-      if (!el || !window.fetch) return;
-      fetch("/partials/manager/tabs?w=" + encodeURIComponent(el.getAttribute("data-w") || "") + (conv ? "&c=" + encodeURIComponent(conv) : ""), { credentials: "same-origin" })
-        .then(function (r) { return r.ok ? r.text() : null; })
+      if (dead || !window.fetch) return;
+      if (!el) { if (readDirty) markRead(); return; }
+      if (tabsCtl) tabsCtl.abort();
+      var ctl = tabsCtl = window.AbortController ? new AbortController() : null;
+      var url = "/partials/manager/tabs?w=" + encodeURIComponent(el.getAttribute("data-w") || "") + (conv ? "&c=" + encodeURIComponent(conv) : "");
+      (readDirty ? markRead() : Promise.resolve())
+        .then(function () {
+          if (dead) return null;
+          return fetch(url, { credentials: "same-origin", signal: ctl ? ctl.signal : undefined }).then(function (r) { return r.ok ? r.text() : null; });
+        })
         .then(function (html) {
+          if (tabsCtl === ctl) tabsCtl = null;
           var cur = document.getElementById("ws-tabs"), n = html && fromHTML(html);
-          if (!cur || !n || n.id !== "ws-tabs" || mgrNav) return;  // đang chuyển tab → trang mới tự mang hàng tab mới
-          var x = cur.scrollLeft;
-          cur.replaceWith(n);
-          n.scrollLeft = x;
+          if (dead || !cur || !n || n.id !== "ws-tabs" || mgrNav) return;  // đang chuyển tab → trang mới tự mang hàng tab mới
+          patchTabs(cur, n);
         }, function () {});
     }
     tabsPoll = setInterval(function () { if (!document.hidden) tabsSoon(0); }, 20000);
+    function onVis() { if (!document.hidden && readDirty) tabsSoon(0); }
+    document.addEventListener("visibilitychange", onVis);
+    if (readDirty) tabsSoon(0);  // đánh dấu đã đọc hội thoại vừa mở (+ làm mới số chưa đọc)
     // P0-4: SSE tự nối lại có giãn (cả sau `end`) với since = seq cuối đã nhận → không lặp chữ, không chết luồng
     function liveState(ok) {
       if (!mlive) return;
@@ -1063,6 +1153,8 @@
         if (!b) return;
         fill(b.getAttribute("data-fill"), false);
       });
+      // đã chuyển luồng/hội thoại khác (mgrGo dựng instance mới) trong lúc chờ → instance này không được đụng URL, nháp, khung chat mới
+      var gone = function () { return dead || !ml.isConnected || !mform.isConnected; };
       mform.addEventListener("submit", function (e) {
         e.preventDefault();  // khoá phiên `k` đã được gắn ở pha capture (trên)
         if (!mtext.value.trim() && !picked.length) { if (pendingRun()) stopRun(); return; }
@@ -1074,6 +1166,7 @@
         fetch(mform.getAttribute("action"), { method: "POST", body: fd, credentials: "same-origin", headers: { "X-Ahub-Fetch": "1" } })
           .then(function (resp) { return resp.json().catch(function () { return { error: "Lỗi " + resp.status }; }); })
           .then(function (j) {
+            if (gone()) return;
             if (j.error) { if (merr) { merr.textContent = j.error; merr.hidden = false; } emit("send_error", { error: j.error }); return; }
             draftSet(draftKey(), "");
             if (j.conversation_id && j.conversation_id !== conv) {
@@ -1095,10 +1188,11 @@
             emit("sent", { run: j.run_id || "", steered: !!j.steered, conv: conv });
           })
           .catch(function () {
+            if (gone()) return;
             if (merr) { merr.textContent = "Không gửi được — kiểm tra kết nối rồi thử lại."; merr.hidden = false; }
             emit("send_error", { error: "Không gửi được — kiểm tra kết nối." });
           })
-          .then(function () { paintSend(); mtext.focus(); });
+          .then(function () { if (!gone()) { paintSend(); mtext.focus(); } });
       });
     }
     return function stop() {
@@ -1108,6 +1202,9 @@
       clearTimeout(retryT);
       clearInterval(tabsPoll);
       clearTimeout(tabsT);
+      document.removeEventListener("visibilitychange", onVis);
+      if (tabsCtl) tabsCtl.abort();  // fetch hàng tab đang bay: bỏ (không thay hàng tab của trang mới)
+      if (readCtl) readCtl.abort();
     };
   }
   mgrBoot();

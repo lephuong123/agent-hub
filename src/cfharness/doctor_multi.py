@@ -45,7 +45,7 @@ def _read_secret(paths: HubPaths, name: str) -> str | None:
 
 
 def collect(paths: HubPaths) -> list[dict[str, Any]]:
-    from .config import MCP_HTTP_DEFAULT_PORT, MCP_OAUTH_CALLBACK_DEFAULT_PORT, HubConfig
+    from .config import MCP_HTTP_DEFAULT_PORT, HubConfig
     from .web.cli import _port_busy
     from .web.security import cookie_name, read_state
 
@@ -119,8 +119,6 @@ def collect(paths: HubPaths) -> list[dict[str, Any]]:
         add("cổng MCP HTTP", False, f"{mcp_port} đang bận (có thể là `mcp serve --http` của chính hub này, hoặc hub khác)", "warning")
     else:
         add("cổng MCP HTTP", True, f"{mcp_port} trống")
-    cb = int(cget("mcp_client.oauth_callback_port", MCP_OAUTH_CALLBACK_DEFAULT_PORT))
-    add("cổng callback OAuth (mcp login)", True, "OS chọn (0)" if cb == 0 else str(cb))
     # 4. bot chat — chỉ "đã cấu hình" + vân tay
     for label, key in (("Telegram bot", "notify.telegram.bot_token_secret"), ("Slack bot", "notify.slack.bot_token_secret"),
                        ("Slack app (Socket Mode)", "notify.slack.app_token_secret")):

@@ -91,6 +91,8 @@ if "hang" in prompt:
             on_int()
     time.sleep(60)
 result()
+if "linger" in prompt:  # như CLI còn task nền (Bash bị chuyển nền): đã có result nhưng không thoát dù stdin đóng
+    time.sleep(120)
 # stream-json: chỉ thoát khi stdin đóng
 for _ in sys.stdin:
     pass

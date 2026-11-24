@@ -207,10 +207,12 @@ async def test_rpc_human_only(hub_home, tmp_path, monkeypatch):
         status.mkdir()
         _put(status, f"{ME}.json", _sample())
         d.hub.config.set("admin_export.dir", str(status))
-        # người nhưng KHÔNG thuộc nhóm cfharness-admin → từ chối (plan-admin-users: is_admin ở RPC)
+        # người nhưng KHÔNG thuộc nhóm cfharness-admin → như method không tồn tại (FR-SA-VIS-03)
+        from cfharness.rpc import METHOD_NOT_FOUND
+
         with pytest.raises(HubError) as ei:
             await rpc(d, "admin.overview", {})
-        assert ei.value.code == BLOCKED and "cfharness-admin" in str(ei.value)
+        assert ei.value.code == METHOD_NOT_FOUND and "không có method admin.overview" in str(ei.value)
         monkeypatch.setattr(ac, "_GETGRNAM", lambda n: type("G", (), {"gr_gid": 4242, "gr_mem": []})())
         monkeypatch.setattr(ac, "_GETGROUPS", lambda: [4242])
         r = await rpc(d, "admin.overview", {})
@@ -267,11 +269,11 @@ async def test_web_page_renders_and_menu_only_for_admin(hub_home, tmp_path, as_a
         env.hub.config.set("admin_export.dir", str(status))
         await env.login()
         grnam, groups = ac._GETGRNAM, ac._GETGROUPS
-        ac._GETGROUPS = lambda: []  # không thuộc nhóm admin → không có mục menu, trang 403
+        ac._GETGROUPS = lambda: []  # không thuộc nhóm admin → không có mục menu, trang 404 (VIS-02)
         try:
             html = (await env.client.get("/costs")).text
             assert "/admin/overview" not in html and "/admin/users" not in html
-            assert (await env.client.get("/admin/overview")).status_code == 403
+            assert (await env.client.get("/admin/overview")).status_code == 404
         finally:
             ac._GETGRNAM, ac._GETGROUPS = grnam, groups
             env.app.state.web._admin_nav = None

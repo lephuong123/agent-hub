@@ -1,6 +1,6 @@
 # Plan: chuyển xử lý MCP bên thứ ba sang `claude` (MCP do claude quản lý theo tài khoản)
 
-Trạng thái: PLAN (2026-11-20). PR1 (#171), PR2, PR3, PR4 giai đoạn A đã làm; PR4 giai đoạn B (gỡ code OAuth/proxy) + PR5 chưa làm. Phụ thuộc nhánh connector theo tài khoản (`accounts/claude_config.py`, v0.2.27).
+Trạng thái: PLAN (2026-11-20). PR1 (#171), PR2, PR3, PR4 giai đoạn A + B (gỡ code OAuth/proxy, 2026-11-21) đã làm; PR5 chưa làm. Phụ thuộc nhánh connector theo tài khoản (`accounts/claude_config.py`, v0.2.27).
 
 ## 1. Kết luận phân tích
 
@@ -58,6 +58,15 @@ Danh sách kiểm ban đầu:
   tệp này cũng forbidden (Edit trả lại một đoạn nội dung); Bash xét cả dạng `--data=@…`/`-F f=@…`. `permissions.deny` qua
   `runtime.claude_files_deny_rules` (giữ cả khi trust_full); sandbox `denyRead` qua `claude_files.deny_read_paths` (cả `confine_only_sandbox`).
   **Chưa làm:** che theo giá trị header/env `mcpServers` (`redact`).
+- **Đã làm (2026-11-21, nhánh `feat/mcp-claude-redact-register`) — che theo giá trị:** `mcp_client/claude_redact.py`
+  (`hub.claude_redact`, gắn ở `mcp_client/wiring.attach`): đọc `mcpServers` (+ `projects[*].mcpServers`) của `.claude.json` và
+  `managedMcpServers` của `remote-settings.json` — cấu hình mặc định + MỌI thư mục `claude-config/a_xxxxxxxx/` (quét thư mục, không
+  cần DB) — chọn giá trị bằng CÙNG heuristic tách secret của `importer._Extractor` (khoá nhạy cảm, `Bearer …`, entropy cao; env, header,
+  args, query của url) + mật khẩu userinfo của url (cả dạng đã giải mã %), rồi `redact.register_secret_values` (≥ `MIN_VALUE_LEN`).
+  Làm mới theo `(mtime_ns, size)` — chỉ stat khi không đổi: `Hub.start` + mỗi lần run khởi động (`RunManager._refresh_claude_redact`,
+  thêm thư mục của tài khoản đang dùng). Không bao giờ log/trả giá trị (chỉ số file đọc lại). Lệch: giá trị không còn trong file vẫn
+  được che tới khi daemon khởi động lại (sổ che chỉ thêm, như SecretStore); header không nhạy cảm (vd `Content-Type`) không che.
+  Test: `tests/test_redact_claude_config.py`.
 
 ### PR2 — Registry nhận server nguồn `claude`
 - `McpServerConfig.source: hub|claude` (mặc định `hub`, không migration bảng — cột JSON sẵn có; nếu cần cột → migration mới).
@@ -192,7 +201,32 @@ hub không chuyển (claude tự xin, cảnh báo); client OAuth có secret chư
 `http://localhost:<cổng>/callback` của claude ở nhà cung cấp (cảnh báo). `move` giữ token hub còn chờ (lượt `mcp.migrations` bị dọn) → xoá
 bằng `--drop-hub-token`.
 
-**Còn lại cho giai đoạn B (bản sau, khi hub thật không còn server OAuth nguồn hub):** gỡ `oauth.py`, `oauth_proxy.py`, `oauth_cli.py`,
+**Giai đoạn B — ĐÃ LÀM (2026-11-21, nhánh `feat/mcp-oauth-removal`, v0.2.28):**
+- Gỡ `mcp_client/oauth.py`, `oauth_proxy.py`, `oauth_cli.py`, `web/mcp_oauth.py`, template `_mcp_oauth.html`/`mcp_oauth_go.html`/
+  `mcp_oauth_done.html`, route `/do/mcp_connect` + `/mcp/oauth/callback`, `hub.mcp_oauth`/`hub.mcp_proxy`, `ensure_fresh_for`/`inject_bearer`
+  /proxy trong `runs._run`, config `mcp.oauth_proxy.*` + `mcp_client.oauth_callback_port` (DEFAULTS, `validate_setting`, `integrity.SECURITY_KEYS`
+  — so khớp toàn vẹn tính lại cả bản chuẩn lẫn file hiện tại theo danh sách mới nên hub cũ còn khoá không bị báo sửa; config.yaml cũ vẫn đọc),
+  dòng doctor_multi "cổng callback OAuth", test `test_mcp_oauth.py`/`test_mcp_oauth_proxy.py`/`oauth_fake.py`.
+- Còn lại cho dòng cũ: `mcp_client/legacy_oauth.py` (tên bản ghi `MCP_OAUTH_*`, `is_oauth`/`needs_migration`, nạp bộ che, `delete_record`,
+  stub RPC, cảnh báo khởi động). `migrate.py` chỉ dùng module này (url/transport/`auth.client_id` lấy từ cấu hình registry).
+- RPC `mcp.oauth_start|callback|status|disconnect|refresh` = stub `HubError` "Đăng nhập OAuth do hub giữ đã gỡ từ v0.2.28 — chuyển server sang
+  claude: cfharness mcp migrate-to-claude <tên> --account <id>" (giữ trong HUMAN_ONLY/MUTATING một bản). `cfharness mcp login|logout` in cùng
+  câu (mã 1, không gọi daemon); `mcp add|edit --oauth*` → lỗi hướng dẫn `mcp claude add`; `--no-oauth` vẫn bỏ được auth của dòng cũ.
+- `McpRegistry.add`/`update(auth=…)` từ chối `auth.type: oauth` nguồn hub (`legacy_oauth.ADD_REFUSED`; `add(allow_legacy_oauth=True)` chỉ cho
+  test dựng dòng cũ). Sửa trường khác của dòng cũ vẫn được. Web: ô "Đăng nhập OAuth" ở form thêm MCP bỏ; danh mục MCP với server cần OAuth
+  chỉ hướng sang Cài đặt › Tài khoản Claude › Thêm MCP (không tạo dòng nguồn hub).
+- Dòng cũ (nguồn hub + `auth: oauth`): `mcp.list/show` có `oauth_status = needs_migration` + `migrate_cmd`; run của agent gán → `RunManager.
+  _refuse_legacy_oauth_mcp` (trước `_prepare_spec`, chưa ghi gì vào `runtime/`) phát `mcp.unavailable{server, status: needs_migration,
+  source: hub}` rồi `failed` với lỗi nêu tên + lệnh chuyển; `registry.runtime_entry` cũng ném lỗi này (takeover, probe — gợi ý = lệnh chuyển).
+  Doctor: `mcp:<tên>` + `mcp_hub_oauth` mức error kèm lệnh. Web `/mcp`: nhãn "cần chuyển sang claude" (link `#migrate`); `/mcp/{name}`: thẻ
+  `_mcp_migrate.html` (form «Chuyển sang claude», action `mcp_migrate_claude` chuyển sang `web/mcp_pages.py`). `Hub.start` → MỘT dòng
+  WARNING liệt kê server (`legacy_oauth.warn_on_start`). Không bao giờ tự xoá dòng/secret.
+- hub_transfer: giữ `MCP_OAUTH_` trong `CLONE_SKIP_PREFIXES` (gói cũ vẫn bỏ khi clone). `with_loopback_no_proxy` giữ (MCP http loopback).
+- Test: `tests/test_mcp_migrate.py` (+ ca run fail-closed trước spawn, stub RPC, add bị từ chối, cảnh báo khởi động, web nhãn/thẻ, CLI
+  login|logout), `tests/test_web_mcp.py` (danh mục OAuth → claude), `tests/test_mcp_cli_flags.py`, `tests/test_multi_instance.py`.
+- Chưa làm: gỡ hẳn tên stub `mcp.oauth_*` + `mcp login|logout` (bản sau); `OAuthSettings` trong `mcp_client/config.py` giữ để đọc dòng cũ.
+
+**Kế hoạch giai đoạn B ban đầu (lưu lại):** gỡ `oauth.py`, `oauth_proxy.py`, `oauth_cli.py`,
 `web/mcp_oauth.py` (+ template `_mcp_oauth.html`, `mcp_oauth_go/done.html`), RPC `mcp.oauth_*` (giữ stub trả lỗi hướng dẫn migrate một
 phiên bản), config `mcp.oauth_proxy.*` + `mcp_client.oauth_callback_port`, `inject_bearer`/`ensure_fresh_for` trong runs/registry, nhánh OAuth
 của doctor/catalog/`mcp add --oauth`, test OAuth/proxy (~30); chuyển tự động lúc daemon lên (hoặc chặn run) cho server còn sót; CHANGELOG
@@ -201,6 +235,14 @@ của doctor/catalog/`mcp add --oauth`, test OAuth/proxy (~30); chuyển tự đ
 ### PR5 — Điều phối viên + doctor
 - `mcp_registry_list` hiện cả `source`; khung `read_only_trusted` áp như server hub (dựa annotation thủ công).
 - `hub doctor`: server claude chưa đăng nhập / tài khoản đang dùng thiếu server được gán.
+
+**Đã làm (2026-11-21, nhánh `feat/mcp-claude-redact-register`) — phần web còn thiếu:** mục "MCP của tài khoản" có nút
+«Đăng ký cho hub» cho server có trong cấu hình claude mà registry chưa có (ACTIONS `mcp_claude_register` → RPC có sẵn
+`mcp.add{config:{name, source:"claude", trust}, account_id}`, HUMAN_ONLY, xác nhận một bước nêu ý nghĩa tin cậy, CSRF/khoá phiên + audit
+`web`, quay về `/settings#acct-mcp-<id>`); ô «Tin cậy» → `trusted`, không tích → `untrusted`. Server `hub=true` (trỏ về chính hub) không
+có nút, hiện "trỏ về chính hub". Form agent: nhãn `claude` cạnh MCP nguồn claude. Tên đã xoá mềm trong registry → `mcp.add` báo trùng
+(khôi phục ở trang MCP / `cfharness mcp restore`) — giữ nguyên hợp đồng `reuse=False` của PR2. Test:
+`tests/test_mcp_claude_login.py::test_web_mcp_register_for_hub_button`.
 
 ## 4. Đánh đổi phải chấp nhận
 - Server `source=claude` gắn với **tài khoản**, không với hub: đổi tài khoản đang dùng → server đó chỉ có nếu tài khoản mới cũng có (doctor + `connector.auth_fallback`-tương tự cảnh báo).
