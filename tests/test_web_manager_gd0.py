@@ -65,6 +65,11 @@ async def test_pending_frame_reads_newest_events_of_long_run(mheld, monkeypatch)
     j = await send(e, "làm việc dài")
     conv, run = j["conversation_id"], j["run_id"]
     assert await until(lambda: (e.hub.store.get_run(run) or {}).get("status") == "running")
+    # chờ runtime giả phát xong tool của chính nó (nếu không, tool đó có thể tới SAU tool "mới nhất" của test → khung hiện tool giả)
+    for _ in range(100):
+        if ((await snap(e, f"?c={conv}"))["pending"] or {}).get("tool"):
+            break
+        await asyncio.sleep(0.05)
     # run "dài": tool cũ (đã xong từ lâu) rồi nhiều event, cuối cùng là tool đang dùng — chỉ đọc 4 event gần nhất
     e.hub.publish(make_event("tool.start", "boss", {"name": "Glob", "tool_id": "old", "args_preview": "cu-xa-lam"}, run_id=run))
     for i in range(10):
@@ -75,7 +80,7 @@ async def test_pending_frame_reads_newest_events_of_long_run(mheld, monkeypatch)
     pend: dict = {}
     for _ in range(100):  # event ghi DB bất đồng bộ — chờ tool mới nhất đã lưu
         pend = (await snap(e, f"?c={conv}"))["pending"] or {}
-        if pend.get("tool"):
+        if "moi-nhat" in (pend.get("tool") or ""):
             break
         await asyncio.sleep(0.05)
     assert pend["run"] == run and "moi-nhat" in pend["tool"] and "cu-xa-lam" not in pend["tool"], pend
