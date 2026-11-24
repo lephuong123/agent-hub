@@ -110,3 +110,26 @@ def test_policy_claude_pages(env, client):
     html = client.get("/policy?scope=default&sim=1&c.budget.usd_per_day=5", headers=H(s)).text
     assert "Mô phỏng" in html and 'name="p.content:json"' in html
     assert "q" * 90 not in client.get("/claude", headers=H(s)).text
+
+
+def test_csv_import_reports_rows_in_ui(env, client):
+    """Báo cáo theo dòng của user.import_csv phải tới người: dòng lỗi (kể cả khi bỏ chọn chạy thử — không tạo gì) và số dòng hợp lệ."""
+    s = client.signer
+    acct = env.ok("claude.account_add", {"name": "Max 1", "token": "sk-ant-oat01-" + "q" * 90}, as_="boss")
+    aid = acct.get("id") or env.state.db.one("SELECT id FROM claude_accounts")["id"]
+    tok = csrf_of(client.get("/users/bulk", headers=H(s)).text)
+    head = "os_user,full_name,email,group,team,sub\n"
+
+    def send(csv: str, dry: str) -> str:
+        r = client.post("/op/user.import_csv", data={"csrf": tok, "next": "/users/bulk", "p.csv": csv, "p.claude_account_id": aid,
+                                                     "p.dry_run:bool": dry}, headers=H(s))
+        assert r.status_code == 200, r.text[:300]
+        return r.text
+
+    html = send(head + "an,An,an@ex.com,,,\n<b>x y</b>,X,,,,\n", "false")
+    assert "1 dòng lỗi" in html and "chưa tạo user nào" in html and "dòng 3" in html
+    assert "&lt;b&gt;x y&lt;/b&gt;" in html and "<b>x y</b>" not in html  # dữ liệu CSV escape
+    assert ": xong" not in html
+    html = send(head + "an,An,an@ex.com,,,\n", "true")
+    assert "Chạy thử: 1 dòng hợp lệ" in html
+    assert not env.state.db.one("SELECT 1 FROM hub_users WHERE os_user='an'")

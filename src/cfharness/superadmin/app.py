@@ -330,8 +330,8 @@ def build(app: SacApp) -> Starlette:
                 detail = " — " + "; ".join(f"{x.get('field')}: {x.get('error')}" for x in e.data[:3] if isinstance(x, dict))
             s.flash("err", f"{label or name}: {e.message}{detail}")
             return RedirectResponse(nxt, status_code=303)
-        views.after_op(s, name, r)
-        s.flash("ok", f"{label or views.OP_LABEL.get(name, name)}: xong")
+        if not views.after_op(s, name, r):
+            s.flash("ok", f"{label or views.OP_LABEL.get(name, name)}: xong")
         jid = r.get("job_id") if isinstance(r, dict) else None
         if jid:
             return RedirectResponse(f"/jobs/{jid}", status_code=303)
