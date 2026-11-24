@@ -18,6 +18,7 @@ import os
 import re
 import unicodedata
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 from urllib.parse import urlsplit
@@ -56,6 +57,9 @@ ERROR_TEXT = {
     "bad_response": "phản hồi không hợp lệ", "version_mismatch": "phiên bản giao thức khác", "not_local_url": "URL cổng phải là loopback",
 }
 RETRYABLE = frozenset({"file_locked", "rate_limited", "too_many_writes", "scan_unavailable", "offline", "in_progress"})
+
+
+SENT_IDEM_MAX = 4096  # số Idempotency-Key nhớ để nhận ra run nào ghi (khung self: true)
 
 
 class LaneError(HubError):
@@ -169,6 +173,9 @@ class LaneClient:
         self.timeout = float(timeout)
         self._transport = transport
         self._client: Any = None
+        # Idempotency-Key đã gửi → run (X-Lane-Run) đã gửi nó. Mọi run cùng cổng dùng CHUNG một khoá nên khung `self: true` không cho biết
+        # run nào ghi; bảng này phân biệt tiếng vọng của chính cây với thay đổi của run khác chạy song song (LaneService._on_frame).
+        self._sent_idem: "OrderedDict[str, str]" = OrderedDict()
 
     def __repr__(self) -> str:
         return f"LaneClient({self.url}, key={key_prefix(self._key)}…)"
@@ -206,6 +213,11 @@ class LaneClient:
         h.update(extra or {})
         return h
 
+    def writer_run(self, request_id: Any) -> str | None:
+        """Run đã gửi lệnh ghi có Idempotency-Key = `request_id` (khung `change` `self: true`), None khi không biết (daemon khởi động lại,
+        lệnh quá cũ)."""
+        return self._sent_idem.get(request_id) if isinstance(request_id, str) else None
+
     def _error(self, resp: Any) -> LaneError:
         body: dict[str, Any] = {}
         try:
@@ -229,6 +241,12 @@ class LaneClient:
                    timeout: float | None = None) -> Any:
         url = f"{self.url}/lane/v1{path}"
         hdr = self._headers(agent, run, headers)
+        idem = hdr.get("Idempotency-Key")
+        if idem and run is not None:  # ghi TRƯỚC khi gửi: khung SSE có thể về trước phản hồi HTTP
+            self._sent_idem[idem] = run
+            self._sent_idem.move_to_end(idem)
+            while len(self._sent_idem) > SENT_IDEM_MAX:
+                self._sent_idem.popitem(last=False)
         kw: dict[str, Any] = {"timeout": float(timeout)} if timeout else {}
         try:
             resp = await self._http().request(method, url, params=params, json=json_body, content=content, headers=hdr, **kw)

@@ -746,6 +746,9 @@ DEFAULTS: dict[str, Any] = {
             "tree_max_files": 20000,
             "fetch_lazy_bytes": 52428800,  # tệp > 50 MB: tệp trống + ghi chú, agent gọi fs_pull khi cần
             "fetch_parallel": 8,
+            # run trên CÙNG thư mục chung: mặc định chạy song song (mỗi run một cây làm việc, ghi bằng If-Match → 409 thành bản xung đột,
+            # thay đổi của run khác về qua luồng sự kiện). true = khoá theo GỐC thư mục chung như trước (run sau chờ run trước xong)
+            "serialize_runs": False,
             "push_quiet_s": 2.0,  # gộp: đẩy khi tệp yên ≥ 2 s
             "push_min_interval_s": 30,  # ≤ 1 phiên bản / 30 s / tệp (flush cuối run bỏ qua trần này)
             "final_flush_s": 60,

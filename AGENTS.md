@@ -737,7 +737,9 @@ Bất biến: khoá cổng KHÔNG BAO GIỜ trong env/argv/mcp.json của run, D
 ∈ `TRUST_NEVER_RULES`); mọi truy cập qua daemon. Quét giá trị secret TRƯỚC khi đẩy (không một byte nào rời máy). Không bao giờ ghi đè bản của
 người (`If-Match`; 409 → bản xung đột riêng). Hub không xoá bản sao `sync` cũ khi chuyển. Ghi chế độ/khoá/mồ côi = HUMAN_ONLY (`HUMAN_ONLY_LANE`),
 không ∈ MANAGER_ALLOWED; CLI `filehub lane|switch` ∈ `HUB_HUMAN_ONLY_CLI`. Đổi hợp đồng → sửa §C ở CẢ HAI repo + `tests/fake_kgs_lane.py`.
-Steer/nhắn agent = câu cố định tiếng Anh, đường dẫn đã `one_line`. Test: `tests/test_lane_{client,service,workdir,switch}.py` (server giả, ScriptedRuntime).
+Steer/nhắn agent = câu cố định tiếng Anh, đường dẫn đã `one_line`. Run lane KHÔNG lấy khoá workspace (chạy song song; `filehub.lane.serialize_runs` = khoá theo gốc) —
+khung `self: true` chỉ là tiếng vọng với cây đã ghi (`LaneClient.writer_run` theo Idempotency-Key); lệnh ghi lane mới phải đi qua `LaneClient._req` có `run`.
+Test: `tests/test_lane_{client,service,workdir,switch}.py` (server giả, ScriptedRuntime).
 
 ## Giọng nói trên web — đọc chép + hội thoại giọng nói với điều phối viên
 Chi tiết, an toàn, việc dở: `docs/dev-notes/voice.md`. Không migration. Test: `tests/test_voice.py`.

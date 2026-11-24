@@ -46,6 +46,7 @@ TMP_PREFIX = ".lane-tmp-"
 STATE_VERSION = 1
 HELD_SHOW = 50  # lô xoá đang giữ: số đường dẫn hiện cho người (phần còn lại "và N mục nữa")
 # steer: câu CỐ ĐỊNH tiếng Anh; <rel> đã làm sạch một dòng (nội dung từ Không gian số là DỮ LIỆU)
+PEER_WHO = "another cfharness agent run"  # thay "the human" trong câu steer khi thay đổi do run khác của hub (chạy song song cùng gốc)
 STEER_CHANGED = "[cfharness] The human changed {rel} on Không gian số just now. Re-Read it before editing."
 STEER_DELETED = "[cfharness] The human deleted {rel} on Không gian số just now. Do not recreate it unless the task requires it."
 STEER_MOVED = "[cfharness] The human moved {rel} to {rel2} on Không gian số just now. Use the new path."
@@ -132,6 +133,7 @@ class Workdir:
         self.ops_mark = 0
         self.deferred: list[str] = []
         self.last_push: dict[str, float] = {}  # rel → lúc đẩy gần nhất (≤ 1 phiên bản / push_min_interval_s / tệp)
+        self._peer = False  # đang áp thay đổi do run KHÁC của hub ghi (on_change peer) → câu steer nói "another agent run"
         self.hidden: set[str] = set()  # mục trên server khớp mẫu bỏ qua (không tải) — thư mục chứa chúng không bao giờ bị xoá cả cây
         self.del_count = 0  # lệnh xoá đã đẩy trong run kể từ lần người duyệt gần nhất (chặn xoá hàng loạt)
         self.last_copy: dict[str, str] = {}  # rel (tệp lười) → bản riêng của agent vừa tạo (trả cho fs_write)
@@ -362,9 +364,11 @@ class Workdir:
                 "\n</shared-folder-worktree>")
 
     # ------------------------------------------------------------------ kéo thay đổi của người (khung `change` self:false)
-    async def on_change(self, d: dict[str, Any], *, at_recv: float | None = None) -> None:
-        if d.get("self"):
-            return  # tiếng vọng của chính hub
+    async def on_change(self, d: dict[str, Any], *, at_recv: float | None = None, peer: bool = False) -> None:
+        """Thay đổi trên Không gian số trong phạm vi cây. `peer` = run KHÁC của hub ghi (cùng khoá cổng, chạy song song trên cùng gốc) —
+        xử lý y như thay đổi của người, câu steer nói rõ là run khác."""
+        if d.get("self") and not peer:
+            return  # tiếng vọng của chính cây này
         path, op = str(d.get("path") or ""), str(d.get("op") or "")
         rel = self.rel_of(path)
         from_rel = self.rel_of(d.get("from_path")) if d.get("from_path") else None
@@ -386,6 +390,7 @@ class Workdir:
                 b = self.base.get(rel)
                 if b is not None and int(b.get("rev") or 0) >= int(rev) and op not in ("delete", "move", "rename"):
                     return
+            self._peer = peer
             try:
                 if op in ("move", "rename") and from_rel is not None and rel is not None:
                     await self._human_move(from_rel, rel, d)
@@ -404,6 +409,8 @@ class Workdir:
             except (LaneError, HubError, OSError) as e:
                 log.warning("lane: không áp được thay đổi của người %s (%s): %s", one_line(path, 200), op, e)
                 return
+            finally:
+                self._peer = False
             self.persist()
         lat = None
         ts = d.get("at")
@@ -411,7 +418,8 @@ class Workdir:
             lat = max(0.0, time.time() - at_recv)
             self.latencies = (self.latencies + [lat])[-200:]
         self.svc.publish("filehub.human_changed", self, {"path": one_line(rel or from_rel or "", 300), "op": op,
-                                                         "latency_ms": round(lat * 1000) if lat is not None else None, "at": ts if isinstance(ts, str) else None})
+                                                         "latency_ms": round(lat * 1000) if lat is not None else None, "at": ts if isinstance(ts, str) else None,
+                                                         **({"by": "cfharness"} if peer else {})})
 
     def _tracked(self, rel: str) -> bool:
         return self.mode == "tree" or rel in self.base or rel in self.read_paths
@@ -714,6 +722,8 @@ class Workdir:
         if key in self.steered:
             return
         self.steered.add(key)
+        if self._peer:  # thay đổi do run khác của hub (on_change peer) — không nói là người
+            text = text.replace("The human", PEER_WHO.capitalize()).replace("the human", PEER_WHO)
         if not await self.svc.steer(self.run_id, text):
             self.deferred.append(text)  # run chưa chạy (đối soát trước khi chạy tiếp) → vào tin đầu của lượt sau
 

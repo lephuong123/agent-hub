@@ -262,6 +262,7 @@ async def test_web_page_renders_and_menu_only_for_admin(hub_home, tmp_path, as_a
 
     import cfharness.admin_control as ac
     from cfharness.runtime import FakeRuntime
+    from cfharness.web.app import invalidate_nav_badge
 
     env = await _start(hub_home, FakeRuntime(ISOLATED))
     try:
@@ -277,6 +278,7 @@ async def test_web_page_renders_and_menu_only_for_admin(hub_home, tmp_path, as_a
         finally:
             ac._GETGRNAM, ac._GETGROUPS = grnam, groups
             env.app.state.web._admin_nav = None
+            invalidate_nav_badge(env.app.state.web)  # menu theo cache 2 s/phiên (#196) — nhóm admin vừa đổi ngoài web
         page = (await env.client.get("/admin/overview")).text
         assert "Chưa thiết lập" in page
         status.mkdir()
