@@ -48,7 +48,7 @@
       <div class="acard-name"><a href="/agents/{{ r.id }}">{{ r.name }}</a><div class="r">{{ r.role or r.id }}{% if r.team %} · team {{ r.team }}{% endif %}</div></div>
     </div>
     <div class="acard-st">{{ m.agent_pill(r.status) }}{% if r.sandbox_localhost %}{{ m.localhost_badge() }}{% endif %}</div>
-    <div class="acard-doing{{ ' idle' if not r.task }}">{{ r.task or ('Đang chờ bạn trả lời câu hỏi — xem trang Cần bạn' if r.status == 'asking' else ('Đang chờ việc' if r.status == 'idle' else '—')) }}</div>
+    <div class="acard-doing{{ ' idle' if not r.task }}">{{ r.task or ('Đang chờ bạn trả lời câu hỏi — xem trang Cần bạn' if r.status == 'asking' else ('Đang chờ điều phối viên trả lời câu hỏi' if r.status == 'with_manager' else ('Đang chờ việc' if r.status == 'idle' else '—'))) }}</div>
     <div class="acard-foot">
       <span class="k">{{ ((r.cost_today_usd or 0) + ((r.run_cost_usd or 0) if r.status in ('working','waiting') else 0))|cost }} hôm nay · {{ (r.run_tokens if r.status in ('working','waiting') else r.tokens_today)|tok }} token</span>
       {% if rid %}<a class="btn sm {{ 'primary' if r.current_run_id or r.waiting_human }}" href="/runs/{{ rid }}">{{ 'Xem trực tiếp' if r.current_run_id else 'Lượt gần nhất' }}</a>{% endif %}

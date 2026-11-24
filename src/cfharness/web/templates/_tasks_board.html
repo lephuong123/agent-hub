@@ -1,19 +1,28 @@
-{# Bảng kanban — vẽ trong /tasks và /partials/tasks (app.js tải lại khi SSE /sse/tasks báo đổi). Cần: cols, q. #}
+{# Bảng kanban — vẽ trong /tasks và /partials/tasks (app.js tải lại khi SSE /sse/tasks báo đổi). Cần: cols, q.
+   Cột hiển thị = present.BOARD_COLUMNS: triage/todo/ready gộp "Chưa bắt đầu" (thẻ ghi trạng thái gốc), cột rỗng thu thành dải hẹp có số đếm
+   (cột "Xong" không trôi khỏi màn 1440px); điện thoại: danh sách nhóm theo trạng thái (Bị chặn → Đang làm → Review → Chưa bắt đầu → Xong). #}
 {% import "_macros.html" as m with context %}
-<div class="kanban" id="tasks-board" data-sse-tasks="/sse/tasks" data-refresh="/partials/tasks">
-  {% for c in TASK_COLUMNS %}{% set ts = task_status(c) %}
-  <section class="col">
-    <h3><span class="pill {{ ts[1] }}">{{ ts[0] }}</span> <span class="muted small">{{ cols[c]|length }}</span></h3>
-    {% for t in cols[c] %}
+{% set bcols = board_columns(cols) %}
+{% set total = bcols|sum(attribute="n") %}
+<div class="kanban board5{{ ' board-empty' if not total }}" id="tasks-board" data-sse-tasks="/sse/tasks" data-refresh="/partials/tasks">
+  {% if not total %}
+  <div class="board-none">{{ m.empty("Nhắn điều phối viên để giao việc — việc sẽ hiện ở đây theo trạng thái.", "task", "", "Chưa có việc") }}<a class="btn primary" href="/manager">{{ m.icon('chat') }}Mở chat với điều phối viên</a></div>
+  {% else %}
+  {% for c in bcols %}
+  <section class="col col-{{ c.key }}{{ ' is-empty' if not c.n }}" id="col-{{ c.key }}" aria-label="{{ c.label }}: {{ c.n }} việc">
+    <h3><span class="pill {{ c.tone }}">{{ c.label }}</span> <span class="col-n">{{ c.n }}</span></h3>
+    {% for t in c.tasks %}
       <a class="tcard" href="/tasks/{{ t.id }}" data-id="{{ t.id }}" data-status="{{ t.status }}">
         <span class="tcard-title">{{ t.title|first(80) }}</span>
-        <span class="meta">{{ m.icon('bot', 'sm') }}{{ t.assignee_agent_id or t.team_id or '—' }}{% if t.parents %} · sau {{ t.parents|length }} task{% endif %}{% if t.cost_usd %} · {{ t.cost_usd|cost }}{% endif %}</span>
-        {% if t.question %}<span class="ask-t">{{ m.icon('question', 'sm') }}{{ 'Hỏi điều phối viên' if t.question.status == 'with_manager' else 'Chờ bạn trả lời' }}</span>
+        <span class="meta">{% if c.key == 'todo' %}{{ m.task_pill(t.status) }}{% endif %}{{ m.icon('bot', 'sm') }}{{ t.assignee_agent_id or t.team_id or '—' }}{% if t.parents %} · sau {{ t.parents|length }} việc{% endif %}{% if t.cost_usd %} · {{ t.cost_usd|cost }}{% endif %}</span>
+        {% if t.question %}<span class="ask-t">{{ m.icon('question', 'sm') }}{{ 'Chờ điều phối viên' if t.question.status == 'with_manager' else 'Chờ bạn trả lời' }}</span>
         {% elif t.block_reason %}<span class="small danger-t">{{ t.block_reason|first(60) }}</span>{% endif %}
         {% if t.wait_reason %}<span class="xs warn-t">chờ: {{ wait_reason(t.wait_reason) }}</span>{% endif %}
       </a>
-    {% else %}<div class="muted small empty-col">—</div>{% endfor %}
-    {% if c == 'done' and not q.all and cols[c]|length >= 15 %}<a class="small" href="/tasks?all=1{{ '&team=' ~ q.team|urlencode if q.team }}">xem tất cả…</a>{% endif %}
+    {% endfor %}
+    {% if c.key == 'done' and c.n > 3 %}<a class="small done-more" href="#col-done">Hiện thêm {{ c.n - 3 }} việc đã xong</a>{% endif %}
+    {% if c.key == 'done' and not q.all and c.n >= 15 %}<a class="small" href="/tasks?all=1{{ '&team=' ~ q.team|urlencode if q.team }}">xem tất cả…</a>{% endif %}
   </section>
   {% endfor %}
+  {% endif %}
 </div>

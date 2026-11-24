@@ -34,7 +34,7 @@ def test_build_state_agent_board_fields():
         {"id": "b", "status": "paused", "paused": True, "current_run_id": None, "run_status": "completed", "cost_today_usd": None},
         {"id": "c", "status": "idle", "current_run_id": "r_2", "run_status": "Queued; rm"},
     ]}
-    qs = [{"agent_id": "b", "text": "hỏi 1"}, {"agent_id": "b", "text": "hỏi 2"}]
+    qs = [{"agent_id": "b", "text": "hỏi 1", "status": "open"}, {"agent_id": "b", "text": "hỏi 2", "status": "open"}]
     a, b, c = O.build_state(snap, qs, [], None)["agents"]
     assert a["paused"] is False and a["run_status"] == "running" and len(a["started_at"]) == 40 and a["run_cost_usd"] == 0.25
     assert a["cost_today_usd"] == 1.5 and a["questions"] == 0

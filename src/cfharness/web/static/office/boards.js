@@ -5,7 +5,7 @@ import * as THREE from '../vendor/three-0.169.0/three.module.min.js';
 import { FONT, fitText, roundRect } from './util.js';
 
 export const STATUS_COLOR = {
-  working: '#4d7c43', waiting: '#a86414', waiting_human: '#c4483a', asking: '#7b5ea7', idle: '#73726c',
+  working: '#4d7c43', waiting: '#a86414', waiting_human: '#c4483a', asking: '#7b5ea7', with_manager: '#3f6d8c', idle: '#73726c',
   error: '#c4483a', paused: '#73726c', queued: '#3f6d8c',
 };
 
@@ -73,13 +73,16 @@ function header(ctx, W, title, sub, bg, fg) {
   if (sub) { ctx.font = '600 30px ' + FONT; ctx.textAlign = 'right'; ctx.fillText(sub, W - 32, 46); ctx.textAlign = 'left'; }
 }
 
+// số "Cần bạn" = hub.need (cùng nguồn với huy hiệu menu 2D); daemon/server cũ chưa có → số approval chờ người như trước
+function needOf(d) { const h = d.hub || {}; return typeof h.need === 'number' ? h.need : (h.approvals_waiting_human || 0); }
+
 // ------------------------------------------------------------ màn hình HUD trên tường bắc
 export function drawHud(board, d) {
   const h = d.hub || {}, tc = d.task_counts || {};
   const tiles = [
     ['Đang chạy', String(h.running || 0), '#6cc6ff'],
     ['Xếp hàng', String(h.queued || 0), '#c9d3dc'],
-    ['Chờ bạn duyệt', String(h.approvals_waiting_human || 0), h.approvals_waiting_human ? '#ff7b6e' : '#c9d3dc'],
+    ['Cần bạn', String(needOf(d)), needOf(d) ? '#ff7b6e' : '#c9d3dc'],
     ['Chi phí hôm nay', fmtUsd(h.cost_today_usd), '#f2c76e'],
     ['ESTOP', h.estop ? 'BẬT' : 'Tắt', h.estop ? '#ff5a4a' : '#8fd18a'],
     ['Giới hạn tốc độ', h.rate_limited ? 'Đang chặn' : 'Không', h.rate_limited ? '#ffb454' : '#8fd18a'],
@@ -159,13 +162,13 @@ export function drawRuns(board, runs, names, nowMs) {
 }
 
 // ------------------------------------------------------------ bảng "Cần bạn" ở lối vào: approval + câu hỏi
-export function drawNeeds(board, approvals, questions, names) {
+export function drawNeeds(board, approvals, questions, names, needTotal) {
   const ap = (approvals || []).slice(0, 4), qs = (questions || []).slice(0, 3);
   const sig = JSON.stringify([ap.map((a) => [a.id, a.status, Math.floor((a.wait_s || 0) / 60)]), qs.map((q) => [q.id, q.status]), approvals.length, questions.length]);
   board.draw(sig, (ctx, W, H) => {
     board.hits = []; // vùng bấm (px canvas) → mở bảng duyệt / câu hỏi 3D
     ctx.fillStyle = '#fffaf2'; ctx.fillRect(0, 0, W, H);
-    const total = (approvals || []).length + (questions || []).length;
+    const total = needTotal != null ? needTotal : (approvals || []).length + (questions || []).filter((q) => q.status === 'open').length;
     header(ctx, W, 'Cần bạn', total ? total + ' việc' : 'Không có gì', total ? '#c4483a' : '#4d7c43', '#ffffff');
     let y = 118;
     ctx.textBaseline = 'middle';
@@ -317,7 +320,7 @@ export function drawApprovalTag(ts, a, waitingHuman) {
     ctx.save(); ctx.shadowColor = 'rgba(0,0,0,0.2)'; ctx.shadowBlur = 6; ctx.shadowOffsetY = 2;
     ctx.fillStyle = waitingHuman ? '#c4483a' : '#c47a1a'; roundRect(ctx, 6, 4, W - 12, H - 12, 24); ctx.fill(); ctx.restore();
     ctx.fillStyle = '#ffffff'; ctx.textBaseline = 'middle'; ctx.font = '800 30px ' + FONT;
-    ctx.fillText(fitText(ctx, (waitingHuman ? '✋ Chờ bạn duyệt · ' : 'Chờ duyệt · ') + (a.tool || '?') + (a.klass ? ' [' + a.klass + ']' : ''), W - 40), 22, 40);
+    ctx.fillText(fitText(ctx, (waitingHuman ? '✋ Chờ duyệt · ' : 'Chờ duyệt · ') + (a.tool || '?') + (a.klass ? ' [' + a.klass + ']' : ''), W - 40), 22, 40);
     ctx.font = '500 24px ui-monospace, Menlo, monospace'; ctx.fillStyle = '#ffe9e4';
     ctx.fillText(fitText(ctx, a.preview || '', W - 40), 22, 86);
   });

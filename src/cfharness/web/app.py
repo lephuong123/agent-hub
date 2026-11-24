@@ -462,6 +462,7 @@ async def _nav_badge_core(request: Request) -> dict[str, Any]:
     except (RpcError, DaemonUnavailable, OSError):
         return {"down": True}
     return {"approvals": len(pend or []), "waiting_human": sum(1 for a in pend or [] if a.get("status") == "waiting_human"),
+            "need": P.need_count(pend, qs),  # = approvals + questions (định nghĩa chung với 3D `hub.need`, present.need_count)
             "estop": bool((es or {}).get("on")), "admin_estop": bool((es or {}).get("admin")), "questions": len(qs),
             "migrated_to": migrated}
 
@@ -809,18 +810,15 @@ async def questions(request: Request, status: str = "pending", **flt: Any) -> li
 
 # ============================================================================ trang
 def _sort_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return sorted(rows, key=lambda r: (STATUS_ORDER.get(r.get("status") or "", 9), r.get("team") or "~", r["id"]))
+    order = {**STATUS_ORDER, "asking": 1.5, "with_manager": 2.5}  # cần bạn lên đầu (thứ tự của present.display_state)
+    return sorted(rows, key=lambda r: (order.get(r.get("status") or "", 9), r.get("team") or "~", r["id"]))
 
 
 async def overview_data(request: Request) -> dict[str, Any]:
     snap = await rpc(request, "tui.snapshot")
     qs = await questions(request, "pending")
-    asking = {q["agent_id"] for q in qs}
-    rows = snap.get("agents") or []
-    for r in rows:  # agent chờ câu trả lời (task bị chặn) hiện "Chờ bạn trả lời" thay vì "Rảnh"
-        if r["id"] in asking and r.get("status") in ("idle", "error"):
-            r["status"] = "asking"
-    rows = _sort_rows(rows)
+    # trạng thái hiển thị thống nhất (present.display_state): chờ duyệt > chờ bạn trả lời > … ; chờ điều phối viên thay "Rảnh"
+    rows = _sort_rows(P.mark_agents(snap.get("agents") or [], snap.get("approvals"), qs))
     appr = sorted(snap.get("approvals") or [], key=lambda a: a.get("opened_at") or "")
     return {"hub": snap.get("hub") or {}, "rows": rows, "approvals": appr, "questions": [q for q in qs if q["status"] == "open"],
             "questions_mgr": [q for q in qs if q["status"] == "with_manager"]}
@@ -858,7 +856,7 @@ async def partial_overview(request: Request) -> Response:
 async def agents_page(request: Request) -> Response:
     rows = await rpc(request, "agent.list", {})
     snap = await rpc(request, "tui.snapshot")
-    live = {r["id"]: r for r in snap.get("agents") or []}
+    live = {r["id"]: r for r in P.mark_agents(snap.get("agents") or [], snap.get("approvals"), await questions(request, "pending"))}
     trash = [t for t in (await rpc(request, "trash.list") or []) if t.get("kind") in (None, "agent")]
     return await render(request, "agents.html", {"nav": "agents", "rows": rows, "live": live, "trash": trash})
 
@@ -1118,8 +1116,12 @@ async def agent_page(request: Request) -> Response:
         learn_on = None
     snap = await rpc(request, "tui.snapshot")
     live = next((r for r in snap.get("agents") or [] if r["id"] == aid), None)
+    aqs = await questions(request, "pending", agent_id=aid)
+    if live:
+        P.mark_agents([live], pend, aqs)
     return await render(request, "agent.html", {"nav": "agents", "a": agent, "connector_gaps": connector_gaps(agent.get("tool_policy")), "runs": runs, "revs": list(reversed(revs or []))[:15], "pend": pend,
-                                                "learn_on": learn_on, "live": live, "sandbox": sandbox, "titles": await task_titles(request, runs)})
+                                                "learn_on": learn_on, "live": live, "sandbox": sandbox, "titles": await task_titles(request, runs),
+                                                "idx": P.need_index(pend, aqs)})
 
 
 async def runs_page(request: Request) -> Response:
@@ -1131,8 +1133,18 @@ async def runs_page(request: Request) -> Response:
         params["status"] = q["status"]
     runs = await rpc(request, "run.list", params)
     agents = [a["id"] for a in await rpc(request, "agent.list", {})]
+    idx = await need_idx(request) if any(P.is_live_run(r) for r in runs or []) else {}
     return await render(request, "runs.html", {"nav": "runs", "runs": runs, "agents": agents, "q": dict(q), "statuses": P.RUN_STATUS,
-                                               "titles": await task_titles(request, runs)})
+                                               "titles": await task_titles(request, runs), "idx": idx})
+
+
+async def need_idx(request: Request, **flt: Any) -> dict[str, dict[str, str]]:
+    """Chỉ mục việc đang chờ (approval + câu hỏi) cho trạng thái hiển thị thống nhất (`present.display_state`)."""
+    try:
+        aps = await rpc(request, "approval.list", {"limit": 500, **{k: v for k, v in flt.items() if v}}) or []
+    except RpcError:
+        aps = []
+    return P.need_index(aps, await questions(request, "pending", **flt))
 
 
 async def task_titles(request: Request, runs: list[dict[str, Any]]) -> dict[str, str]:
@@ -1173,7 +1185,10 @@ async def _run_ctx(request: Request, rid: str) -> dict[str, Any]:
         live = next((r for r in snap.get("agents") or [] if r["id"] == run["agent_id"]), None)
         if live and live.get("current_run_id") == run["id"]:
             tokens = live.get("run_tokens") or tokens
-    return {"run": run, "pend": pend, "tokens": tokens, "live": live}
+    # trạng thái hiển thị thống nhất: run đang chạy mà có thao tác chờ duyệt / câu hỏi chờ → "Chờ duyệt" / "Chờ bạn trả lời" (như /runs)
+    rqs = await questions(request, "pending", run_id=run["id"]) if P.is_live_run(run) else []
+    state = P.run_state(run, P.need_index(pend, rqs))
+    return {"run": run, "pend": pend, "tokens": tokens, "live": live, "run_disp": state}
 
 
 async def run_page(request: Request) -> Response:
@@ -1234,8 +1249,10 @@ async def partial_run_result(request: Request) -> Response:
 
 async def inbox_page(request: Request) -> Response:
     """"Cần bạn": yêu cầu duyệt + câu hỏi chờ bạn + câu hỏi đang ở điều phối viên + task bị chặn không có câu hỏi."""
-    pend = sorted(with_wait(await rpc(request, "approval.list", {"limit": 500})), key=lambda a: a.get("opened_at") or "")
-    qs = await questions(request, "pending")
+    # P1-8: việc đang chặn agent lên trước — approval đã quá hạn chờ (waiting_human) trước, rồi chờ lâu nhất trước
+    pend = sorted(with_wait(await rpc(request, "approval.list", {"limit": 500})),
+                  key=lambda a: (a.get("status") != "waiting_human", a.get("opened_at") or ""))
+    qs = sorted(await questions(request, "pending"), key=lambda q: (not (q.get("task_id") or q.get("run_id")), q.get("created_at") or ""))
     try:
         blocked = await rpc(request, "task.list", {"status": "blocked", "limit": 100}) or []
     except RpcError:
@@ -1939,7 +1956,7 @@ def run_status_line(ev: dict[str, Any]) -> dict[str, Any] | None:
     if t == "tool.complete" and not sub:
         return {"t": "status", "state": "think", "label": "Đang nghĩ…"}
     if t == "approval.waiting_human":
-        return {"t": "status", "state": "wait", "label": "Chờ bạn duyệt…"}
+        return {"t": "status", "state": "wait", "label": "Chờ duyệt…"}
     if t == "approval.open":
         return {"t": "status", "state": "wait", "label": "Chờ duyệt…"}
     if t == "question.open" or t == "question.escalated":
@@ -2183,7 +2200,9 @@ def make_templates() -> Jinja2Templates:
     env.autoescape = True
     env.globals.update({"agent_status": P.agent_status, "run_status": P.run_status, "task_status": lambda s: P.TASK_STATUS.get(s or "", (s or "—", "muted")),
                         "is_live_run": P.is_live_run, "action_view": P.action_view, "wait_reason": P.wait_reason, "tokens_of": P.tokens_of, "TASK_COLUMNS": P.TASK_COLUMNS,
-                        "question_view": P.question_view, "run_title": P.run_title, "static": static_url, "cut_note": P.cut_note})
+                        "question_view": P.question_view, "run_title": P.run_title, "static": static_url, "cut_note": P.cut_note,
+                        "run_state": P.run_state, "agent_state": P.agent_state, "board_columns": P.board_columns, "run_kind": P.run_kind,
+                        "destructive_why": P.destructive_why})
     env.filters.update({"cost": P.fmt_cost, "tok": P.fmt_tokens, "dur": P.fmt_dur, "ts": P.fmt_ts, "ago": P.ago, "first": P.first_line,
                         "tool": P.short_tool, "md": lambda s: Markup(P.md(s)), "usd": lambda v: "—" if v is None else f"${float(v):.4f}",
                         "j": lambda v: json.dumps(v, ensure_ascii=False, indent=2, default=str), "iso": P.iso_ts, "avatar": P.avatar_tone,

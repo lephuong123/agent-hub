@@ -312,7 +312,7 @@ async def test_approve_deny_need_confirmation_and_are_audited_web(held):
     ap = open_approval(env.hub, run["id"])
     env.hub.approvals.to_waiting_human(ap["id"])
     r = await env.client.get("/activity")
-    assert "Chờ bạn duyệt" in r.text and "rm -rf /srv/data" in r.text and "data-confirm" in r.text
+    assert "Chờ duyệt" in r.text and "rm -rf /srv/data" in r.text and "data-confirm" in r.text
     # chưa xác nhận → trang xác nhận, chưa quyết
     r = await env.post("/do/approve", {"id": ap["id"], "preview": "rm -rf /srv/data", "next": "/"})
     assert r.status_code == 200 and "Xác nhận" in r.text and 'name="confirm" value="yes"' in r.text
@@ -339,7 +339,7 @@ async def test_steer_and_stop_from_run_page(held):
     await env.login()
     run = await running_run(env)
     r = await env.client.get(f"/runs/{run['id']}")
-    assert "Chỉ đạo agent" in r.text and f"/sse/run/{run['id']}" in r.text and "Dừng run" in r.text
+    assert "Nhắn thêm cho agent" in r.text and f"/sse/run/{run['id']}" in r.text and "Dừng lượt chạy" in r.text
     r = await env.post("/do/steer", {"id": run["id"], "text": "chỉ xem src/"})
     assert r.status_code == 303
     assert env.hub.store.get_run(run["id"])["steer_count"] == 1
@@ -614,7 +614,7 @@ def test_present_transcript_and_markdown_safety():
     assert tool["running"] is False and tool["dur"] == 0.4 and [(k, "".join(t for _, t in s)) for k, s in tool["view"]["diff"]["lines"]] == [("add", "+dòng 1"), ("add", "+dòng 2")]
     assert (tool["view"]["verb"], tool["view"]["meta"], tool["view"]["output_text"]) == ("Ghi", "2 dòng", "ok")  # P0-7: dòng tool kiểu Claude
     assert "Xong" in items[3]["text"]
-    assert P.agent_status("waiting_human")[1] == "Chờ bạn duyệt"
+    assert P.agent_status("waiting_human")[1] == "Chờ duyệt"
     assert P.wait_reason("agent_busy") == "agent đang bận"
     # UX v2: "Hoạt động" chỉ còn sự kiện có nghĩa, câu tiếng Việt do hub sinh — từng lời gọi tool/lời agent xem ở trang run
     assert P.activity_item({"type": "tool.start", "agent_id": "ag0", "ts": "2026-10-18T01:02:03Z", "payload": {"name": "Bash", "args_preview": "ls"}}) is None

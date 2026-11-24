@@ -7,8 +7,8 @@
 <div class="mgr-st">
   <div class="mgr-st-who">{{ mc.avatar(m.row.name if m.row else m.agent_id) }}<div class="acard-name"><a href="/agents/{{ m.agent_id }}">{{ (m.row.name if m.row else m.agent_id) }}</a><div class="r">{{ m.agent_id }}</div></div>{{ mc.agent_pill(m.row.status if m.row else 'idle') }}</div>
   <dl class="kv{{ ' one' if compact }}">
-    <div><dt>Nhịp gần nhất</dt><dd>{% if m.last_tick %}{{ m.last_tick|ts }} <span class="muted small">({{ m.last_tick|ago }})</span>{% else %}chưa chạy{% endif %}</dd></div>
-    <div><dt>Nhịp kế tiếp</dt><dd>{% if m.next_tick %}{{ m.next_tick|ts }}{% else %}khi có sự kiện{% endif %}</dd></div>
+    <div><dt>Kiểm tra định kỳ gần nhất</dt><dd>{% if m.last_tick %}{{ m.last_tick|ts }} <span class="muted small">({{ m.last_tick|ago }})</span>{% else %}chưa chạy{% endif %}</dd></div>
+    <div><dt>Kiểm tra định kỳ kế tiếp</dt><dd>{% if m.next_tick %}{{ m.next_tick|ts }}{% else %}khi có sự kiện{% endif %}</dd></div>
     {% if not compact %}<div><dt>Hôm nay</dt><dd>{{ ((m.row.cost_today_usd or 0) if m.row else 0)|cost }}</dd></div>{% endif %}
   </dl>
 </div>

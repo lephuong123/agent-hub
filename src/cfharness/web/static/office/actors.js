@@ -6,10 +6,10 @@ import { lerpAngle, hashStr, seeded } from './util.js';
 import { ZONE_NAMES } from './world.js';
 
 export const STATUS_VI = {
-  working: 'Đang làm', waiting: 'Chờ duyệt', waiting_human: 'Chờ bạn duyệt', asking: 'Chờ bạn trả lời',
+  working: 'Đang làm', waiting: 'Chờ duyệt', waiting_human: 'Chờ duyệt', asking: 'Chờ bạn trả lời', with_manager: 'Chờ điều phối viên',
   idle: 'Rảnh', error: 'Lỗi', paused: 'Tạm dừng', queued: 'Đang xếp hàng',
 };
-const VALID = new Set(['working', 'waiting', 'waiting_human', 'asking', 'idle', 'error', 'paused']);
+const VALID = new Set(['working', 'waiting', 'waiting_human', 'asking', 'with_manager', 'idle', 'error', 'paused']);
 const TRIP = { Bash: 'server', Read: 'library', Grep: 'library', Glob: 'library', WebFetch: 'library', WebSearch: 'library' };
 const FAST = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit']);
 const ERR_OUT = new Set(['failed', 'error', 'crashed', 'protocol_violation', 'blocked', 'timeout']);
@@ -106,7 +106,7 @@ export class Actor {
       case 'approval.resolved': if (a.status === 'waiting' || a.status === 'waiting_human') setSt('working'); break;
       case 'approval.delegated': this.visitUntil = now + 15; break;
       case 'question.open': case 'question.escalated': setSt('asking'); break;
-      case 'question.answered': case 'question.cancelled': if (a.status === 'asking') setSt('working'); break;
+      case 'question.answered': case 'question.cancelled': if (a.status === 'asking' || a.status === 'with_manager') setSt('working'); break;
       case 'task.status': if (ev.status === 'review') this.reviewUntil = now + 20; break;
       case 'schedule.fired': popE('⏰'); break;
       case 'manager.action': popE('📋'); break;
@@ -130,6 +130,7 @@ export class Actor {
       case 'waiting_human': return { zone: home, pose: 'raise', bubble: '✋', tone: 'danger', ring: true };
       case 'waiting': return { zone: home, pose: 'stand', bubble: '🛡️' };
       case 'asking': return { zone: home, pose: 'sitThink', bubble: '❓', tone: 'ask' };
+      case 'with_manager': return { zone: home, pose: 'sitThink', bubble: '💬' };
       case 'error': return { zone: home, pose: 'headInHands', bubble: '⚠️', tone: 'danger' };
       default: break;
     }
