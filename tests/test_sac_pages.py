@@ -43,6 +43,8 @@ def test_pages_render(env, client):
     for path in ("/", "/users", "/users/new", f"/users/{uid}/logs", "/users/import", "/groups", f"/users/{uid}", "/domains", "/alerts", "/alerts?all=1", "/estop"):
         r = client.get(path, headers=H(s))
         assert r.status_code == 200, (path, r.text[:300])
+        # macro op_form/form_open (import trong base.html) phải thấy csrf — thiếu `with context` → ô rỗng → "Bad CSRF"
+        assert 'name="csrf" value=""' not in r.text, path
     for tab in ("overview", "access", "agents", "activity", "policy", "reports", "history"):
         r = client.get(f"/users/{uid}?tab={tab}", headers=H(s))
         assert r.status_code == 200, (tab, r.text[:400])
