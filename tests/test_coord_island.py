@@ -161,8 +161,8 @@ async def test_island_page_csp_boot_and_static(menv):
     assert boot["snap"]["conv"] == cid and boot["csrf"] and boot["icons"].startswith("/static/icons.svg")
     assert boot["hub"] == {"estop": False, "admin_estop": False}
     assert any(it.get("text", "").startswith("</script>") for it in boot["snap"]["items"] if it["kind"] == "user")
-    # trang khác (kể cả trang Điều phối cũ ?ui=old) vẫn CSP gốc
-    assert "sha256-" not in (await e.client.get("/manager?ui=old")).headers["content-security-policy"]
+    # trang khác vẫn CSP gốc
+    assert "sha256-" not in (await e.client.get("/")).headers["content-security-policy"]
     assert "sha256-" not in (await e.client.get("/runs")).headers["content-security-policy"]
     e.client.cookies.clear()
     # .mjs đúng MIME + ?v= → immutable

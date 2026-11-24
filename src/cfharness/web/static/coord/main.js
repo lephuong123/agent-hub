@@ -215,9 +215,9 @@ document.addEventListener("click", (e) => {
   if (!a || a.target || a.hasAttribute("download")) return;
   let u;
   try { u = new URL(a.getAttribute("href"), location.href); } catch (_) { return; }
-  if (u.origin !== location.origin || u.pathname !== "/manager" || u.searchParams.get("ui") === "old") return;  // ?ui=old = trang cũ (tải thật)
+  if (u.origin !== location.origin || u.pathname !== "/manager") return;
   e.preventDefault();
-  u.searchParams.delete("ui");
+  u.searchParams.delete("ui");  // link cũ còn mang ?ui=… (lối thoát trang cũ đã gỡ) — bỏ khỏi URL
   go(u.pathname + u.search, true);
 });
 

@@ -26,7 +26,6 @@ from test_web import ISOLATED, _start, _stop, until  # noqa: F401
 from test_web_markdown import _safe
 from test_web_run_transcript import live_html, norm, parse, replay_html
 
-pytestmark = pytest.mark.usefixtures("old_manager_ui")  # trang Điều phối CŨ (?ui=old) — island có test riêng (test_coord_*)
 
 TPL = make_templates()
 ITEMS = TPL.env.get_template("_items.html").module
@@ -236,9 +235,9 @@ def test_date_dividers_before_first_item_of_each_day():
     assert [x["kind"] for x in out] == ["day", "user", "manager", "day", "user", "user", "day", "manager"]
     days = [x["text"] for x in out if x["kind"] == "day"]
     assert days[1:] == ["Hôm qua", "Hôm nay"] and days[0].endswith("10/11/2026") and days[0].startswith("Thứ ")
-    mod = TPL.env.get_template("_manager.html").make_module({"csrf": "", "path": "/manager"})
-    html = str(mod.item(out[0]))
-    assert 'class="mm-day" role="separator"' in html and "10/11/2026" in html
+    from cfharness.web.manager_feed import item_json
+
+    assert item_json(out[0]) == {"kind": "day", "id": "d" + out[0]["key"], "key": out[0]["key"], "text": days[0]}  # island vẽ vạch từ đây
 
 
 def test_pending_info_last_tool_and_todo():
@@ -275,12 +274,12 @@ async def test_reload_while_coordinator_live_shows_last_tool_and_todo(mheld):
     assert await until(lambda: (e.hub.store.get_run(run) or {}).get("status") == "running")
     e.hub.publish(make_event("tool.start", "boss", {"tool_id": "x1", "name": "Read", "input": {"file_path": "/w/<b>a.py"}}, run_id=run))
     e.hub.publish(make_event("tool.start", "boss", {"tool_id": "x2", "name": "TodoWrite", "input": {"todos": T1}}, run_id=run))
-    page = (await e.client.get(f"/manager?c={conv}")).text
-    pend = page[page.index(f'data-pending="{run}"'):]
-    pend = pend[:pend.index('<div class="composer-wrap">') if '<div class="composer-wrap">' in pend else None]
-    assert '<div class="mm-tool"><span class="tx-spin"' in pend and "Đang dùng Đọc &lt;b&gt;a.py" in pend
-    assert 'class="ti tx-todo" id="todo-' in pend and "1/3 xong" in pend
-    assert 'class="mm-day"' in page  # vạch "Hôm nay"
+    sn = (await e.client.get(f"/api/manager/snapshot?c={conv}")).json()
+    pend = sn["pending"]
+    assert pend["run"] == run and pend["tool"] == "Đang dùng Đọc <b>a.py…"  # chữ thô — island gán textContent
+    td = pend["todo"]  # checklist TodoWrite gần nhất
+    assert (td["done"], td["n"]) == (1, 3) and [r["text"] for r in td["rows"]] == ["Đọc <b>code</b>", "Đang chạy test", "Sửa lỗi"]
+    assert sn["items"][0]["kind"] == "day" and sn["items"][0]["text"] == "Hôm nay"  # vạch "Hôm nay"
 
 
 # =========================================================================== diff trang run: không dòng trống

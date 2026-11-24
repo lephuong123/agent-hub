@@ -356,7 +356,7 @@ async def test_sse_v2_route_headers(menv):
     feed = F.feed_of(type("R", (), {"app": e.app, "scope": {}})())  # cùng Feed của app
     await feed.ensure()
     assert feed.ready.is_set() and feed.conv.mgr == "boss"
-    assert any(r.path == "/sse/manager/v2" for r in e.app.routes) and any(r.path == "/sse/manager" for r in e.app.routes)
+    assert any(r.path == "/sse/manager/v2" for r in e.app.routes) and not any(r.path == "/sse/manager" for r in e.app.routes)  # luồng cũ đã gỡ
 
 
 # =========================================================================== kịch bản [demo]

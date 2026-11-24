@@ -575,8 +575,8 @@
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function () { boot(document); });
   else boot(document);
   document.addEventListener("htmx:load", function (e) { boot(e.target || document); });
-  // nút giọng nói vẽ SAU khi tải trang → gắn lại: island Điều phối (#coord: ô nhập của từng khung, thẻ câu hỏi) và trang Điều phối cũ
-  // (app.js mgrGo thay #mgr-grid). CHỈ theo dõi vùng đó (không cả body), và bỏ qua thay đổi bên trong nội dung markdown (`.md` — chữ chạy
+  // nút giọng nói vẽ SAU khi tải trang → gắn lại: island Điều phối (#coord: ô nhập của từng khung, thẻ câu hỏi).
+  // CHỈ theo dõi vùng đó (không cả body), và bỏ qua thay đổi bên trong nội dung markdown (`.md` — chữ chạy
   // thêm node mỗi khung hình, không bao giờ chứa nút giọng nói) → không quét DOM mỗi token. Trang khác: htmx:load ở trên là đủ.
   if (window.MutationObserver) {
     var mo = new MutationObserver(function (recs) {
@@ -586,13 +586,13 @@
         for (var j = 0; j < recs[i].addedNodes.length; j++) {
           var n = recs[i].addedNodes[j];
           if (n.nodeType !== 1) continue;
-          if (n.id === "mgr-grid" || (n.matches && n.matches("textarea[data-voice], [data-voice-for]")) ||
-              (n.querySelector && n.querySelector("textarea[data-voice], [data-voice-for]"))) { boot(n.id === "mgr-grid" ? n : document); return; }
+          if ((n.matches && n.matches("textarea[data-voice], [data-voice-for]")) ||
+              (n.querySelector && n.querySelector("textarea[data-voice], [data-voice-for]"))) { boot(document); return; }
         }
       }
     });
     var start = function () {
-      var grid = document.getElementById("coord") || (document.getElementById("mgr-grid") || {}).parentNode;
+      var grid = document.getElementById("coord");
       if (grid) mo.observe(grid, { childList: true, subtree: true });
     };
     if (document.body) start(); else document.addEventListener("DOMContentLoaded", start);

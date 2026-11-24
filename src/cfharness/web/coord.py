@@ -1,4 +1,4 @@
-"""Island trang Điều phối (GĐ2 phương án B — `docs/dev-notes/dieu-phoi-island.md`): `GET /manager` (mặc định từ GĐ3; trang cũ chỉ còn qua `?ui=old` một bản phát hành).
+"""Island trang Điều phối (GĐ2 phương án B — `docs/dev-notes/dieu-phoi-island.md`): `GET /manager` (trang Điều phối duy nhất — trang cũ `?ui=old` đã gỡ).
 
 Trang = khung `base.html` (thanh bên, menu, panel xem file, hộp xác nhận) + MỘT điểm gắn `#coord` do island Preact vẽ
 (`static/coord/*.js`, không bước build — template `htm`). Dữ liệu đầu tiên là ảnh chụp v2 (`manager_feed.build_snapshot`) nhúng trong
@@ -53,12 +53,12 @@ def csp_with(script: str) -> str:
 
 
 async def coord_page(request: Request) -> Response:
-    from .manager import _page
+    from .manager import setup_page
     from .manager_feed import build_snapshot, hub_flags
 
     ctx, snap = await build_snapshot(request)
-    if "setup" in snap:  # chưa có điều phối viên / daemon cũ: trang cũ vẽ phần chỉ định (form + xác nhận) — island chỉ cho trang chat
-        return await _page(request, ctx)
+    if "setup" in snap:  # chưa có điều phối viên / daemon cũ: manager.html vẽ phần chỉ định (form + xác nhận) — island chỉ cho trang chat
+        return await setup_page(request, ctx)
     sess = session_of(request)
     imap = import_map()
     # luồng đang xem (tiêu đề nhóm "Hội thoại · <luồng>" vẽ sẵn ở thanh bên) — tính ở đây: trong Jinja `first` bị ghi đè bằng P.first_line

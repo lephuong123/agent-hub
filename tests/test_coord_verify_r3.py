@@ -45,13 +45,12 @@ async def test_ping_keeps_coming_while_hub_busy_out_of_scope():
         await f.close()
 
 
-# ============================================================================ GĐ3: island là mặc định, lối thoát ?ui=old (một bản phát hành)
+# ============================================================================ GĐ3 + gỡ trang cũ: island là trang Điều phối duy nhất
 from test_web_manager import designate, send  # noqa: E402
 from test_web_manager_v2 import menv  # noqa: E402,F401
-from cfharness.web.manager import UI_COOKIE  # noqa: E402
 
 
-async def test_island_is_default_and_ui_old_escape_hatch_is_sticky(menv):
+async def test_island_is_only_coordinator_page_old_escape_removed(menv):
     e = menv
     await e.login()
     await designate(e)
@@ -59,36 +58,29 @@ async def test_island_is_default_and_ui_old_escape_hatch_is_sticky(menv):
     cid = j["conversation_id"]
     island = 'id="coord"'
     old = 'id="mgr-grid"'
-    for url in ("/manager", f"/manager?c={cid}", "/manager?new=1", "/manager?ui=next"):
+    # `?ui=old` (lối thoát cũ), cookie cũ, vỏ lưới của app.js cũ: tất cả là island, không đặt/xoá cookie nào
+    e.client.cookies.set("ahub_mgr_ui", "old", path="/manager")
+    for url in ("/manager", f"/manager?c={cid}", "/manager?new=1", "/manager?ui=next", "/manager?ui=old", "/manager?ui=new"):
         r = await e.client.get(url)
         assert r.status_code == 200 and island in r.text and old not in r.text, url
-    # ?ui=old → trang cũ + nhớ lựa chọn (link nội bộ của trang cũ không mang ?ui=)
-    r = await e.client.get("/manager?ui=old")
-    assert r.status_code == 200 and old in r.text and island not in r.text
-    assert 'href="/manager?ui=new"' in r.text  # đường quay về giao diện mới
-    assert UI_COOKIE in r.headers.get("set-cookie", "")
-    r = await e.client.get(f"/manager?c={cid}")
-    assert old in r.text and island not in r.text
-    # vỏ lưới của app.js cũ (X-Ahub-Partial: grid) luôn là trang cũ
-    e.client.cookies.clear()
-    await e.login()
+        assert "ahub_mgr_ui" not in r.headers.get("set-cookie", ""), url
+        assert "ui=new" not in r.text and "giao diện cũ" not in r.text, url
     r = await e.client.get(f"/manager?c={cid}", headers={"X-Ahub-Partial": "grid"})
-    assert old in r.text
-    # ?ui=new → island và xoá lựa chọn
-    await e.client.get("/manager?ui=old")
-    r = await e.client.get("/manager?ui=new")
-    assert island in r.text and UI_COOKIE in r.headers.get("set-cookie", "")  # Set-Cookie xoá (max-age=0)
-    assert island in (await e.client.get("/manager")).text
+    assert island in r.text and old not in r.text and "<aside" in r.text  # trang đầy đủ, không còn vỏ lưới
+    # route chỉ của trang cũ đã gỡ; thẻ trạng thái (Tổng quan) + POST island dùng vẫn còn
+    assert (await e.client.get("/sse/manager")).status_code == 404
+    assert (await e.client.get("/partials/manager/tabs")).status_code == 404
+    assert (await e.client.get("/partials/manager?compact=1")).status_code == 200
 
 
 def test_island_links_drop_ui_param():
-    """Link/URL trong island không còn `?ui=next`; link `/manager?ui=old` trong trang thì tải thật (không bị island chặn)."""
+    """Link/URL trong island không còn `?ui=next`, không còn nhánh `?ui=old` (trang cũ đã gỡ)."""
     from pathlib import Path
 
     d = Path(__file__).resolve().parent.parent / "src" / "cfharness" / "web" / "static" / "coord"
     src = "".join(f.read_text(encoding="utf-8") for f in d.glob("*.js"))
     assert "ui=next" not in src
-    assert 'u.searchParams.get("ui") === "old"' in src
+    assert '=== "old"' not in src
 
 
 def test_voice_observer_scoped_to_coordinator_region():

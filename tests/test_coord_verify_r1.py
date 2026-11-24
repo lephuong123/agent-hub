@@ -194,14 +194,13 @@ def test_minified_island_parses_and_store_checks_pass(tmp_path):
 
 
 def test_served_island_js_gzip_budget():
-    """Ngân sách gzip của island (không markdown/sanitizer) tính trên bản PHỤC VỤ (đã thu gọn): vendor (preact+hooks+signals+htm) + coord.
-    Kế hoạch: < 30 KB. Bản thu gọn không đổi tên biến (không bước build) đo ~39 KB — chặn hồi quy ở 42 KB; xuống 30 KB cần minifier đổi tên
-    (bước build) hoặc người dùng chốt ngân sách mới (xem dev note). Verify r4 (+0.5 KB: tin người qua SSE `msg.user`, neo mục đang thấy khi vẽ
-    dần, giữ chỗ đọc khi panel xem tệp đổi bề ngang) → chặn ở 42.5 KB; ngân sách cuối vẫn chờ người dùng chốt."""
+    """Ngân sách gzip của island (không markdown/sanitizer) tính trên bản PHỤC VỤ (đã thu gọn bằng `jsmin`, không đổi tên biến): vendor
+    (preact+hooks+signals+htm) + coord. Kế hoạch ban đầu < 30 KB; đo thực tế ~42 KB. Ngân sách CUỐI = 45 KB gzip — người dùng chốt
+    2026-11-24: giữ KHÔNG có bước build (không minifier đổi tên biến), tính cả vendor."""
     files = [STATIC / C.VENDOR[k] for k in ("preact", "preact/hooks", "@preact/signals-core", "@preact/signals", "htm")]
     total = sum(len(gzip.compress(f.read_bytes(), 9)) for f in files)
     total += sum(len(gzip.compress(jsmin.minify(f.read_text(encoding="utf-8")).encode(), 9)) for f in (STATIC / "coord").glob("*.js"))
-    assert total < 42_500, total
+    assert total < 45_000, total
 
 
 async def test_coord_js_route_serves_minified(menv):
