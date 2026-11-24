@@ -43,3 +43,23 @@ def test_template_forms_match_op_params():
                 problems.append(f"{t.name}:{line} {name}: thừa {sorted(extra)}, thiếu bắt buộc {sorted(missing)}")
     assert seen > 50  # bộ dò còn nhận ra form (template đổi cách viết → sửa _forms)
     assert not problems, "\n".join(problems)
+
+
+def test_no_nested_forms():
+    """HTML không cho lồng form: trình duyệt bỏ thẻ form bên trong → nút thao tác gửi theo form NGOÀI (vd GET lọc ngày, kèm
+    csrf lên URL). `_m.html` là nơi định nghĩa macro — bỏ qua."""
+    problems = []
+    for t in sorted(TEMPLATES.glob("*.html")):
+        if t.name == "_m.html":
+            continue
+        text, depth = t.read_text(encoding="utf-8"), 0
+        for m in re.finditer(r"<form\b|</form>|op_form\(|form_open\(", text):
+            line = text.count("\n", 0, m.start()) + 1
+            if m.group(0) == "</form>":
+                depth = max(0, depth - 1)
+                continue
+            if depth:
+                problems.append(f"{t.name}:{line} {m.group(0)} nằm trong một form khác")
+            if m.group(0) != "op_form(":  # op_form tự đóng form của nó
+                depth += 1
+    assert not problems, "\n".join(problems)
