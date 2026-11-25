@@ -85,10 +85,16 @@ def _no_daemon_method(e: Exception) -> bool:
 
 async def file_view(request: Request) -> Response:
     from . import app as A
-    from ..fileview import VIEW_MAX
+    import os as _os
+
+    from ..fileview import IMAGE_EXTS, PDF_EXTS, VIEW_MAX
 
     p = file_params(request.query_params)
-    info = await A.rpc(request, "file.read", {**p, "max_bytes": VIEW_MAX}, audit=True)
+    # ảnh/PDF: trang chỉ cần loại + kích thước (nội dung tải riêng qua /files/raw) → đọc 4 KB thay vì tới 1 MB rồi bỏ
+    # (loại của chúng theo đuôi file — fileview.kind_of). Vẫn audit mỗi lần xem như trước (plan-api-caching PR9).
+    ext = _os.path.splitext(str(p.get("path") or ""))[1].lower()
+    cap = 4096 if ext in IMAGE_EXTS or ext in PDF_EXTS else VIEW_MAX
+    info = await A.rpc(request, "file.read", {**p, "max_bytes": cap}, audit=True)
     data = base64.b64decode(info.pop("data_b64", "") or "")
     try:
         from datetime import datetime
