@@ -545,6 +545,14 @@ class RunManager:
         # tài khoản đang dùng — run làm việc bỏ --strict-mcp-config, không gán/lọc theo agent, guard không chặn/hỏi tool MCP bên thứ
         # ba. Run kỹ thuật (review/eval/curator/graph_extract, bản sao eval) giữ strict. Chỉ gỡ server trỏ về CHÍNH hub (H-18).
         open_mcp = self._open_mcp(run)
+        if open_mcp and conn is None:
+            # MCP user-scope (`.claude.json` của tài khoản) chỉ được claude nạp khi nguồn setting `user` bật — `--setting-sources ""`
+            # (cô lập mặc định) bỏ LUÔN mcpServers user-scope (kiểm claude 2.1.332). Cùng đường với run connector (không connector nào):
+            # nguồn `user`, plugin của người tắt qua --settings, hook/MCP của người coi là đã biết (không isolation.violation).
+            from .manager.connectors import run_setup
+
+            conn = run_setup((), config_dir=mcp_dir or connector_dir)
+            settings = {**settings, **conn["settings_patch"]}
         account_mcp: dict[str, dict[str, Any]] = {}
         mcp_deny: list[str] = []
         if open_mcp:

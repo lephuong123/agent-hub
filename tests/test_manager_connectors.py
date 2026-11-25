@@ -144,8 +144,9 @@ async def test_manager_run_spec_with_connectors(d, user_home, claude_mcp):
 
 async def test_manager_run_without_connectors_unchanged(d, user_home):
     spec, _ = await _connector_manager(d, None)
-    assert spec.isolation_overrides == {"strict_mcp_config": False} and not spec.allowed_mcp_prefixes  # MCP của tài khoản (PR7)
-    assert "enabledPlugins" not in json.loads(spec.settings_path.read_text())
+    assert spec.isolation_overrides == {"setting_sources": "user", "strict_mcp_config": False} and not spec.connectors  # MCP của tài khoản (PR7)
+    # nguồn setting `user` bật để nạp MCP user-scope → plugin của người bị TẮT qua --settings (không chạy trong run của agent)
+    assert all(v is False for v in (json.loads(spec.settings_path.read_text()).get("enabledPlugins") or {}).values())
 
 
 async def test_connectors_need_guard(d, user_home, claude_mcp):

@@ -257,7 +257,7 @@ async def test_hermes_manager_run_spec_keeps_guard_and_sandbox(d, claude_mcp):
     tp = spec.tool_policy
     assert tp.get("permission_mode") in (None, "default", "plan")
     assert not [x for x in tp["disallowed_tools"] if str(x).startswith("mcp__docs")]
-    assert spec.isolation_overrides == {"strict_mcp_config": False}
+    assert spec.isolation_overrides == {"setting_sources": "user", "strict_mcp_config": False}
     assert any("git push --force" in x for x in tp["disallowed_tools"])  # lớp tĩnh
     st = json.loads(spec.settings_path.read_text())
     assert st["hooks"]["PreToolUse"], "hook guard PreToolUse phải có"

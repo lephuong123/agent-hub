@@ -156,7 +156,7 @@ def test_guard_forbids_agent_golden_writes(hub_home, tmp_path):
         assert not classify("Bash", {"command": cmd}, ctx).forbidden, cmd
     assert classify("mcp__cfharness__hub_golden_add", {}, ctx).forbidden
     assert classify("mcp__cfharness__hub_golden_rm", {}, ctx).forbidden
-    assert not classify("mcp__cfharness__hub_golden_list", {}, ctx).forbidden
+    assert classify("mcp__cfharness__hub_golden_list", {}, ctx).forbidden  # server tên của hub (H-18): mọi tool bị cấm, kể cả đọc
 
 
 # ============================================================================ RPC + CLI
