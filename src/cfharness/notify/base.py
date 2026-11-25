@@ -40,7 +40,7 @@ def _retry_after(e: BaseException) -> float | None:
         if headers is not None and (getattr(resp, "status_code", None) or getattr(resp, "code", None)) == 429:
             try:
                 v = headers.get("Retry-After")
-            except Exception:  # pragma: no cover
+            except Exception:  # best-effort: header lạ của thư viện HTTP → coi như không có Retry-After
                 v = None
     try:
         f = float(v) if v is not None else None
