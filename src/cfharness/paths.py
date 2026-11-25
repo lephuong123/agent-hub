@@ -152,10 +152,6 @@ class HubPaths:
     def logs_dir(self) -> Path:
         return self.home / "logs"
 
-    @property
-    def mcp_registry(self) -> Path:
-        return self.home / "mcp" / "registry.yaml"
-
     def agent_home(self, agent_id: str) -> Path:
         return self.agents_dir / agent_id
 

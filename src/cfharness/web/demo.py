@@ -51,10 +51,6 @@ async def seed(hub) -> dict:
                            ("review", "reviewer", "Người review"), ("van-hanh", "ops", "Vận hành")):
         cfg, soul = templates.render(tpl, aid, {"name": name})
         a.create(cfg, soul)
-    hub.mcp.add({"name": "github", "transport": "stdio", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"],
-                 "env": {"GITHUB_TOKEN": "${GITHUB_TOKEN}"}, "trust": "trusted", "description": "Issue, PR, code search"})
-    hub.mcp.add({"name": "tai-lieu", "transport": "http", "url": "http://127.0.0.1:9/mcp", "description": "Kho tài liệu nội bộ (chỉ đọc)"})
-    a.update("nghien-cuu", {"mcp_servers": ["tai-lieu"]})
     hub.teams.create({"id": "docs", "name": "Nhóm tài liệu", "charter": "Viết và giữ tài liệu cài đặt luôn đúng với mã nguồn."})
     hub.teams.member_set("docs", "lap-trinh", "worker", 1)
     hub.teams.member_set("docs", "review", "reviewer", 1)

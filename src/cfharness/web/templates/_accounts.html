@@ -24,42 +24,6 @@
     {% for a in accounts %}<tr id="acct-{{ a.id }}">
       <td data-label="Tài khoản"><b>{{ a.label or a.id }}</b>{% if a.active %} <span class="pill ok strong">{{ m.icon('check') }}Đang dùng</span>{% endif %}
         {% if a.kind_label %}<div class="muted small">{{ a.kind_label }}</div>{% endif %}
-        {% if a.mcp %}{% set mc = a.mcp %}<details class="acct-mcp small" id="acct-mcp-{{ a.id }}"{% if mc.login %} open{% endif %}>
-          <summary>MCP của tài khoản ({{ mc.servers|length }}){% for s in mc.servers if s.status == 'needs_auth' %}{% if loop.first %} <span class="pill warn">cần đăng nhập</span>{% endif %}{% endfor %}</summary>
-          {% if mc.error %}<p class="small danger-t">{{ mc.error }}</p>{% endif %}
-          {% if mc.servers %}<ul class="plain mcp-list">{% for s in mc.servers %}<li id="acct-mcp-{{ a.id }}-{{ s.name }}"><b>{{ s.name }}</b> <span class="muted">{{ s.transport }}{% if s.host %} · {{ s.host }}{% endif %}</span> <span class="pill {{ s.status_tone }}">{{ s.status_label }}</span>{% if s.hub %} <span class="muted">(trỏ về chính hub — không đăng ký được)</span>{% elif not s.registered %} <span class="muted">(chưa đăng ký cho hub)</span>{% endif %}
-            <span class="row gap wrap-row">{% if not s.registered and not s.hub %}<form method="post" action="/do/mcp_claude_register" class="inline row gap" data-confirm="Đăng ký MCP {{ s.name }} cho hub? Agent được gán sẽ dùng server này qua claude của tài khoản đang dùng.">
-              <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="account_id" value="{{ a.id }}"><input type="hidden" name="mcp_name" value="{{ s.name }}"><input type="hidden" name="name" value="{{ a.label or a.id }}"><input type="hidden" name="next" value="/settings/accounts#acct-mcp-{{ a.id }}">
-              <label class="small" title="Tin cậy: tool ghi chạy không hỏi (vẫn ghi audit). Không tích: tool ghi phải chờ duyệt."><input type="checkbox" name="trust" value="trusted"> Tin cậy</label>
-              <button class="btn sm primary" type="submit"><span>Đăng ký cho hub</span></button></form>{% endif %}{% if s.oauth and not mc.login %}{{ m.act("mcp_claude_login_start", "Đăng nhập", {"account_id": a.id, "mcp_name": s.name, "name": a.label or a.id}, "btn sm" ~ (" primary" if s.status == 'needs_auth' else ""), next="/settings/accounts#acct-mcp-" ~ a.id) }}{{ m.act("mcp_claude_logout", "Đăng xuất", {"account_id": a.id, "mcp_name": s.name, "name": a.label or a.id}, "btn sm ghost", confirm="Đăng xuất MCP " ~ s.name ~ " của tài khoản " ~ (a.label or a.id) ~ "?", next="/settings/accounts#acct-mcp-" ~ a.id) }}{% endif %}{{ m.act("mcp_claude_rm", "Gỡ", {"account_id": a.id, "mcp_name": s.name, "name": a.label or a.id}, "btn sm ghost", confirm="Gỡ MCP " ~ s.name ~ " khỏi tài khoản " ~ (a.label or a.id) ~ "?", next="/settings/accounts#acct-mcp-" ~ a.id) }}</span></li>{% endfor %}</ul>
-          {% else %}<p class="muted small">Chưa có MCP nào trong cấu hình claude của tài khoản này.</p>{% endif %}
-          {% if mc.login %}<div class="acct-login" id="acct-mcp-login-{{ a.id }}">
-            <p class="small"><b>Đăng nhập MCP «{{ mc.login.name }}»:</b> mở trang đăng nhập (tab mới), đồng ý cấp quyền. Trình duyệt chuyển tới một địa chỉ <code>localhost:…/callback</code>
-              (có thể báo không mở được trang) — chép NGUYÊN địa chỉ trên thanh trình duyệt rồi dán vào đây.</p>
-            <p><a class="btn primary" href="{{ mc.login.url }}" target="_blank" rel="noopener noreferrer">{{ m.icon('external') }}<span>Mở trang đăng nhập</span></a></p>
-            <form method="post" action="/do/mcp_claude_login_finish" class="form" autocomplete="off">
-              <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="login_id" value="{{ mc.login.login_id }}"><input type="hidden" name="next" value="/settings/accounts#acct-mcp-{{ a.id }}">
-              <label>URL chuyển hướng <input name="redirect_url" type="password" required autocomplete="off" spellcheck="false" placeholder="localhost:…/callback?code=…"></label>
-              <div class="row end gap"><button class="btn" type="submit">Hoàn tất đăng nhập</button></div>
-            </form>
-            {{ m.act("mcp_claude_login_cancel", "Huỷ", {"login_id": mc.login.login_id}, "btn sm ghost", next="/settings/accounts#acct-mcp-" ~ a.id) }}
-          </div>{% endif %}
-          <div class="row gap wrap-row">{{ m.act("mcp_claude_check", "Kiểm tra MCP", {"account_id": a.id, "name": a.label or a.id}, "btn sm", next="/settings/accounts#acct-mcp-" ~ a.id) }}{% if mc.checked_at %}<span class="muted small">kiểm lúc {{ m.rel(mc.checked_at) }}</span>{% endif %}</div>
-          <details class="acct-mcp-add"><summary class="btn sm ghost">Thêm MCP</summary>
-            <form method="post" action="/do/mcp_claude_add" class="form" autocomplete="off">
-              <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="account_id" value="{{ a.id }}"><input type="hidden" name="name" value="{{ a.label or a.id }}"><input type="hidden" name="next" value="/settings/accounts#acct-mcp-{{ a.id }}">
-              <div class="fgrid">
-                <label>Tên <input name="mcp_name" required maxlength="63" autocomplete="off" placeholder="vd atlassian"></label>
-                <label>URL <input name="url" required type="url" autocomplete="off" spellcheck="false" placeholder="vd mcp.example.com/mcp (https)"></label>
-                <label>Transport <select name="transport"><option value="http">http</option><option value="sse">sse</option></select></label>
-                {% if mc.secrets_ok %}<label>Header (tuỳ chọn) <input name="header_name" autocomplete="off" placeholder="vd Authorization"></label>
-                <label>Giá trị header <input name="header_value" type="password" autocomplete="off" spellcheck="false"></label>{% endif %}
-              </div>
-              <p class="muted small">claude giữ cấu hình + đăng nhập (OAuth) theo tài khoản này; hub chỉ giữ tên/host/quyền. Header lưu trong cấu hình claude của tài khoản (agent không đọc được). Server chạy lệnh (stdio): <code>cfharness mcp claude add &lt;tên&gt; -- &lt;lệnh&gt;</code>.</p>
-              <div class="row end"><button class="btn" type="submit">Thêm</button></div>
-            </form>
-          </details>
-        </details>{% endif %}
         {% if claudeai and a.cai %}<div class="small acct-connector" id="acct-connector-{{ a.id }}">{% if a.cai.logged_in %}<span class="pill ok">{{ m.icon('check') }}connector</span> claude.ai <b>{{ a.cai.email or "" }}</b>{% elif a.cai.logged_in is sameas false %}<span class="pill warn">connector chưa gắn</span> <span class="muted">— agent chưa dùng được Google Drive… khi dùng tài khoản này</span>{% else %}<span class="pill muted">connector: chưa kiểm</span> <span class="muted">— bấm Kiểm tra</span>{% endif %}</div>{% endif %}</td>
       <td data-label="Trạng thái"><span class="pill {{ a.tone }}">{{ a.chip }}</span>{% if a.last_error and a.status != 'ok' %}<div class="small danger-t">{{ a.last_error }}</div>{% endif %}</td>
       <td data-label="Dùng lần cuối">{{ m.rel(a.last_used_at) }}</td>

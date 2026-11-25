@@ -2,13 +2,12 @@
 `/mcp-safe`, `/delegate`, `/reminders`.
 
 Lệnh `/…` do CLIENT xử lý, KHÔNG gửi tới model: điều phối viên không gõ được. Mỗi lệnh ghi gọi đúng RPC mà CLI dùng (`config.set`,
-`guard.sandbox.*`, `guard.trust.set`, `mcp.update`) — cổng `HUMAN_ONLY` + audit ở daemon như CLI. Lệnh ghi luôn in giá trị cũ → mới và hỏi
+`guard.sandbox.*`, `guard.trust.set`) — cổng `HUMAN_ONLY` + audit ở daemon như CLI. Lệnh ghi luôn in giá trị cũ → mới và hỏi
 y/N; `/trust … full` và `/profile autonomous` xác nhận 2 bước.
 """
 
 from __future__ import annotations
 
-import fnmatch
 import shlex
 from typing import TYPE_CHECKING, Any
 
@@ -29,7 +28,7 @@ HELP = [
     ("/trust-host <agent> <host> [--remove]", "tin host dev trỏ về IP nội bộ (WebFetch/Chrome không hỏi SSRF)"),
     ("/sandbox <agent> localhost on|off", "cho agent bind cổng local + gọi 127.0.0.1"),
     ("/sandbox <agent> domain <d> [--remove]", "mở domain mạng cho Bash của agent"),
-    ("/mcp-safe <server> <glob> [--clear]", "đánh dấu tool MCP không phá huỷ (vd /mcp-safe playwright browser_*)"),
+    ("/mcp-safe claude-in-chrome <glob> [--clear]", "đánh dấu tool Claude in Chrome không phá huỷ (MCP khác không còn hỏi duyệt)"),
     ("/delegate on|off [file,git,mcp]", "giao điều phối viên duyệt các lớp này"),
     ("/reminders on|off|once|<n>", "số lần nhắc lại mỗi yêu cầu duyệt"),
 ]
@@ -45,8 +44,7 @@ DELEGABLE = ("file", "git", "mcp", "db", "system")
 # luật → gợi ý lệnh bớt hỏi (chữ của hub; {agent} điền từ thống kê)
 HINTS = {
     "ssrf_private_resolved": "host dev trỏ về IP nội bộ → /trust-host {agent} <host>",
-    "mcp_destructive_hint": "tool MCP bị server tự gắn destructive → /mcp-safe <server> <tool-glob>",
-    "mcp_unknown_tool": "tool MCP chưa gắn nhãn → cfharness mcp annotate <server> <tool> --read-only|--destructive, hoặc /mcp-safe",
+    "mcp_unknown_tool": "tool Claude in Chrome lạ → /mcp-safe claude-in-chrome <tool-glob>",
     "delete_not_run_created": "xoá thư mục tạm/do task tạo → đã tự cho phép khi guard.task_created_deletes bật (balanced)",
     "code_delete_api": "script của repo bị coi là xoá file → đã tự cho phép khi script đã commit (guard.trusted_repo_scripts)",
     "write_outside_workspace": "ghi ngoài workspace → task đặt extra_write_roots; worktree do task tạo đã tự cho phép (balanced)",
@@ -273,32 +271,24 @@ async def mcp_safe(s: "ChatSession", args: list[str]) -> None:
     clear = "--clear" in args
     rest = [a for a in args if a != "--clear"]
     if len(rest) != 2:
-        return _usage(s, "dùng: /mcp-safe <server> <tool-glob> [--clear]  (vd /mcp-safe playwright browser_*)")
+        return _usage(s, "dùng: /mcp-safe claude-in-chrome <tool-glob> [--clear]  (vd /mcp-safe claude-in-chrome read_*)")
     name, glob = rest
     from ..browser import CHROME_SERVER
 
-    if name == CHROME_SERVER:
-        key = "runtime.claude.chrome.annotations"
-        ann = {k: dict(v) for k, v in ((await _cfg(s, key)) or {}).items() if isinstance(v, dict)}
-        hits: list[str] = []
-    else:
-        srv = await s.client.call("mcp.show", {"name": name}) or {}
-        ann = {k: dict(v) for k, v in (((srv.get("config") or {}).get("tools") or {}).get("annotations") or {}).items()}
-        hits = sorted(t for t in (srv.get("annotations_cache") or {}) if fnmatch.fnmatchcase(t, glob))
+    if name != CHROME_SERVER:  # MCP bên thứ ba: claude tự quản lý, guard không hỏi duyệt (plan-mcp-claude-native PR7)
+        return _usage(s, f"/mcp-safe chỉ còn cho {CHROME_SERVER} — tool MCP bên thứ ba không còn bị hỏi duyệt")
+    key = "runtime.claude.chrome.annotations"
+    ann = {k: dict(v) for k, v in ((await _cfg(s, key)) or {}).items() if isinstance(v, dict)}
     cur = {} if clear else {**(ann.get(glob) or {}), "destructiveHint": False}
-    what = (f"bỏ ghi đè annotations '{glob}' của MCP {name}" if clear else
-            f"đánh dấu tool MCP {name} khớp '{glob}' là KHÔNG phá huỷ" + (f" ({', '.join(hits[:8])}{'…' if len(hits) > 8 else ''})" if hits else ""))
-    s._note(what + " — tool tên xoá, tài nguyên bảo vệ, require_approval vẫn hỏi")
+    what = (f"bỏ ghi đè annotations '{glob}' của {name}" if clear else f"đánh dấu tool {name} khớp '{glob}' là KHÔNG phá huỷ")
+    s._note(what + " — tài nguyên bảo vệ vẫn hỏi")
     if not await s.confirm("Áp dụng? [y/N] "):
         return
     if cur:
         ann[glob] = cur
     else:
         ann.pop(glob, None)
-    if name == CHROME_SERVER:
-        await _set(s, "runtime.claude.chrome.annotations", ann)
-    else:
-        await s.client.call("mcp.update", {"name": name, "patch": {"tools": {"annotations": ann}}}, audit=True)
+    await _set(s, "runtime.claude.chrome.annotations", ann)
     s._note(f"đã {what}")
 
 

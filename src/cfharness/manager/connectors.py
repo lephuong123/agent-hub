@@ -7,8 +7,8 @@ hook (`~/.claude/settings.json`), plugin bật, MCP trong `~/.claude.json`, CLAU
 
 Bù lại:
 - `enabledPlugins` của user bị đặt false trong settings hub sinh (cờ `--settings` thắng nguồn user);
-- hook guard (`classify_mcp`, `GuardContext.connectors`) chặn cứng (forbidden) mọi tool MCP không thuộc agent và không phải
-  connector người cho phép; tool connector tên dạng xoá vẫn qua approval;
+- (PR7 plan-mcp-claude-native) guard KHÔNG lọc MCP/connector theo agent nữa — mọi run làm việc nạp mọi MCP của tài khoản; danh sách
+  connector ở đây chỉ quyết định run dùng phiên claude.ai (connector chỉ nạp khi có phiên) + `--setting-sources user`;
 - hook/MCP/plugin của user được khai báo là "đã biết" cho kiểm cô lập hậu nghiệm (không bật `isolation.violation` mỗi lượt chat).
 Chỉ áp khi guard bật (không có hook guard = không có lớp chặn MCP lạ → không bật connector).
 """

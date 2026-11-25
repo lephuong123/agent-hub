@@ -19,6 +19,18 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - **Chữ không chân cho câu trả lời**: câu trả lời của điều phối viên, diễn biến lượt chạy và câu hỏi của agent dùng chữ không chân 14.5px (trước: chữ có chân 16–16.5px). Popup *+ Luồng* / *Đã đóng* / *⚙ Luồng này* ở hàng tab luồng không còn bị khuất ngoài mép phải màn hình.
 - **Khung chat gọn kiểu Gemini**: chữ câu trả lời 14px, nhịp dòng và khoảng cách đoạn/danh sách chặt hơn, tin của bạn và ô nhập 13.5px, khối code thấp hơn (đầu khối mỏng, chữ code 12px) — một câu trả lời chiếm ít chiều cao hơn ~25%. Cỡ chữ chỉnh một chỗ qua biến `--chat-fs` / `--chat-lh`.
 
+### MCP: mọi agent dùng chung MCP của tài khoản Claude
+- **Mọi agent tự có mọi server MCP và connector claude.ai của tài khoản Claude đang dùng** — không còn gán MCP cho từng agent. Bạn quản lý MCP hoàn toàn bằng Claude: `claude mcp add …`, `claude mcp login <tên>`, `claude mcp remove <tên>` (tài khoản thêm trong cfharness, không phải "Đăng nhập của máy": chạy với `CLAUDE_CONFIG_DIR=<HUB_HOME>/claude-config/<id>`), connector bật trên claude.ai. Hub chỉ còn **liệt kê** server của từng tài khoản: `cfharness mcp list` (`--json`), đọc thẳng `.claude.json` nên mở ngay (không chạy `claude mcp list` ~50 s); lệnh stdio hiện kèm đối số đã che giá trị bí mật, không bao giờ hiện header/env.
+- **Agent gọi tool MCP không còn bị hỏi duyệt hay chặn**: hub bỏ toàn bộ lớp chính sách MCP (tin cậy/không tin cậy, chọn tool include/exclude, "luôn hỏi duyệt", ghi đè annotations, khung `read_only_trusted` của điều phối viên, audit `tool.write`). Guard vẫn chặn agent tự duyệt/điều khiển hub qua MCP; server trong cấu hình Claude trỏ về chính hub (`cfharness mcp serve`) bị gỡ khỏi run. Chế độ Chrome / allowlist domain vẫn gỡ Playwright (nhận theo lệnh trong cấu hình Claude).
+- Guard không còn bắt buộc bật vì MCP (trước đây agent có MCP mà tắt guard thì run hỏng): không còn gì để lọc. Khi `guard.enabled=false`, run tự cho phép sẵn `mcp__<server>` của mọi server trong cấu hình Claude (không có kênh hỏi quyền thì claude `-p` sẽ từ chối tool MCP); connector claude.ai vẫn cần guard bật mới gọi được (tên không biết trước).
+- Web: trang MCP thành danh sách chỉ đọc theo tài khoản Claude (thêm server bằng `claude mcp add`); bỏ gán MCP trong form agent, mục MCP ở Tài khoản Claude và trang chính sách `/mcp/<tên>` (URL cũ chuyển về `/mcp`).
+
+### Lưu ý khi cập nhật
+- **Mọi agent giờ thấy MỌI server MCP và connector** trong cấu hình Claude của tài khoản đang dùng (kể cả agent trước đây không được gán server nào), và **không còn bước duyệt nào cho tool MCP**. Server nào không muốn agent dùng: gỡ khỏi Claude (`claude mcp remove <tên>`) hoặc chặn tool bằng `tool_policy.disallowed_tools` của agent (vd `mcp__<server>__*`).
+- Đã gỡ: `cfharness mcp claude add|rm|login|logout|status`, `cfharness mcp add|edit|show|rm|restore|assign|unassign|agent-config|claude-servers`, `mcp annotate` cho server khác Claude in Chrome, cờ `agent create|edit --mcp` (còn nhận nhưng bỏ qua), khoá `manager.capabilities.mcp` (bỏ qua), RPC `mcp.add|update|remove|restore|show|assign|agent_config|claude_*`. Dùng `claude mcp …` thay thế; `cfharness mcp list` để xem.
+- Migration DB v35 xoá bảng registry `mcp_servers` (tin cậy, include/exclude, annotations) và gỡ server gán theo agent. Cấu hình agent / gói chuyển hub / YAML cũ có `mcp_servers` vẫn nạp bình thường (trường bị bỏ qua). Khoá `mcp.audit_ignore_servers` không còn dùng (config.yaml cũ vẫn đọc).
+- Nhập gói từ hub cũ: server MCP trong gói được nhắc thêm lại bằng `claude mcp add` (doctor); hub không còn đánh dấu "MCP thiếu lệnh" khi nhập.
+
 ---
 
 ## v0.2.32 — 2026-11-25

@@ -29,7 +29,7 @@
 - `manager.history {conversation_id, limit?}` → `[{id, role: user|manager|notify|tick, text, run_id, ts}]` (cũ → mới)
 - `manager.tick {force?}` (HUMAN_ONLY) → `{run_id|null, skipped?, reason?, events?, conversation_id?}`
 - `managerself.call {run_id, op, args}` — tool hub-self của run manager (daemon ràng run ↔ người gọi).
-- `manager.capabilities {}` (đọc) → `{config, effective:{profile, tools, mcp, web, warnings}, profiles, manager, problem}` — khung quyền §9;
+- `manager.capabilities {}` (đọc) → `{config, effective:{profile, tools, web, connectors, warnings}, profiles, manager, problem}` — khung quyền §9;
   ghi bằng `config.set {key: "manager.capabilities", value}` (HUMAN_ONLY + audit).
 Event: `manager.reply{conversation_id, run_id, text, channel, kind: reply|tick|notify, ok, outcome?}`,
 `manager.action{tool, target ("agent:x"|"task:t_…"|…), summary, audit_id, ok, error?}`, `manager.tick{status, reason, events}`,

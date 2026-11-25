@@ -110,8 +110,8 @@ KNOWLEDGE_TABLES = ("mem_*",)
 MACHINE_STATE = ("repo_locks", "repo_locks_shared", "browser_locks", "rate_limit", "rate_limit_gate", "rate_limit_gates", "rate_limit_by_account",
                  "pyenv_baseline", "cli_compat", "cli_unknown_rate", "auth_block", "claude_account_checks", "admin_watch.active",
                  "accounts.claudeai",  # phiên claude.ai theo tài khoản — thư mục claude-config/ không bao giờ đi theo gói (gắn với máy)
-                 "mcp.claude_seen",  # server MCP lạ đã gặp ở run bỏ strict, theo thư mục cấu hình claude của MÁY này (runs._remember_claude_seen)
-                 "mcp.claude_status",  # trạng thái MCP do claude quản lý theo tài khoản (mcp_client/claude_admin.py) — token ở Keychain máy cũ
+                 # bản ≤ v0.2.32: server MCP lạ đã gặp ở run bỏ strict / trạng thái `claude mcp list` theo tài khoản — của máy cũ
+                 "mcp.claude_seen", "mcp.claude_status",
                  # `mcp.migrations`: hàng chờ xoá token OAuth hub sau khi chuyển (bản ≤ v0.2.30) — của máy cũ;
                  # danh sách MCP nguồn claude cần thêm/đăng nhập lại của lần nhập trước (MCP_CLAUDE_STATE)
                  "mcp.migrations", "import_mcp_claude",
@@ -750,7 +750,7 @@ MCP_CLAUDE_STATE = "import_mcp_claude"  # [{server, transport, host, accounts}] 
 
 
 def mcp_claude_relogin(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """MCP nguồn claude (plan-mcp-claude-native PR2–PR4) trong DB của gói: cấu hình + token nằm trong `claude-config/<id>/` + Keychain của
+    """MCP trong registry của gói từ hub cũ (≤ v0.2.32 — PR7 bỏ registry, migration v35 xoá bảng): cấu hình + token nằm trong `claude-config/<id>/` + Keychain của
     MÁY CŨ (không bao giờ đi theo gói) → ở máy này phải thêm lại + đăng nhập lại trên tài khoản. Tài khoản lấy từ cache trạng thái
     `mcp.claude_status` của máy cũ (đọc TRƯỚC khi dọn MACHINE_STATE), không có thì tài khoản đang dùng. CHỈ tên/host/id tài khoản."""
     from urllib.parse import urlsplit
@@ -775,8 +775,6 @@ def mcp_claude_relogin(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         try:
             conf = json.loads(r[1] or "{}") or {}
         except ValueError:
-            continue
-        if conf.get("source") != "claude":
             continue
         accts = sorted(("machine" if k == "default" else str(k)) for k, e in cache.items()
                        if isinstance(e, dict) and isinstance(e.get("servers"), dict) and r[0] in e["servers"])
@@ -938,16 +936,17 @@ def filehub_command(info: dict[str, Any] | None = None) -> str:
 
 
 def mcp_claude_steps(item: dict[str, Any]) -> list[str]:
-    """Lệnh cho một MCP nguồn claude sau khi nhập: thêm lại (url đầy đủ không đi theo gói — hub chỉ giữ host) + đăng nhập, theo tài khoản."""
+    """Lệnh cho một MCP của hub cũ sau khi nhập: thêm lại vào claude (url đầy đủ không đi theo gói — chỉ host) + đăng nhập, theo tài
+    khoản (tài khoản token: `CLAUDE_CONFIG_DIR=<HUB_HOME>/claude-config/<id>`)."""
     out = []
     n = str(item.get("server") or "")
     url = f"https://{item['host']}/…" if item.get("host") else "<URL>"
     for a in item.get("accounts") or ["machine"]:
-        acct = f" --account {a}"
+        env = f"CLAUDE_CONFIG_DIR=<HUB_HOME>/claude-config/{a} " if str(a).startswith("a_") else ""
         if item.get("transport") == "stdio":
-            out.append(f"cfharness mcp claude add {n}{acct} -- <lệnh>")
+            out.append(f"{env}claude mcp add -s user {n} -- <lệnh>")
         else:
-            out.append(f"cfharness mcp claude add {n} --url {url}{acct}; cfharness mcp claude login {n}{acct}")
+            out.append(f"{env}claude mcp add -s user --transport {item.get('transport') or 'http'} {n} {url}; {env}claude mcp login {n}")
     return out
 
 
@@ -1097,11 +1096,9 @@ def _stage_work(stage: Path, manifest: dict[str, Any], pm: PathMap, mode: str, *
     rp = TR.plan(stage, pm)  # PR5: repo workspace (repos.json) — thiếu → gợi ý clone, dirty → cảnh báo
     rep["repos"] = rp["repos"]
     rep["repos_warnings"] = rp["warnings"]
-    rep["mcp_missing"] = TO.mcp_missing(db, None if apply else pm, target_os=target_os)  # type: ignore[arg-type]
-    if apply:
-        TO.mark_mcp(db, rep["mcp_missing"])
+    # (PR7: không còn `mcp_missing` — hub không giữ lệnh MCP; server MCP nằm trong cấu hình claude của máy, không đi theo gói)
     followups = None
-    if review or rep["knowledge_rows_with_old_paths"] or renamed or rep["mcp_missing"]:
+    if review or rep["knowledge_rows_with_old_paths"] or renamed:
         followups = {"files": review, "graph_rows": rep["knowledge_rows_with_old_paths"], "map": pm.as_list(), "status": "pending",
                      "note": "tri thức thuộc ledger còn đường dẫn máy cũ — chưa tự viết lại (người sửa qua ledger)"}
         if renamed:
@@ -1109,8 +1106,6 @@ def _stage_work(stage: Path, manifest: dict[str, Any], pm: PathMap, mode: str, *
             followups["skills_renamed"] = [{k: s[k] for k in ("scope", "owner", "old", "new")} for s in rep["skills_renamed"]]
             followups["renamed_note"] = ("tên file/skill không hợp lệ ở máy đích — đã đổi trong lúc nhập (KHÔNG qua ledger: hàng ledger/lịch sử "
                                          "giữ tên cũ); tham chiếu theo tên cũ trong SKILL.md/memory cần người sửa")
-        if rep["mcp_missing"]:
-            followups["mcp_missing"] = rep["mcp_missing"]
     rep.update(_adjust_db(db, mode=mode, apply=apply, manifest=manifest, followups=followups, extra=extra, repos=rp["repos"], pm=pm,
                           filehub=rep["filehub"]))
     return rep

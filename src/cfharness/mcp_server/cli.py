@@ -3,6 +3,7 @@
 Đăng ký từ `cli.build_parser` qua `add_parsers(sub, common)`. Mọi lệnh là client của daemon (RPC), trừ
 `mcp serve` (tiến trình MCP mỏng), `mcp snippet`/`mcp token` (chỉ in cấu hình/đọc file token cục bộ).
 KHÔNG sửa cấu hình Claude Code của người dùng — `mcp snippet` chỉ IN lệnh/JSON để người tự thêm.
+MCP bên thứ ba do claude quản lý (plan-mcp-claude-native PR7): `mcp list` chỉ liệt kê; thêm/gỡ/đăng nhập bằng `claude mcp …`.
 """
 
 from __future__ import annotations
@@ -24,28 +25,6 @@ EXIT_OK, EXIT_USER, EXIT_SYS = 0, 1, 2
 
 def _eprint(*a: Any) -> None:
     print(*a, file=sys.stderr)
-
-
-def _kv_list(values: list[str] | None, what: str) -> dict[str, str | None]:
-    out: dict[str, str | None] = {}
-    for v in values or []:
-        if "=" in v:
-            k, val = v.split("=", 1)
-        elif ":" in v and what == "header":
-            k, val = v.split(":", 1)
-        else:
-            raise ValueError(f"--{what} cần dạng KHOÁ=GIÁ_TRỊ: {v}")
-        out[k.strip()] = val.strip() if val.strip() != "" else None
-    return out
-
-
-def _split(values: list[str] | None) -> list[str] | None:
-    if values is None:
-        return None
-    out: list[str] = []
-    for v in values:
-        out.extend(x.strip() for x in v.split(",") if x.strip())
-    return out
 
 
 # ============================================================================ caller cho MCP server
@@ -178,104 +157,6 @@ def cmd_mcp_token(ctx: Any) -> int:
 
 
 # ============================================================================ registry
-def _policy_fields(sp: argparse.ArgumentParser) -> None:
-    """Chính sách hub giữ cho một server (cấu hình kết nối do claude giữ theo tài khoản — `cfharness mcp claude`)."""
-    sp.add_argument("--include", action="append", help="glob tool được dùng")
-    sp.add_argument("--exclude", action="append", help="glob tool bị chặn")
-    sp.add_argument("--require-approval", action="append", help="glob tool luôn qua phê duyệt")
-    sp.add_argument("--trust", help="trusted | untrusted (giá trị lạ = untrusted)")
-    sp.add_argument("--timeout", type=float, help="giây")
-    sp.add_argument("--description")
-
-
-def _policy_payload(a: argparse.Namespace) -> dict[str, Any]:
-    d: dict[str, Any] = {}
-    tools: dict[str, Any] = {}
-    for src in ("include", "exclude", "require_approval"):
-        v = _split(getattr(a, src))
-        if v is not None:
-            tools[src] = v
-    if tools:
-        d["tools"] = tools
-    for src in ("trust", "description"):
-        if getattr(a, src) is not None:
-            d[src] = getattr(a, src)
-    if a.timeout is not None:
-        d["timeout_s"] = a.timeout
-    return d
-
-
-def _tools_text(tools: dict[str, Any]) -> str:
-    lines = []
-    for t, r in sorted(tools.items()):
-        flags = []
-        if r.get("readOnlyHint") is True:
-            flags.append("readOnly")
-        if r.get("destructiveHint") is True:
-            flags.append("DESTRUCTIVE")
-        if r.get("suspicious"):
-            flags.append("ĐÁNG NGỜ")
-        lines.append(f"  - {t}  [{', '.join(flags) or '-'}]")
-    return "\n".join(lines)
-
-
-def _server_text(s: dict[str, Any]) -> str:
-    cfg = s["config"]
-    tools = cfg.get("tools") or {}
-    lines = [
-        f"{s['name']}  [{s['transport']}, trust={s['trust']}, nguồn=claude]" + ("  (ĐÃ XOÁ MỀM)" if s.get("deleted_at") else ""),
-        *([f"  host: {cfg['url']}"] if cfg.get("url") else []),
-        f"  tools: include={tools.get('include') or '*'} exclude={tools.get('exclude') or '-'} require_approval={tools.get('require_approval') or '-'}",
-        *([f"  ghi đè annotations (người đặt): {json.dumps(tools['annotations'], ensure_ascii=False)}"] if tools.get("annotations") else []),
-        "  cấu hình kết nối + đăng nhập: claude theo tài khoản (cfharness mcp claude status)",
-    ]
-    if s.get("agents"):
-        lines.append(f"  agent dùng: {', '.join(s['agents'])}")
-    for w in s.get("warnings") or []:
-        lines.append(f"  ! {w}")
-    return "\n".join(lines)
-
-
-def _cmd_annotate(ctx: Any) -> int:
-    """`cfharness mcp annotate <server> <tool-glob> --not-destructive|--destructive|--read-only|--not-read-only|--clear` — ghi đè
-    annotations server tự khai (chỉ người: mcp.update ∈ HUMAN_ONLY). Không gỡ được luật tên-xoá, tài nguyên bảo vệ, require_approval."""
-    a = ctx.args
-    from ..browser import CHROME_SERVER
-
-    if a.name == CHROME_SERVER:
-        return _annotate_chrome(ctx)
-    s = ctx.call("mcp.show", {"name": a.name})
-    tools = dict((s.get("config") or {}).get("tools") or {})
-    ann = {k: dict(v) for k, v in (tools.get("annotations") or {}).items()}
-    cur = dict(ann.get(a.tool) or {})
-    if a.clear:
-        cur = {}
-    if a.not_destructive:
-        cur["destructiveHint"] = False
-    if a.destructive:
-        cur["destructiveHint"] = True
-    if a.read_only:
-        cur["readOnlyHint"] = True
-    if a.not_read_only:
-        cur["readOnlyHint"] = False
-    if not a.clear and not cur:
-        _eprint("chọn ít nhất một: --not-destructive | --destructive | --read-only | --not-read-only | --clear")
-        return EXIT_USER
-    if cur:
-        ann[a.tool] = cur
-    else:
-        ann.pop(a.tool, None)
-    cache = s.get("annotations_cache") or {}
-    import fnmatch
-
-    hits = sorted(t for t in cache if fnmatch.fnmatchcase(t, a.tool))
-    res = ctx.call("mcp.update", {"name": a.name, "patch": {"tools": {"annotations": ann}}})
-    msg = (f"MCP {a.name}: tool khớp '{a.tool}' → " + (json.dumps(cur, ensure_ascii=False) if cur else "bỏ ghi đè") +
-           (f" ({len(hits)} tool đã biết: {', '.join(hits[:10])}{'…' if len(hits) > 10 else ''})" if hits else ""))
-    ctx.out(res, msg)
-    return EXIT_OK
-
-
 def _annotate_chrome(ctx: Any) -> int:
     """Claude in Chrome không nằm trong registry (server dynamic của `claude --chrome`) → ghi đè vào
     `runtime.claude.chrome.annotations` qua `config.set` (chỉ người). Luật URL/SSRF của navigate không gỡ được."""
@@ -311,166 +192,47 @@ def _annotate_chrome(ctx: Any) -> int:
     return EXIT_OK
 
 
-_STATUS_VI = {"connected": "đã kết nối", "needs_auth": "CẦN ĐĂNG NHẬP", "failed": "lỗi kết nối", "unknown": "chưa rõ"}
+def _list_text(res: dict[str, Any]) -> str:
+    """`mcp list`: server theo tài khoản + một dòng hướng dẫn thêm server bằng `claude mcp add`."""
+    from pathlib import PurePath
 
+    from ..mcp_client.claude_source import add_hint
 
-def _ask_secret(prompt: str) -> str:
-    """Giá trị bí mật (header/env/URL chuyển hướng): getpass khi có TTY, không thì một dòng stdin — không bao giờ qua argv."""
-    if sys.stdin.isatty():
-        return getpass.getpass(prompt)
-    return sys.stdin.readline().strip()
-
-
-def cmd_mcp_claude(ctx: Any) -> int:
-    """`cfharness mcp claude add|rm|login|logout|status` — MCP do claude quản lý theo tài khoản (plan-mcp-claude-native PR3)."""
-    a = ctx.args
-    op = a.claude_op
-    base = {"account_id": a.account}
-    if op == "status":
-        res = ctx.call("mcp.claude_status", {**base, "refresh": bool(a.refresh)}, timeout=180)
-        lines = [f"MCP do claude quản lý — tài khoản {res.get('account_label')} ({res.get('config_path')})"]
-        if res.get("error"):
-            lines.append(f"  ! {res['error']}")
-        if not res.get("servers"):
-            lines.append("  (không có server nào — thêm: cfharness mcp claude add <tên> --url URL)")
-        for s in res.get("servers") or []:
-            reg = "đã đăng ký" if s.get("registered") else "chưa đăng ký"
-            lines.append(f"  {s['name']:<28} {s['transport']:<6} {s.get('host') or '-':<30} {_STATUS_VI.get(s['status'], s['status']):<14} {reg}"
-                         + (f"  agent: {', '.join(s['agents'])}" if s.get("agents") else ""))
-            if s["status"] == "needs_auth":
-                lines.append(f"      → cfharness mcp claude login {s['name']}" + (f" --account {a.account}" if a.account else ""))
-        ctx.out(res, "\n".join(lines))
-        return EXIT_OK
-    if op == "add":
-        cmd = [x for x in (a.cmd or []) if x != "--"]
-        if bool(a.url) == bool(cmd):
-            _eprint("chọn MỘT: --url URL (http/sse) hoặc -- <lệnh> <args…> (stdio)")
-            return EXIT_USER
-        p: dict[str, Any] = {**base, "name": a.name, "transport": a.transport or ("stdio" if cmd else "http"), "register": not a.no_register}
-        if a.trust:
-            p["trust"] = a.trust
-        if a.url:
-            p["url"] = a.url
-        else:
-            p["command"], p["args"] = cmd[0], cmd[1:]
-        if a.header:
-            p["headers"] = {h: _ask_secret(f"Giá trị header {h} (không hiện khi gõ): ") for h in a.header}
-        if a.env:
-            p["env"] = {k: _ask_secret(f"Giá trị env {k} (không hiện khi gõ): ") for k in a.env}
-        res = ctx.call("mcp.claude_add", p, timeout=180)
-        text = (f"đã thêm MCP '{res['name']}' ({res['transport']}{' · ' + res['host'] if res.get('host') else ''}) vào cấu hình claude "
-                f"của tài khoản {res.get('account') or 'mặc định'}" + ("; đã đăng ký registry (nguồn claude)" if res.get("registered") else ""))
-        for w in res.get("warnings") or []:
-            text += f"\n  ! {w}"
-        if res["transport"] != "stdio":
-            text += f"\n  đăng nhập (nếu server dùng OAuth): cfharness mcp claude login {res['name']}" + (f" --account {a.account}" if a.account else "")
-        ctx.out(res, text)
-        return EXIT_OK
-    if op == "rm":
-        res = ctx.call("mcp.claude_remove", {**base, "name": a.name, "force": bool(a.force)}, timeout=120)
-        reg = {"removed": "đã xoá mềm dòng registry", "kept": "registry giữ nguyên (tài khoản khác còn server này: "
-               + ", ".join(res.get("other_accounts") or []) + ")", "none": "không có dòng registry nguồn claude"}[res["registry"]]
-        ctx.out(res, f"đã gỡ MCP '{res['name']}' khỏi cấu hình claude của tài khoản {res.get('account') or 'mặc định'}; {reg}")
-        return EXIT_OK
-    if op == "logout":
-        res = ctx.call("mcp.claude_logout", {**base, "name": a.name}, timeout=120)
-        ctx.out(res, f"đã đăng xuất MCP '{res['name']}' (tài khoản {res.get('account') or 'mặc định'})")
-        return EXIT_OK
-    lg = ctx.call("mcp.claude_login_start", {**base, "name": a.name}, timeout=120)
-    print(f"Đăng nhập MCP '{lg['name']}' (tài khoản {lg.get('account') or 'mặc định'}): mở link sau, đăng nhập + đồng ý cấp quyền.")
-    print("Trình duyệt sẽ chuyển tới http://localhost:… (có thể báo không mở được trang) — chép NGUYÊN địa chỉ trên thanh trình duyệt rồi dán:")
-    print(f"  {lg['url']}")
-    try:
-        url = _ask_secret("URL chuyển hướng (không hiện khi gõ): ").strip()
-    except (KeyboardInterrupt, EOFError):
-        ctx.call("mcp.claude_login_cancel", {"login_id": lg["login_id"]})
-        print("\nĐã huỷ.")
-        return EXIT_USER
-    if not url:
-        ctx.call("mcp.claude_login_cancel", {"login_id": lg["login_id"]})
-        print("Không có URL — đã huỷ.")
-        return EXIT_USER
-    res = ctx.call("mcp.claude_login_finish", {"login_id": lg["login_id"], "redirect_url": url}, timeout=240)
-    ctx.out(res, f"MCP '{res['name']}': {_STATUS_VI.get(res['status'], res['status'])}")
-    return EXIT_OK
+    lines: list[str] = ["MCP trong cấu hình claude (chỉ đọc — mọi agent dùng mọi server + connector claude.ai của tài khoản đang dùng)"]
+    for acc in res.get("accounts") or []:
+        aid = acc.get("id")
+        lines.append("")
+        lines.append(f"{acc.get('label') or aid or '-'}" + (f"  [{aid}]" if aid else "") + f"  — {acc.get('config_path')}")
+        if acc.get("error"):
+            lines.append(f"  ! không đọc được: {acc['error']}")
+        servers = acc.get("servers") or []
+        if not servers and not acc.get("error"):
+            lines.append("  (chưa có server nào)")
+        for sv in servers:
+            lines.append(f"  {sv.get('name', ''):<28} {sv.get('transport', ''):<6} {sv.get('target') or '-'}")
+        cdir = None if aid is None else str(PurePath(str(acc.get("config_path") or "")).parent)
+        lines.append(f"  thêm: {add_hint(cdir)}")
+    lines.append("")
+    lines.append("Đăng nhập OAuth: claude mcp login <tên> (tài khoản khác mặc định: thêm CLAUDE_CONFIG_DIR như trên); "
+                 "connector claude.ai: bật trên claude.ai.")
+    return "\n".join(lines)
 
 
 def cmd_mcp(ctx: Any) -> int:
     a = ctx.args
     act = a.mcp_action
-    if act == "claude":
-        return cmd_mcp_claude(ctx)
     if act == "serve":
         return cmd_mcp_serve(ctx)
     if act == "snippet":
         return cmd_mcp_snippet(ctx)
     if act == "token":
         return cmd_mcp_token(ctx)
-    if act == "add":
-        if a.source == "hub" or a.rest or any(getattr(a, "legacy_" + f) for f in ("url", "transport", "env", "header")):
-            _eprint("hub không còn tự giữ cấu hình MCP (lệnh/url/header/env/OAuth) — thêm server vào claude theo tài khoản: "
-                    f"cfharness mcp claude add {a.name} --url <URL> | -- <lệnh> <args…> [--account <id>]")
-            return EXIT_USER
-        res = ctx.call("mcp.add", {"config": {"name": a.name, **_policy_payload(a)}, "account_id": a.account})
-        ctx.out(res, f"đã đăng ký MCP cho hub (tài khoản {res.get('account') or 'cấu hình claude mặc định'})\n" + _server_text(res)
-                + "\n  (hub không probe — gắn nhãn tool: cfharness mcp annotate " + a.name + " <tool> --read-only|--destructive)")
-        return EXIT_OK
-    if act == "claude-servers":
-        res = ctx.call("mcp.claude_servers", {"account_id": a.account})
-        lines = [f"MCP do claude quản lý — tài khoản {res.get('account') or 'cấu hình claude mặc định'} ({res.get('config_path')})"]
-        if not res.get("servers"):
-            lines.append("  (không có server nào)" if res.get("exists") else "  (chưa có .claude.json)")
-        for s in res.get("servers") or []:
-            reg = "đã đăng ký cho hub" if s.get("registered") else "chưa đăng ký (cfharness mcp add " + s["name"] + ")"
-            lines.append(f"  {s['name']:<28} {s['transport']:<6} {s.get('host') or '-':<30} {reg}"
-                         + (f"  agent: {', '.join(s['agents'])}" if s.get("agents") else ""))
-        ctx.out(res, "\n".join(lines))
-        return EXIT_OK
-    if act == "edit":
-        patch = _policy_payload(a)
-        if not patch:
-            _eprint("không có thay đổi nào (sửa cách kết nối: cfharness mcp claude rm + cfharness mcp claude add)")
-            return EXIT_USER
-        res = ctx.call("mcp.update", {"name": a.name, "patch": patch})
-        ctx.out(res, "đã sửa\n" + _server_text(res))
-        return EXIT_OK
     if act == "list":
-        rows = ctx.call("mcp.list", {"deleted": a.deleted})
-        if not rows:
-            ctx.out(rows, "(registry trống — `cfharness mcp claude add` rồi gán cho agent)")
-            return EXIT_OK
-        lines = []
-        for s in rows:
-            host = (s.get("config") or {}).get("url") or "-"
-            lines.append(f"{s['name']:<28} {s['transport']:<6} {s['trust']:<10} {host}" + ("  (xoá)" if s.get("deleted_at") else ""))
-        ctx.out(rows, "\n".join(lines))
-        return EXIT_OK
-    if act == "show":
-        s = ctx.call("mcp.show", {"name": a.name})
-        text = _server_text(s)
-        cache = s.get("annotations_cache") or {}
-        if cache:
-            text += f"\n  annotations (lần probe cũ {s.get('last_probe_at') or '-'}):\n" + _tools_text(cache)
-        ctx.out(s, text)
-        return EXIT_OK
-    if act == "rm":
-        s = ctx.call("mcp.remove", {"name": a.name, "force": a.force})
-        ctx.out(s, f"đã xoá mềm MCP server {a.name} → {s.get('trash_path')} (khôi phục: cfharness mcp restore {a.name})")
-        return EXIT_OK
-    if act == "restore":
-        s = ctx.call("mcp.restore", {"name": a.name})
-        ctx.out(s, f"đã khôi phục MCP server {a.name}")
-        return EXIT_OK
-    if act in ("assign", "unassign"):
-        ag = ctx.call("mcp.assign", {"server": a.server, "agent": a.agent, "unassign": act == "unassign"})
-        ctx.out(ag, f"agent {ag['id']}: mcp = {', '.join(ag.get('mcp_servers') or []) or '-'} (revision {ag['config_revision']})")
+        res = ctx.call("mcp.list", {})
+        ctx.out(res, _list_text(res))
         return EXIT_OK
     if act == "annotate":
-        return _cmd_annotate(ctx)
-    if act == "agent-config":
-        res = ctx.call("mcp.agent_config", {"agent": a.agent})
-        ctx.out(res, json.dumps(res, ensure_ascii=False, indent=2))
-        return EXIT_OK
+        return _annotate_chrome(ctx)
     return EXIT_USER
 
 
@@ -597,7 +359,9 @@ def cmd_feedback(ctx: Any) -> int:
 
 # ============================================================================ parser
 def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
-    m = sub.add_parser("mcp", help="MCP: server của hub (serve/snippet/token) và registry MCP cho agent", parents=[common])
+    from ..browser import CHROME_SERVER as CHROME
+
+    m = sub.add_parser("mcp", help="MCP: server của hub (serve/snippet/token) + liệt kê MCP của tài khoản Claude (list)", parents=[common])
     ms = m.add_subparsers(dest="mcp_action", required=True)
 
     sv = ms.add_parser("serve", help="chạy MCP server của hub (stdio; --http = Streamable HTTP chỉ 127.0.0.1)", parents=[common])
@@ -615,69 +379,17 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     tk = ms.add_parser("token", help="xem/đổi token cục bộ cho MCP HTTP", parents=[common])
     tk.add_argument("--rotate", action="store_true")
 
-    ad = ms.add_parser("add", help="đăng ký cho hub một server CÓ SẴN trong cấu hình claude của tài khoản (thêm server mới: mcp claude add)",
+    ms.add_parser("list", help="liệt kê (chỉ đọc) server MCP trong cấu hình claude của từng tài khoản — thêm/gỡ/đăng nhập: "
+                       "claude mcp add|remove|login (tài khoản khác mặc định: CLAUDE_CONFIG_DIR=<thư mục>)", parents=[common])
+    an = ms.add_parser("annotate", help=f"ghi đè annotations tool Claude in Chrome (người đặt), vd: mcp annotate {CHROME} 'read_*' --read-only",
                        parents=[common])
-    ad.add_argument("name")
-    ad.add_argument("--account", help="id tài khoản Claude để kiểm (mặc định: tài khoản đang dùng)")
-    ad.add_argument("--source", choices=["claude", "hub"], help=argparse.SUPPRESS)  # cờ cũ: `claude` = mặc định, `hub` → lỗi hướng dẫn
-    _policy_fields(ad)
-    # cờ kiểu cũ (hub tự giữ cấu hình) → lỗi hướng dẫn `mcp claude add`
-    for flag in ("--url", "--transport", "--env", "--header"):
-        ad.add_argument(flag, action="append", dest="legacy_" + flag.strip("-"), help=argparse.SUPPRESS)
-    ad.add_argument("rest", nargs="*", help=argparse.SUPPRESS)  # `-- <lệnh> <args…>` kiểu cũ
-    cs = ms.add_parser("claude-servers", help="MCP do claude quản lý trong cấu hình claude của tài khoản (chỉ tên/transport/host)",
-                       parents=[common])
-    cs.add_argument("--account", help="id tài khoản Claude (mặc định: đang dùng)")
-    mc = ms.add_parser("claude", help="MCP do claude quản lý theo tài khoản: add|rm|login|logout|status (claude giữ cấu hình + token)",
-                       parents=[common])
-    mcs = mc.add_subparsers(dest="claude_op", required=True)
-    acct = argparse.ArgumentParser(add_help=False)
-    acct.add_argument("--account", help="id tài khoản Claude (mặc định: đang dùng; 'machine' = cấu hình claude mặc định)")
-    c_st = mcs.add_parser("status", help="server + trạng thái (claude mcp list, cache 30 s)", parents=[common, acct])
-    c_st.add_argument("--refresh", action="store_true", help="bỏ cache")
-    c_ad = mcs.add_parser("add", help="thêm: add <tên> --url URL [--transport sse] [--header TÊN…] | add <tên> -- <lệnh> <args…> [--env KHOÁ…]",
-                          parents=[common, acct])
-    c_ad.add_argument("name")
-    c_ad.add_argument("--url", help="http(s)://… (transport http/sse)")
-    c_ad.add_argument("--transport", choices=["http", "sse", "stdio"])
-    c_ad.add_argument("--header", action="append", metavar="TÊN", help="header (giá trị hỏi khi chạy, không qua argv); chỉ tài khoản token")
-    c_ad.add_argument("--env", action="append", metavar="KHOÁ", help="env stdio (giá trị hỏi khi chạy); chỉ tài khoản token")
-    c_ad.add_argument("--trust", choices=["trusted", "untrusted"], help="trust trong registry (mặc định untrusted)")
-    c_ad.add_argument("--no-register", action="store_true", help="chỉ thêm vào claude, không tạo dòng registry")
-    c_ad.add_argument("cmd", nargs="*", help="-- <lệnh> <args…> (stdio)")
-    for op, hp in (("rm", "gỡ khỏi cấu hình claude của tài khoản (registry xoá mềm khi không tài khoản nào còn)"),
-                   ("login", "đăng nhập OAuth (claude mcp login --no-browser): in link, dán URL chuyển hướng"),
-                   ("logout", "đăng xuất (claude mcp logout)")):
-        c = mcs.add_parser(op, help=hp, parents=[common, acct])
-        c.add_argument("name")
-        if op == "rm":
-            c.add_argument("--force", action="store_true", help="xoá cả khi agent còn gán (bản cuối)")
-    ed = ms.add_parser("edit", help="sửa chính sách của server: trust, include/exclude/require-approval, mô tả", parents=[common])
-    ed.add_argument("name")
-    _policy_fields(ed)
-    an = ms.add_parser("annotate", help="ghi đè annotations tool (người đặt), vd: mcp annotate playwright 'browser_navigate' --not-destructive",
-                       parents=[common])
-    an.add_argument("name", help="tên MCP server")
-    an.add_argument("tool", help="tên tool hoặc glob (vd browser_*)")
-    an.add_argument("--not-destructive", action="store_true", help="destructiveHint=false (không hỏi duyệt vì cờ của server)")
+    an.add_argument("name", choices=[CHROME], help="chỉ Claude in Chrome (MCP bên thứ ba không còn phân loại/hỏi duyệt)")
+    an.add_argument("tool", help="tên tool hoặc glob (vd read_*)")
+    an.add_argument("--not-destructive", action="store_true", help="destructiveHint=false (không hỏi duyệt vì cờ của tool)")
     an.add_argument("--destructive", action="store_true", help="destructiveHint=true (luôn hỏi duyệt)")
     an.add_argument("--read-only", action="store_true", help="readOnlyHint=true (coi là chỉ đọc)")
     an.add_argument("--not-read-only", action="store_true", help="readOnlyHint=false")
     an.add_argument("--clear", action="store_true", help="bỏ ghi đè của glob này")
-    ls = ms.add_parser("list", help="liệt kê registry", parents=[common])
-    ls.add_argument("--deleted", action="store_true")
-    for name, hlp in (("show", "xem server + tool/annotations"), ("restore", "khôi phục server đã xoá mềm")):
-        x = ms.add_parser(name, help=hlp, parents=[common])
-        x.add_argument("name")
-    rm = ms.add_parser("rm", help="xoá mềm server", parents=[common])
-    rm.add_argument("name")
-    rm.add_argument("--force", action="store_true", help="xoá dù agent đang dùng")
-    for name in ("assign", "unassign"):
-        x = ms.add_parser(name, help=f"{'gán' if name == 'assign' else 'gỡ'} MCP server cho agent", parents=[common])
-        x.add_argument("server")
-        x.add_argument("agent")
-    ac = ms.add_parser("agent-config", help="xem MCP + allow/deny sẽ dùng khi chạy agent", parents=[common])
-    ac.add_argument("agent")
     m.set_defaults(fn=cmd_mcp)
 
     se = sub.add_parser("secret", help="secret store (file 0600 trong HUB_HOME/secrets)", parents=[common])

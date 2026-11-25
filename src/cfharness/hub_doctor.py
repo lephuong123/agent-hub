@@ -99,7 +99,8 @@ def run(paths: "HubPaths", *, probe: bool = False, claude_binary: str | None = N
         secrets = _secret_names(home)
         _claude(ck, cfg, secrets, c, probe=probe, binary=claude_binary, home=home)
         _secret_refs(ck, paths, c, secrets)
-        _claude_mcp(ck, c, home)
+        if c is not None:
+            _import_mcp_claude(ck, c, home)
         _channels(ck, cfg, secrets)
         _filehub(ck, cfg, c, home)
         _repos(ck, c)
@@ -256,10 +257,6 @@ def _secret_refs(ck: _Checks, paths: "HubPaths", c: sqlite3.Connection | None, s
             refs.setdefault(n, set()).add("config.yaml")
     except OSError:
         pass
-    if c is not None and "mcp_servers" in _tables(c):
-        for r in c.execute("SELECT name, config FROM mcp_servers WHERE deleted_at IS NULL"):
-            for n in REF_RE.findall(str(r["config"] or "")):
-                refs.setdefault(n, set()).add(f"mcp {r['name']}")
     missing = sorted(n for n in refs if n not in secrets and n not in os.environ)
     imp = _state(c, "imported_from") or {}
     lost = sorted(set(imp.get("secrets_missing") or []) - secrets)
@@ -275,64 +272,17 @@ def _secret_refs(ck: _Checks, paths: "HubPaths", c: sqlite3.Connection | None, s
                fix="; ".join(f"cfharness secret set {n}" for n in lost[:6]))
 
 
-def _claude_mcp(ck: _Checks, c: sqlite3.Connection | None, home: Path) -> None:
-    """MCP do claude quản lý (plan-mcp-claude-native PR3) của TÀI KHOẢN ĐANG DÙNG: server đã đăng ký nguồn claude mà cấu hình claude của
-    tài khoản không có (run của agent gán server đó sẽ hỏng), và server cần đăng nhập theo lần kiểm gần nhất (`hub_state mcp.claude_status`,
-    cập nhật bởi `cfharness mcp claude status` / nút «Kiểm tra MCP» — doctor KHÔNG chạy `claude mcp list`)."""
-    if c is None:
-        return
-    from .mcp_client import claude_source as cs
-    from .mcp_client.claude_admin import CACHE_KEY, DEFAULT_KEY
-
-    _import_mcp_claude(ck, c, home)
-    label, cdir = _connector_account(c, home)
-    key = DEFAULT_KEY if cdir is None else cdir.name
-    acct = "" if cdir is None else f" --account {cdir.name}"
-    try:
-        have = cs.all_servers(cdir)
-    except Exception as e:  # best-effort: doctor báo, không dừng  # noqa: BLE001
-        ck.add("mcp_claude", "MCP nguồn claude", False, f"không đọc được cấu hình claude ({type(e).__name__})", "warning")
-        return
-    reg: list[str] = []
-    if "mcp_servers" in _tables(c):
-        # mọi server đều nguồn claude (dòng nguồn hub kiểu cũ được migration v34 đổi khi daemon mở DB)
-        reg = [r["name"] for r in c.execute("SELECT name FROM mcp_servers WHERE deleted_at IS NULL ORDER BY name").fetchall()]
-    missing = [n for n in reg if n not in have]
-    if missing:
-        ck.add("mcp_claude_missing", "MCP nguồn claude thiếu ở tài khoản đang dùng", False,
-               f"tài khoản {label}: thiếu {', '.join(missing[:8])} — run của agent gán các server này sẽ hỏng", "warning",
-               fix="; ".join(f"cfharness mcp claude add {n} (--url <URL> | --command <lệnh>){acct}" for n in missing[:3]))
-    cache = _state(c, CACHE_KEY)
-    entry = cache.get(key) if isinstance(cache, dict) else None
-    servers = (entry or {}).get("servers") if isinstance(entry, dict) else None
-    if not isinstance(servers, dict):
-        if have:
-            ck.add("mcp_claude_auth", "Đăng nhập MCP nguồn claude", True,
-                   f"tài khoản {label}: {len(have)} server, chưa kiểm trạng thái (cfharness mcp claude status)", "info", fix=f"cfharness mcp claude status{acct}")
-        return
-    need = sorted(n for n, st in servers.items() if st == "needs_auth" and n in have)
-    if need:
-        ck.add("mcp_claude_auth", "Đăng nhập MCP nguồn claude", False,
-               f"tài khoản {label}: cần đăng nhập {', '.join(need[:8])} (kiểm lúc {entry.get('checked_at') or '?'})", "warning",
-               fix="; ".join(f"cfharness mcp claude login {n}{acct}" for n in need[:3]))
-    elif have:
-        ck.add("mcp_claude_auth", "Đăng nhập MCP nguồn claude", True, f"tài khoản {label}: không server nào cần đăng nhập "
-               f"(kiểm lúc {entry.get('checked_at') or '?'})")
-
-
 def _import_mcp_claude(ck: _Checks, c: sqlite3.Connection, home: Path) -> None:
-    """Sau `hub import`: MCP nguồn claude phải thêm lại + đăng nhập lại trên tài khoản (`hub_state import_mcp_claude`, hub_transfer).
-    Mục đã có trong cấu hình claude của tài khoản đó VÀ lần kiểm gần nhất `connected` thì thôi báo."""
+    """Sau `hub import` từ hub cũ (≤ v0.2.32, còn registry MCP): server MCP phải thêm lại vào cấu hình claude của tài khoản ở máy này
+    (`hub_state import_mcp_claude`, hub_transfer) — cấu hình + token nằm ở máy cũ. Mục đã có trong cấu hình claude của tài khoản đó
+    thì thôi báo (doctor không chạy `claude mcp list` nên không biết đã đăng nhập chưa)."""
     from .accounts import claude_config
     from .hub_transfer import MCP_CLAUDE_STATE, mcp_claude_steps
     from .mcp_client import claude_source as cs
-    from .mcp_client.claude_admin import CACHE_KEY, DEFAULT_KEY
 
     items = _state(c, MCP_CLAUDE_STATE)
     if not isinstance(items, list) or not items:
         return
-    cache = _state(c, CACHE_KEY)
-    cache = cache if isinstance(cache, dict) else {}
     todo: list[dict[str, Any]] = []
     for it in items:
         if not isinstance(it, dict) or not it.get("server"):
@@ -341,22 +291,20 @@ def _import_mcp_claude(ck: _Checks, c: sqlite3.Connection, home: Path) -> None:
         for a in it.get("accounts") or ["machine"]:
             a = str(a)
             cdir = claude_config.account_dir(home, a) if a.startswith("a_") else None
-            key = DEFAULT_KEY if cdir is None else a
             try:
                 have = it["server"] in cs.read_servers(cdir)
             except Exception:  # best-effort: không đọc được thì vẫn nhắc  # noqa: BLE001
                 have = False
-            st = ((cache.get(key) or {}).get("servers") or {}).get(it["server"]) if isinstance(cache.get(key), dict) else None
-            if not (have and st == "connected"):
+            if not have:
                 left.append(a)
         if left:
             todo.append({**it, "accounts": left})
     if not todo:
-        ck.add("mcp_claude_import", "MCP nguồn claude sau khi nhập", True, "đã thêm + đăng nhập lại đủ trên các tài khoản")
+        ck.add("mcp_claude_import", "MCP của claude sau khi nhập", True, "đã thêm lại đủ trên các tài khoản")
         return
     steps = [s for it in todo for s in mcp_claude_steps(it)]
-    ck.add("mcp_claude_import", "MCP nguồn claude sau khi nhập", False,
-           "đăng nhập lại MCP " + "; ".join(f"{it['server']} trên tài khoản {', '.join(it['accounts'])}" for it in todo[:6])
+    ck.add("mcp_claude_import", "MCP của claude sau khi nhập", False,
+           "thêm lại MCP " + "; ".join(f"{it['server']} trên tài khoản {', '.join(it['accounts'])}" for it in todo[:6])
            + " — cấu hình + token ở máy cũ (url đầy đủ không đi theo gói: dùng URL gốc của server)", "warning", fix="; ".join(steps[:4]))
 
 
@@ -478,10 +426,6 @@ def _followups(ck: _Checks, c: sqlite3.Connection | None) -> None:
         ck.add("followups", "viết lại đường dẫn trong tri thức", False,
                f"CHỜ daemon lên lần đầu: {len(fu.get('files') or [])} file, {fu.get('graph_rows') or 0} hàng graph", "info",
                fix="cfharness daemon start")
-    for m in fu.get("mcp_missing") or []:
-        if not any(x["id"] == f"mcp:{m.get('server')}" for x in ck.items):
-            ck.add(f"mcp:{m.get('server')}", f"MCP {m.get('server')}", False, f"lệnh {m.get('command')}: {m.get('reason')}",
-                   fix=f"cfharness mcp edit {m.get('server')}")
     if fu.get("renamed"):
         ck.add("renamed", "file tri thức bị đổi tên khi nhập", True, f"{len(fu['renamed'])} file — tham chiếu theo tên cũ cần người sửa", "info")
 

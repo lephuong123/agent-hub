@@ -261,27 +261,23 @@ async def test_human_token_never_in_html_or_logs(held, caplog):
 
 
 # =========================================================================== luồng hằng ngày
-async def test_daily_flow_create_agent_with_mcp_assign_task_see_result_and_cost(env, claude_mcp):
+async def test_daily_flow_create_agent_assign_task_see_result_and_cost(env):
     await env.login()
-    claude_mcp("docs-mcp")  # MCP bên thứ ba do claude giữ (v0.2.32): server trong cấu hình claude của tài khoản
-    claude_mcp("other")
-    env.hub.mcp.add({"name": "docs-mcp", "transport": "stdio", "trust": "trusted"})
-    env.hub.mcp.add({"name": "other", "transport": "stdio"})
     r = await env.client.get("/agents/new")
-    assert "docs-mcp" in r.text and 'name="mcp"' in r.text and "researcher" in r.text
-    r = await env.post("/agents/create", {"id": "nc", "template": "researcher", "name": "Nghiên cứu", "mcp": ["docs-mcp"], "max_budget_usd_per_run": "0.3", "confirm": "yes"})
+    assert 'name="mcp"' not in r.text and "researcher" in r.text  # MCP do claude giữ theo tài khoản — không gán theo agent
+    r = await env.post("/agents/create", {"id": "nc", "template": "researcher", "name": "Nghiên cứu", "max_budget_usd_per_run": "0.3", "confirm": "yes"})
     assert r.status_code == 303 and r.headers["location"] == "/agents/nc", r.text[:400]
     a = env.hub.agents.show("nc")
-    assert a["mcp_servers"] == ["docs-mcp"] and a["name"] == "Nghiên cứu"
+    assert a["name"] == "Nghiên cứu"
     assert a["tool_policy"]["tools"] == ["Read", "Grep", "Glob", "WebSearch", "WebFetch"]  # ô trống = theo template
     assert a["limits"]["max_budget_usd_per_run"] == 0.3
     # lỗi nhập → form hiện lại kèm lỗi, không tạo
     r = await env.post("/agents/create", {"id": "Sai Id", "template": "researcher", "confirm": "yes"})
     assert r.status_code == 400 and "id" in r.text
-    # sửa: bỏ docs-mcp, thêm other
-    r = await env.post("/agents/nc/save", {"name": "Nghiên cứu 2", "mcp": ["other"], "model": "haiku", "role": "r", "description": "", "soul": a["soul"], "confirm": "yes"})
+    # sửa
+    r = await env.post("/agents/nc/save", {"name": "Nghiên cứu 2", "model": "haiku", "role": "r", "description": "", "soul": a["soul"], "confirm": "yes"})
     assert r.status_code == 303
-    assert env.hub.agents.show("nc")["mcp_servers"] == ["other"]
+    assert env.hub.agents.show("nc")["name"] == "Nghiên cứu 2"
     # giao việc
     r = await env.post("/do/run_start", {"agent": "nc", "prompt": "Tóm tắt README <b>đậm</b>", "next": "/agents/nc"})
     assert r.status_code == 303
@@ -630,9 +626,9 @@ def test_present_transcript_and_markdown_safety():
 def test_agent_form_parsing_sparse_for_template_full_for_edit():
     from starlette.datastructures import FormData
 
-    f = FormData([("name", "A"), ("mcp", "x"), ("mcp", "y"), ("tools", ""), ("max_budget_usd_per_run", "0,5"), ("model", "")])
+    f = FormData([("name", "A"), ("mcp", "x"), ("tools", ""), ("max_budget_usd_per_run", "0,5"), ("model", "")])
     ch = agent_changes(f, creating=True, from_template=True)
-    assert ch == {"name": "A", "mcp_servers": ["x", "y"], "limits": {"max_budget_usd_per_run": 0.5}}
+    assert ch == {"name": "A", "limits": {"max_budget_usd_per_run": 0.5}}  # ô "mcp" cũ (form cũ) bị bỏ qua
     ch = agent_changes(f, creating=False, from_template=False)
     assert ch["tool_policy"] == {"permission_mode": None, "tools": None} and ch["effort"] is None and ch["workspace_default"] is None
     assert ch["limits"]["budget_usd_per_day"] is None and "model" not in ch
@@ -659,14 +655,13 @@ async def test_wt1_stolen_cookie_and_csrf_cannot_write(held):
     evil = httpx.AsyncClient(transport=httpx.ASGITransport(app=env.app), base_url=BASE, cookies={env.cookie: env.client.cookies.get(env.cookie)})
     for path, data in (("/do/approve", {"csrf": csrf, "id": ap["id"], "confirm": "yes", "confirm2": "yes"}),
                        ("/do/estop", {"csrf": csrf, "on": "1", "confirm": "yes"}),
-                       ("/do/mcp_add", {"csrf": csrf, "name": "x", "command": "touch /tmp/pwn", "confirm": "yes"}),
                        ("/agents/ag0/save", {"csrf": csrf, "permission_mode": "acceptEdits", "confirm": "yes"}),
                        ("/do/approve", {"csrf": csrf, "id": ap["id"], "confirm": "yes", "k": "doan-bừa"})):
         r = await evil.post(path, data=data, headers={"Origin": BASE})
         assert r.status_code == 403, (path, r.status_code)
     await evil.aclose()
     assert env.hub.approvals.get(ap["id"])["status"] == "waiting_human"
-    assert not env.hub.runs.estop.get("on") and not env.hub.mcp.list()
+    assert not env.hub.runs.estop.get("on")
     # người thật (có khoá trong localStorage, gửi kèm form) vẫn duyệt được
     r = await env.post("/do/approve", {"id": ap["id"], "confirm": "yes"})
     assert env.hub.approvals.get(ap["id"])["status"] == "allowed"
@@ -739,21 +734,19 @@ async def test_heavy_approval_needs_second_step(held):
 
 async def test_wt6_sensitive_forms_need_confirmation(env):
     await env.login()
-    env.hub.mcp.add({"name": "docs-mcp", "transport": "stdio"})
     r = await env.post("/do/mcp_add", {"name": "x", "transport": "stdio", "command": "touch /tmp/should-not-run", "next": "/mcp"})
-    assert r.status_code == 404  # web không còn thêm MCP chạy lệnh (v0.2.32 — claude giữ cấu hình theo tài khoản)
-    assert [m["name"] for m in env.hub.mcp.list()] == ["docs-mcp"]
+    assert r.status_code == 404  # web không thêm MCP — claude giữ cấu hình theo tài khoản
     r = await env.post("/do/secret_set", {"name": "TELEGRAM_BOT_TOKEN", "value": "ghi-de"})
     assert r.status_code == 200 and "GHI ĐÈ" in r.text and "ghi-de" not in r.text  # giá trị không vào trang xác nhận
     assert "TELEGRAM_BOT_TOKEN" not in [x["name"] for x in env.hub.secrets.list()]
     # tạo agent → xác nhận (trang server) rồi mới tạo
-    r = await env.post("/agents/create", {"id": "nc", "template": "researcher", "mcp": ["docs-mcp"]})
-    assert r.status_code == 200 and "Tạo agent nc" in r.text and "docs-mcp" in r.text
+    r = await env.post("/agents/create", {"id": "nc", "template": "researcher"})
+    assert r.status_code == 200 and "Tạo agent nc" in r.text
     assert "nc" not in [a["id"] for a in env.hub.agents.list()]
-    r = await env.post("/agents/create", {"id": "nc", "template": "researcher", "mcp": ["docs-mcp"], "confirm": "yes"})
+    r = await env.post("/agents/create", {"id": "nc", "template": "researcher", "confirm": "yes"})
     assert r.status_code == 303
     a = env.hub.agents.show("nc")
-    base = {"name": "nc", "role": a["role"], "description": a["description"], "tools": ", ".join(a["tool_policy"]["tools"]), "mcp": ["docs-mcp"],
+    base = {"name": "nc", "role": a["role"], "description": a["description"], "tools": ", ".join(a["tool_policy"]["tools"]),
             "model": a["model"], "max_budget_usd_per_run": "0.5", "max_runtime_s": "1200", "max_concurrent_runs": "1", "soul": a["soul"]}
     # sửa không đụng quyền → lưu thẳng; đổi permission_mode → xác nhận; bypassPermissions → từ chối
     r = await env.post("/agents/nc/save", {**base, "permission_mode": "default"})

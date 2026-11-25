@@ -2,22 +2,36 @@
 {% import "_macros.html" as m with context %}
 {% block title %}MCP{% endblock %}
 {% block content %}
-<div class="page-head"><h1>MCP server</h1><a class="btn primary" href="/settings/accounts">{{ m.icon('plus') }}<span>Thêm MCP</span></a></div>
-<p class="muted">MCP dùng cho agent. Cấu hình kết nối và đăng nhập do claude giữ theo tài khoản — thêm, đăng nhập, gỡ ở
-  <a href="/settings/accounts">Cài đặt › Tài khoản Claude › MCP của tài khoản</a> (nút «Đăng ký cho hub»). Ở đây: tin cậy, chặn/cho phép từng tool.
-  Gán cho agent bằng ô tích ở trang sửa agent.</p>
-<section class="card">
-  {% if not servers %}{{ m.empty("Chưa có MCP server nào. Thêm ở Cài đặt › Tài khoản Claude › MCP của tài khoản.") }}{% else %}
-  <table class="tbl stack"><thead><tr><th>Tên</th><th>Kiểu</th><th>Host</th><th>Tin cậy</th><th>Agent dùng</th><th></th></tr></thead><tbody>
-  {% for s in servers %}<tr class="{{ 'archived' if s.deleted_at }}">
-    <td data-label="Tên"><a href="/mcp/{{ s.name }}"><b>{{ s.name }}</b></a>{% if s.deleted_at %} <span class="pill muted">đã xoá</span>{% endif %}</td>
-    <td data-label="Kiểu">{{ s.transport }}</td>
-    <td data-label="Host">{{ (s.config or {}).url or '—' }}</td>
-    <td data-label="Tin cậy"><span class="pill {{ 'ok' if s.trust == 'trusted' else 'muted' }}">{{ 'tin cậy' if s.trust == 'trusted' else 'cần duyệt' }}</span></td>
-    <td data-label="Agent dùng">{% for a in used.get(s.name, []) %}<span class="chip">{{ a }}</span>{% else %}—{% endfor %}</td>
-    <td class="actions">{% if s.deleted_at %}{{ m.act("mcp_restore", "Khôi phục", {"name": s.name}, "btn sm", confirm="Khôi phục MCP server " ~ s.name ~ "? Server MCP chạy NGOÀI sandbox của agent.") }}{% else %}
-      {{ m.act("mcp_remove", "Xoá", {"name": s.name, "force": "1" if used.get(s.name) else ""}, "btn sm ghost", confirm="Xoá MCP " ~ s.name ~ "?" ~ (" Đang được dùng bởi: " ~ used.get(s.name)|join(", ") if used.get(s.name) else "")) }}{% endif %}</td>
+<div class="page-head"><h1>MCP server</h1><span class="muted">{{ total }} server · chỉ đọc</span></div>
+<p class="muted">Danh sách đọc thẳng từ cấu hình claude (<code>.claude.json</code>) của từng tài khoản. Mọi agent tự động dùng mọi MCP server
+  của tài khoản Claude đang chạy run — hub không gán, không lọc tool.</p>
+<details class="card pad mcp-help">
+  <summary><b>Cách thêm MCP server</b></summary>
+  <ul>
+    <li>Chạy trong terminal của máy chạy hub: <code>claude mcp add &lt;tên&gt; …</code> (vd <code>claude mcp add --transport http &lt;tên&gt; &lt;url&gt;</code>,
+      hoặc <code>claude mcp add &lt;tên&gt; -- &lt;lệnh&gt; &lt;tham số&gt;</code>).</li>
+    <li>Tài khoản không phải mặc định: thêm <code>CLAUDE_CONFIG_DIR=&lt;thư mục&gt;</code> trước lệnh — thư mục cấu hình của tài khoản ghi ở đầu mỗi nhóm bên dưới.</li>
+    <li>Server cần đăng nhập (OAuth): chạy <code>claude mcp login &lt;tên&gt;</code>, hoặc mở <code>claude</code> rồi gõ <code>/mcp</code>.</li>
+    <li>Connector claude.ai bật ở claude.ai và ở Cài đặt › <a href="/settings/accounts">Tài khoản Claude</a>.</li>
+  </ul>
+</details>
+{% if error %}<div class="flash error" role="alert">Không đọc được danh sách MCP: {{ error }}</div>{% endif %}
+{% for a in accounts %}
+<section class="card" id="mcp-acct-{{ a.id or 'default' }}">
+  <h2 class="pad">{{ m.icon('user') }} {{ a.label }}{% if a.id is none %} <span class="pill muted">mặc định của máy</span>{% endif %}
+    <span class="muted small"><code>{{ a.config_path or '—' }}</code></span></h2>
+  {% if a.error %}<div class="flash error" role="alert">{{ a.error }}</div>{% endif %}
+  {% if a.servers %}
+  <table class="tbl stack"><thead><tr><th>Tên</th><th>Kiểu</th><th>Đích</th></tr></thead><tbody>
+  {% for s in a.servers %}<tr>
+    <td data-label="Tên"><b>{{ s.name }}</b></td>
+    <td data-label="Kiểu"><span class="pill outline">{{ s.transport or '—' }}</span></td>
+    <td data-label="Đích" class="mcp-target"><code>{{ s.target or '—' }}</code></td>
   </tr>{% endfor %}
-  </tbody></table>{% endif %}
+  </tbody></table>
+  {% elif not a.error %}{{ m.empty("Tài khoản này chưa có MCP server nào trong cấu hình claude.", ic="plug") }}{% endif %}
 </section>
+{% else %}
+{% if not error %}<section class="card">{{ m.empty("Chưa có MCP server nào. Thêm bằng claude mcp add trong terminal (xem hướng dẫn ở trên).", ic="plug") }}</section>{% endif %}
+{% endfor %}
 {% endblock %}

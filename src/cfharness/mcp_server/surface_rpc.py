@@ -208,11 +208,6 @@ def trash_list(hub: Any) -> list[dict[str, Any]]:
     except Exception:  # pragma: no cover - cột purge_after chưa có
         for r in hub.store.conn.execute("SELECT id, archived_at FROM teams WHERE archived_at IS NOT NULL"):
             out.append({"kind": "team", "id": r[0], "deleted_at": r[1], "purge_after": None, "path": None})
-    mcp = getattr(hub, "mcp", None)
-    if mcp is not None:
-        for r in mcp.list(include_deleted=True):
-            if r.get("deleted_at"):
-                out.append({"kind": "mcp", "id": r["name"], "deleted_at": r["deleted_at"], "purge_after": r.get("purge_after"), "path": r.get("trash_path")})
     out.sort(key=lambda r: str(r.get("deleted_at") or ""))
     return out
 
@@ -265,10 +260,8 @@ class SurfaceRpc:
         kind = _trash_kind(self.hub, ident, p.get("kind"))
         if kind == "agent":
             res = self.hub.agents.restore(ident)
-        elif kind == "team":
-            res = self.hub.teams.restore(ident)
         else:
-            res = self.hub.mcp.restore(ident)
+            res = self.hub.teams.restore(ident)
         return {"kind": kind, "id": ident, "restored": True, "item": res}
 
     async def trash_purge(self, p: dict[str, Any]) -> dict[str, Any]:
@@ -276,7 +269,7 @@ class SurfaceRpc:
         ident = str(_req(p, "id"))
         kind = _trash_kind(self.hub, ident, p.get("kind"))
         if kind != "agent":
-            raise HubError(f"purge loại '{kind}' chưa hỗ trợ — chỉ purge được agent (team/MCP tự xoá khi hết hạn retention)")
+            raise HubError(f"purge loại '{kind}' chưa hỗ trợ — chỉ purge được agent (team tự xoá khi hết hạn retention)")
         res = await self._call("agent.purge", {"id": ident, "confirm": p.get("confirm"), "channel": p.get("channel") or "cli", "by": p.get("by") or "user"})
         return {"kind": kind, "id": ident, "purged": True, "item": res}
 

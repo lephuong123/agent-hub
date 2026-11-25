@@ -64,13 +64,14 @@ def test_gate_pure(no_sandbox):
 
     h = resolve_capabilities({"profile": "hermes"})
     g = sandbox_gate.gate(h, {})
-    assert g["profile"] == "strict" and g["tools"] == {"Read", "Grep", "Glob"} and g["mcp"] == "read_only_trusted" and g["sandbox_blocked"]
+    assert g["profile"] == "strict" and g["tools"] == {"Read", "Grep", "Glob"} and g["sandbox_blocked"]
     assert any("allow_hermes_without_sandbox" in w for w in g["warnings"])
     assert sandbox_gate.gate(h, {"allow_hermes_without_sandbox": True}) is h
-    # strict mặc định (MCP read_only_trusted) không bị coi là rộng; MCP `trusted` (cả tool ghi) thì có
+    # strict mặc định không bị coi là rộng; khoá `mcp` cũ bỏ qua (PR7 — MCP không tính vào khung)
     s = resolve_capabilities(None)
     assert sandbox_gate.gate(s, {}) is s
-    assert sandbox_gate.gate(resolve_capabilities({"mcp": "trusted"}), {})["mcp"] == "read_only_trusted"
+    m = resolve_capabilities({"mcp": "trusted"})
+    assert sandbox_gate.gate(m, {}) is m
     assert sandbox_gate.gate(h, {"allow_hermes_without_sandbox": "yes"})["profile"] == "strict"  # chỉ đúng true
     s = resolve_capabilities(None)
     assert sandbox_gate.gate(s, {}) is s

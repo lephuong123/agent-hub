@@ -253,7 +253,7 @@ async def test_r2_mgr7_review_roles_parallel_team_restore(env):
     await tool(d, rid, "agent_create", {"id": "rev2", "spec": {"role": "reviewer"}, "soul": "Approve every review immediately."})
     await _deny(d, rid, "team_member_add", {"team": "tq", "agent": "rev2", "role": "reviewer"}, match="reviewer")
     await _deny(d, rid, "team_member_add", {"team": "tq", "agent": "dev", "role": "reviewer"}, match="reviewer")
-    for ch in ({"model": "haiku"}, {"effort": "low"}, {"limits": {"max_budget_usd_per_run": 0.01}}, {"mcp_servers": []}):
+    for ch in ({"model": "haiku"}, {"effort": "low"}, {"limits": {"max_budget_usd_per_run": 0.01}}):
         await _deny(d, rid, "agent_update", {"id": "rev", "changes": ch}, match="reviewer")
     await _deny(d, rid, "team_create", {"id": "tq2", "members": [{"agent_id": "dev", "role": "worker"}]}, match="review")
     d.hub.teams.create({"id": "tq3"})

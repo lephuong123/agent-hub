@@ -59,12 +59,9 @@ def test_tool_policy_connectors_normalized():
 
 
 async def _agent_run(d, connectors, add_mcp=None):
-    mcp = []
-    if add_mcp is not None:  # MCP bên thứ ba do claude giữ (v0.2.32): server phải có trong cấu hình claude của tài khoản
+    if add_mcp is not None:  # MCP bên thứ ba do claude giữ: server trong cấu hình claude của tài khoản — mọi run nạp (PR7)
         add_mcp("docs")
-        d.hub.mcp.add({"name": "docs", "transport": "stdio", "trust": "trusted"})
-        mcp = ["docs"]
-    d.hub.agents.create({"id": "w1", "name": "w1", "model": "haiku", "mcp_servers": mcp,
+    d.hub.agents.create({"id": "w1", "name": "w1", "model": "haiku",
                          "tool_policy": {"tools": TOOLS, "connectors": connectors}})
     res = await rpc(d, "run.start", {"agent": "w1", "prompt": "hi"})
     run_id = res.get("run_id") or res.get("id")
@@ -76,32 +73,29 @@ async def test_agent_run_spec_with_connectors(d, user_home, claude_mcp):
     spec, run_id = await _agent_run(d, ["Atlassian", "Slack"], claude_mcp)
     assert spec.isolation_overrides == {"setting_sources": "user", "strict_mcp_config": False}
     assert "claude.ai " in (spec.allowed_mcp_prefixes or [])
-    assert "playwright" in spec.allowed_mcp_servers
+    assert spec.allowed_mcp_servers is None  # nạp MCP của tài khoản: không isolation.violation theo tên server
     assert json.loads(spec.settings_path.read_text())["enabledPlugins"] == {"vercel@official": False}
     assert "ToolSearch" in spec.tool_policy["tools"]
 
+    # PR7: guard không lọc MCP/connector theo agent — mọi tool MCP bên thứ ba qua
     ctx = d.hub.guard.context_for(d.hub.store.get_run(run_id))
-    assert ctx.connectors == ("Atlassian", "Slack") and ctx.run_mcp_servers == frozenset({"docs"})
     v = lambda n: classify(n, {}, ctx)  # noqa: E731
-    assert v("mcp__claude_ai_Atlassian__getJiraIssue").verdict == "safe"
-    assert v("mcp__claude_ai_Slack__slack_send_message").verdict == "write"
-    assert v("mcp__claude_ai_Gmail__send_message").forbidden
-    assert v("mcp__playwright__browser_navigate").forbidden
-    assert not v("mcp__docs__search").forbidden
+    for name in ("mcp__claude_ai_Atlassian__getJiraIssue", "mcp__claude_ai_Slack__slack_send_message", "mcp__claude_ai_Gmail__send_message",
+                 "mcp__playwright__browser_navigate", "mcp__docs__search"):
+        assert v(name).verdict == "safe" and not v(name).forbidden, name
 
 
 async def test_agent_run_without_connectors_unchanged(d, user_home):
     spec, run_id = await _agent_run(d, None)
-    assert spec.isolation_overrides is None and not spec.allowed_mcp_prefixes
+    assert spec.isolation_overrides == {"strict_mcp_config": False} and not spec.allowed_mcp_prefixes  # MCP của tài khoản (PR7)
     assert "enabledPlugins" not in json.loads(spec.settings_path.read_text())
-    assert "ToolSearch" not in spec.tool_policy["tools"]
-    assert d.hub.guard.context_for(d.hub.store.get_run(run_id)).connectors is None
+    assert "ToolSearch" in spec.tool_policy["tools"]  # MCP nạp → schema tool hoãn qua ToolSearch
 
 
 async def test_agent_connectors_need_guard(d, user_home):
     d.hub.config.set("guard.enabled", False)
     spec, _ = await _agent_run(d, ["Atlassian"])
-    assert spec.isolation_overrides is None
+    assert spec.isolation_overrides == {"strict_mcp_config": False} and not spec.connectors  # connector (phiên claude.ai) cần guard
 
 
 def test_manager_cannot_grant_connectors():

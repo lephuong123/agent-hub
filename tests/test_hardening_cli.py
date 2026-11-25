@@ -73,7 +73,7 @@ def test_h07_revert_creates_new_revision_equal_to_target(hub):
     res = hub.agents.revert("r", 3)
     assert res["config_revision"] == 5 and res["reverted_to_revision"] == 3 and res["soul_restored"]
     revs = {r["revision"]: r["config_snapshot"] for r in hub.store.list_revisions("r")}
-    keys = ("model", "effort", "fallback_model", "tool_policy", "mcp_servers", "limits", "workspace_default", "role", "name", "description")
+    keys = ("model", "effort", "fallback_model", "tool_policy", "limits", "workspace_default", "role", "name", "description")
     assert {k: revs[5][k] for k in keys} == {k: revs[3][k] for k in keys}
     assert revs[5]["soul"] == revs[3]["soul"] == "# soul v3\n" == hub.agents.soul("r")
     assert revs[5]["reverted_to"] == 3 and len(revs) == 5  # không xoá lịch sử
@@ -479,73 +479,24 @@ def test_h11_hook_cli_and_rpc_record_events(daemon, capsys):
     assert to and to[0]["payload"]["fail_open"] is True
 
 
-# ============================================================================ H-13 MCP chưa probe / untrusted
-def test_h13_unprobed_literal_include_exclude_rules(hub):
-    from cfharness.mcp_client import agent_mcp_tool_rules
-
-    hub.mcp.add({"name": "viec", "trust": "trusted", "tools": {"include": ["tim_viec", "doc_viec", "xem_*"], "exclude": ["xoa_viec"], "require_approval": ["doc_viec"]}})
-    hub.agents.create({"id": "m", "name": "M", "mcp_servers": ["viec"]})
-    rules = agent_mcp_tool_rules(hub.agents.get_row("m"))
-    assert rules["allowed"] == ["mcp__viec__tim_viec"]  # doc_viec cần duyệt → không cho tĩnh
-    assert rules["disallowed"] == ["mcp__viec__xoa_viec"]  # glob (xem_*) do hook guard áp theo `selected`
-    hub.mcp.update("viec", {"trust": "untrusted"})
-    rules = agent_mcp_tool_rules(hub.agents.get_row("m"))
-    assert rules["allowed"] == [] and rules["disallowed"] == ["mcp__viec__xoa_viec"]
-
-
-async def test_h13_unprobed_rules_reach_argv(hub, claude_mcp):
-    rt = FakeRuntime()
-    hub.runs._runtime = rt
-    claude_mcp("viec")  # MCP bên thứ ba do claude giữ (v0.2.32): server trong cấu hình claude của tài khoản
-    hub.mcp.add({"name": "viec", "trust": "trusted", "tools": {"include": ["tim_viec"], "exclude": ["xoa_viec"]}})
-    hub.agents.create({"id": "m", "name": "M", "mcp_servers": ["viec"]})
-    r = hub.runs.submit("m", "x")
-    await hub.runs.wait(r["id"], timeout=5)
-    argv, _ = build_argv(rt.started[0], hub.config.data["runtime"]["claude"], "2.1.302")
-    allowed = argv[argv.index("--allowedTools") + 1 :]
-    assert "mcp__viec__tim_viec" in allowed
-    assert "mcp__viec__xoa_viec" in argv[argv.index("--disallowedTools") + 1 :]
-
-
-def test_h13_classify_untrusted_requires_approval(hub_home):
-    from cfharness.guard.classifier import GuardContext, classify
-    from cfharness.guard.policy import PolicyStore
-
-    ps = PolicyStore(hub_home.home)
-    ps.ensure()
-    ann = {("srv", "tao_viec"): {"trust": "untrusted", "readOnlyHint": None}, ("srv", "tim_viec"): {"trust": "untrusted", "readOnlyHint": True},
-           ("ok", "tao_viec"): {"trust": "trusted", "readOnlyHint": None}}
-    ctx = GuardContext(cwd=hub_home.home, policy=ps.load(), mcp_annotations=lambda s, t: ann.get((s, t)), git_probe=False)
-    v = classify("mcp__srv__tao_viec", {"x": 1}, ctx)
-    assert v.verdict == "uncertain" and v.rule == "mcp_untrusted_write" and v.hold
-    assert classify("mcp__srv__tim_viec", {}, ctx).verdict == "safe"
-    assert classify("mcp__ok__tao_viec", {}, ctx).verdict == "write"
-    v = classify("mcp__srv__chua_probe", {}, ctx)  # server chưa probe/tool lạ → cần duyệt
-    assert v.verdict == "uncertain" and v.hold
-
-
-async def test_h13_untrusted_mcp_tool_opens_approval(hub, claude_mcp):
+# ============================================================================ H-13 (PR7): MCP bên thứ ba không còn trust/include/exclude
+async def test_h13_third_party_mcp_tool_allowed_without_approval(hub, claude_mcp):
+    """MCP do claude quản lý, mọi agent dùng chung (plan-mcp-claude-native PR7): tool MCP bên thứ ba không mở approval, không bị chặn."""
     rt = FakeRuntime(hold=True)
     hub.runs._runtime = rt
     hub.config.set("guard.enabled", True)
-    hub.config.set("approval.timeout_s", 1)
     claude_mcp("viec")
-    hub.mcp.add({"name": "viec", "trust": "untrusted"})
-    hub.agents.create({"id": "u", "name": "U", "mcp_servers": ["viec"]})
+    hub.agents.create({"id": "u", "name": "U"})
     r = hub.runs.submit("u", "x")
     for _ in range(200):
         if rt.started:
             break
         await asyncio.sleep(0.01)
-    task = asyncio.ensure_future(hub.guard.check({"run_id": r["id"], "tool_name": "mcp__viec__tao_viec", "tool_input": {"ten": "a"}, "channel": "hook"}))
-    for _ in range(200):
-        reqs = hub.approvals.list("pending", run_id=r["id"])
-        if reqs:
-            break
-        await asyncio.sleep(0.02)
-    assert reqs and reqs[0]["tool_name"] == "mcp__viec__tao_viec"
-    res = await asyncio.wait_for(task, 30)
-    assert res["decision"] != "allow"  # không bao giờ tự cho phép khi chưa có người duyệt
+    res = await asyncio.wait_for(hub.guard.check({"run_id": r["id"], "tool_name": "mcp__viec__tao_viec", "tool_input": {"ten": "a"},
+                                                  "channel": "hook"}), 30)
+    assert res["decision"] == "allow" and not hub.approvals.list("pending", run_id=r["id"])
+    argv, _ = build_argv(rt.started[0], hub.config.data["runtime"]["claude"], "2.1.302")
+    assert "--strict-mcp-config" not in argv and not any(str(x).startswith("mcp__viec") for x in argv)
     rt.release()
     await hub.runs.wait(r["id"], timeout=10)
 
@@ -670,27 +621,6 @@ async def test_h20_oneshot_via_runtime(tmp_path):
     f.oneshot_results = [{"score": 1}]
     r2 = await f.oneshot(OneShotRequest(prompt="p", schema={}, system="s", model="haiku"))
     assert r2.ok and r2.output == {"score": 1} and len(f.oneshot_calls) == 1
-
-
-# ============================================================================ Thấp: FR-AG-08 doctor thử kết nối MCP
-def test_low_doctor_checks_agent_mcp_in_claude_config(daemon, capsys, claude_mcp):
-    """`cfharness doctor <agent>`: MCP gán phải có trong cấu hình claude của tài khoản đang dùng (hub không tự kết nối MCP từ v0.2.32)."""
-    import json
-    import os
-    from pathlib import Path
-
-    from cfharness.rpc import RpcClient
-
-    rpc = RpcClient(daemon.socket, timeout=30)
-    claude_mcp("vb")
-    rpc.call("mcp.add", {"config": {"name": "vb", "source": "claude"}})
-    rpc.call("agent.create", {"config": {"id": "coder", "name": "C", "mcp_servers": ["vb"]}})
-    code, out, _ = cli(capsys, "doctor", "coder")
-    assert "✓ MCP vb" in out
-    p = Path(os.environ["CFHARNESS_TEST_CLAUDE_HOME"]) / ".claude.json"
-    p.write_text(json.dumps({"mcpServers": {}}), encoding="utf-8")  # tài khoản bỏ server khỏi cấu hình claude
-    code, out, _ = cli(capsys, "doctor", "coder")
-    assert code != 0 and "✗ MCP vb: không có trong cấu hình claude" in out
 
 
 # ============================================================================ Thấp: NFR-26 màn trợ giúp `?`

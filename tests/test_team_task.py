@@ -179,7 +179,7 @@ async def test_lead_decomposes_routes_by_role_and_aggregates(make_hub):
     lead_run = next(x for x in hub.store.list_runs() if x["kind"] == "lead")
     assert lead_run["result_json"] == PLAN and lead_run["schema_valid"] == 1
     # hub-self MCP có trong mcp.json của run task (FR-MS-08)
-    assert any(s.allowed_mcp_servers and "hub-self" in s.allowed_mcp_servers for s in rt.specs.values())
+    assert any("mcp__hub-self" in (s.tool_policy.get("allowed_tools") or []) for s in rt.specs.values())
     assert "task.decomposed" in [e.type for e in hub.store.query_events()]
 
 

@@ -117,14 +117,13 @@ def _spec_for(hub, aid):
 
 
 def _add_playwright(hub, claude_mcp):
-    # MCP bên thứ ba do claude giữ (v0.2.32): server trong cấu hình claude của tài khoản + dòng chính sách trong registry
+    # MCP bên thứ ba do claude giữ: server trong cấu hình claude của tài khoản — mọi run làm việc nạp (PR7)
     claude_mcp("playwright", {"command": "npx", "args": ["@playwright/mcp@latest"]})
-    hub.mcp.add({"name": "playwright", "transport": "stdio", "trust": "trusted"})
 
 
 def _pw_dropped(spec) -> bool:
     """Playwright bị gỡ khỏi ngữ cảnh run (claude vẫn nạp server, `--disallowedTools` + guard chặn gọi)."""
-    return "mcp__playwright__*" in (spec.tool_policy.get("disallowed_tools") or []) and "playwright" not in spec.allowed_mcp_servers
+    return "mcp__playwright__*" in (spec.tool_policy.get("disallowed_tools") or [])
 
 
 async def test_prepare_spec_chrome_drops_playwright_auto_keeps(hub, claude_mcp):
@@ -135,16 +134,16 @@ async def test_prepare_spec_chrome_drops_playwright_auto_keeps(hub, claude_mcp):
     _agent(hub, "d", None, ["playwright"])  # không đặt → mặc định hub (auto)
     sc, su, sn = _spec_for(hub, "c"), _spec_for(hub, "u"), _spec_for(hub, "n")
     assert _pw_dropped(sc)
-    assert CHROME_SERVER in sc.allowed_mcp_servers  # server dynamic của --chrome không phải isolation.violation
-    assert not _pw_dropped(su) and CHROME_SERVER in su.allowed_mcp_servers
-    assert not _pw_dropped(sn) and CHROME_SERVER not in sn.allowed_mcp_servers
+    assert sc.allowed_mcp_servers is None  # run nạp MCP của tài khoản: không kiểm tên server (gồm server dynamic của --chrome)
+    assert not _pw_dropped(su) and su.allowed_mcp_servers is None
+    assert not _pw_dropped(sn) and sn.allowed_mcp_servers is None
     v = "2.1.310"
     assert "--chrome" in build_argv(sc, hub.config.get("runtime.claude"), v)[0]
     assert "--chrome" in build_argv(su, hub.config.get("runtime.claude"), v)[0]
     argv_n = build_argv(sn, hub.config.get("runtime.claude"), v)[0]
     assert "--chrome" not in argv_n and "--no-chrome" in argv_n
     sd = _spec_for(hub, "d")
-    assert not _pw_dropped(sd) and CHROME_SERVER in sd.allowed_mcp_servers and "--chrome" in build_argv(sd, hub.config.get("runtime.claude"), v)[0]
+    assert not _pw_dropped(sd) and "--chrome" in build_argv(sd, hub.config.get("runtime.claude"), v)[0]
 
 
 async def test_default_mode_auto_for_unset_agents_explicit_wins(hub):

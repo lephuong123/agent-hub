@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from ..hub import Hub
 
-CONFIG_KEYS = ("model", "effort", "fallback_model", "soul", "tool_policy", "mcp_servers", "limits")
+CONFIG_KEYS = ("model", "effort", "fallback_model", "soul", "tool_policy", "limits")
 POLICY_WORDS = re.compile(r"(^|[/\\.])(policy|evals?|golden|guard|audit|ledger|snapshots|secrets)([/\\.]|$)|learning\.(enabled|auto_apply|config_bounds|rate)", re.I)
 NEGATIVE_CLAIM = re.compile(
     r"(\b(tool|tools|mcp|server|command|feature|api|plugin|integration)\b|`[^`]{1,60}`|mcp__\w+)[^.\n]{0,80}?\b(is|are)\s+(broken|unusable|not\s+working|unavailable|unreliable)\b"
@@ -79,14 +79,7 @@ def _destructive_tool_pattern(hub: "Hub", pattern: str) -> str | None:
         except Exception:  # pragma: no cover - classifier lỗi → coi như phá huỷ (fail-closed)
             return f"'{p}' không phân loại được (fail-closed)"
     if p.startswith("mcp__"):
-        server, _, tool = p[5:].partition("__")
-        try:
-            ann = hub.mcp.tool_annotations(server, tool) if hasattr(hub, "mcp") else None
-        except Exception:
-            log.debug("guard học: không đọc được annotations MCP", exc_info=True)
-            ann = None
-        if ann and ann.get("destructiveHint"):
-            return f"tool MCP '{p}' có destructiveHint"
+        _server, _, tool = p[5:].partition("__")
         if re.search(r"(delete|remove|drop|purge|destroy|xoa)", tool, re.I):
             return f"tool MCP '{p}' có tên dạng xoá"
     return None
@@ -284,14 +277,4 @@ class LearningGuard:
                 extra = [t for t in tp["tools"] if t not in cur_tp["tools"] and t in ("Bash", "Write", "Edit", "MultiEdit", "NotebookEdit")]
                 if extra:
                     return Block("self_escalation", "tools", f"mở thêm tool ghi/shell bị giới hạn: {extra}")
-        if "mcp_servers" in ch:
-            try:
-                names = {m["name"] for m in self.hub.mcp.list()} if hasattr(self.hub, "mcp") else set()
-            except Exception:
-                log.debug("guard học: không đọc được registry MCP", exc_info=True)
-                names = set()
-            new = [s for s in ch["mcp_servers"] or [] if s not in (cur.get("mcp_servers") or [])]
-            missing = [s for s in new if s not in names]
-            if missing:
-                return Block("self_escalation", "mcp_servers", f"MCP chưa có trong registry (thêm server là việc của người): {missing}")
         return None

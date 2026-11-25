@@ -248,6 +248,9 @@ class GuardContext:
     git_probe: bool = True  # gọi `git` để biết thay đổi chưa commit/nhánh đã push (tắt trong test thuần)
     max_walk: int = 3000
     hub_mcp_servers: frozenset[str] = frozenset()  # H-18: tên đăng ký của MCP server trỏ về chính hub (theo lệnh/URL)
+    # chế độ Chrome / allowlist domain của agent: Playwright bị gỡ khỏi run (runs.py) → gọi = forbidden (`playwright_not_in_run`)
+    playwright_off: bool = False
+    playwright_servers: frozenset[str] = frozenset()  # tên server Playwright trong cấu hình claude (gồm server tổ chức cấp)
     checkpoint_root: str | None = None  # gốc repo git có checkpoint của run (FR-RT-12) → file đã track ghi đè/xoá được revert
     manager_run: bool = False  # MGR-8: run của agent điều phối → mọi verdict policy/hub/guard = forbidden (không phải approval)
     repo_deny: tuple[str, ...] = ()  # MGR-2: mẫu disallowedTools theo repo (người đặt) áp cho run có cwd trong repo
@@ -255,10 +258,6 @@ class GuardContext:
     repo_deny_lookup: Callable[[str], list[str]] | None = None  # R2-2: mẫu chặn của repo ĐÍCH (git -C, npm --prefix, cd …)
     agent_id: str | None = None  # agent của run (luật "luôn cho phép" theo agent)
     always_allow: tuple[dict[str, Any], ...] = ()  # luật người tạo khi duyệt `--always` (policy/always_allow.yaml), chỉ hạ uncertain
-    # run điều phối viên có connector claude.ai (manager.capabilities.connectors): slug connector được phép; None = không phải
-    # run connector. Run connector nạp cả MCP của ~/.claude → server ngoài `run_mcp_servers` + connector cho phép = forbidden
-    connectors: tuple[str, ...] | None = None
-    run_mcp_servers: frozenset[str] = frozenset()
     # hồ sơ phê duyệt (guard/profiles.py — knob theo profile, người đặt rõ thắng)
     safe_reset_probe: bool = False  # `git reset --hard <ref>` trong worktree/scratch: probe chứng minh không mất gì → write
     own_worktree_writes: bool = False  # Edit/Write vào git worktree cùng repo do chuỗi run/task tạo → write
@@ -1203,23 +1202,10 @@ def _name_tokens(name: str) -> set[str]:
     return toks
 
 
-# tool connector có tên dạng đọc → safe (không audit ghi); còn lại = write (audit), mẫu xoá vẫn qua approval
-_CONNECTOR_READ_RE = re.compile(r"^(get|list|search|read|query|fetch|lookup|find|whoami|guide|download|export|suggest|atlassian_?user)", re.I)
-
-
-def classify_connector(server: str, tool: str, ctx: GuardContext) -> Verdict:
-    prot = ctx.policy.match_mcp(server, tool)
-    if prot is not None:
-        return Verdict("destructive", "protected_mcp_tool", "mcp", f"tool MCP được bảo vệ ({prot.selector})", [f"{server}/{tool}"], prot.id)
-    hit = _name_tokens(tool) & MCP_DELETE_TOKENS
-    if hit:
-        return Verdict("destructive", "mcp_delete_name", "mcp", f"tên tool khớp mẫu xoá ({', '.join(sorted(hit))})", [f"{server}/{tool}"])
-    if _CONNECTOR_READ_RE.match(tool):
-        return Verdict("safe", "claude_connector_read")
-    return Verdict("write", "claude_connector_write", "mcp", "tool connector claude.ai (người cho phép ở manager.capabilities.connectors / tool_policy.connectors của agent)", [f"{server}/{tool}"])
-
-
 def classify_mcp(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -> Verdict:
+    """Tool MCP. Server của CHÍNH hub (hub-guard, hub-self, server trỏ về hub — H-18) và Claude in Chrome có luật riêng; MCP bên thứ
+    ba (server trong cấu hình claude của tài khoản, connector claude.ai) = safe: claude tự quản lý (plan-mcp-claude-native PR7 — không
+    gán/trust/annotations/duyệt; người muốn chặn một tool thì gỡ server khỏi claude hoặc dùng `tool_policy.disallowed_tools`)."""
     rest = tool_name[len("mcp__") :]
     server, _, tool = rest.partition("__")
     if server == "hub-guard":
@@ -1228,73 +1214,31 @@ def classify_mcp(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -> Verdi
         from .chrome import classify_chrome
 
         return classify_chrome(tool_name, ti, ctx)
-    if ctx.connectors is not None and server not in ctx.run_mcp_servers and server not in ("hub-self", "hub-guard"):
-        # run connector: CLI nạp thêm MCP/plugin của ~/.claude — chỉ connector người cho phép mới qua (slug có thể chứa "__")
-        for slug in ctx.connectors:
-            pre = f"claude_ai_{slug}__"
-            if rest.startswith(pre):
-                return classify_connector(f"claude_ai_{slug}", rest[len(pre):], ctx)
-        if "*" in ctx.connectors and server.startswith("claude_ai_") and tool:
-            # "all" / connectors.auto: mọi connector claude.ai tài khoản đã Connect (không gồm MCP/plugin của ~/.claude)
-            return classify_connector(server, tool, ctx)
-        return Verdict("destructive", "mcp_not_in_run", "mcp", f"{tool_name}: server không thuộc agent và không nằm trong connector được phép",
-                       [tool_name[:200]], forbidden=True)
-    if MCP_FORBIDDEN.match(tool) or (server.startswith("hub") and tool in ("approve", "deny")):
-        return Verdict("destructive", "self_approval", "hub", f"agent không được tự duyệt/sửa chính sách qua {tool_name}", forbidden=True)
-    is_hub = server in ctx.hub_mcp_servers or server in _names.HUB_MCP_SERVER_NAMES
-    if (is_hub or tool.startswith("hub_")) and HUB_MCP_HUMAN_ONLY.match(tool):
-        # H-18: MCP server của hub (kể cả đăng ký dưới tên khác) — tool ứng với method chỉ-người
-        return Verdict("destructive", "hub_mcp_human_only", "hub", f"{tool_name}: thao tác chỉ dành cho người (agent không được gọi)", forbidden=True)
-    if server == "hub-self":  # M3 FR-MS-08: tool task_* của hub, ràng với run — không phá huỷ
+    if server == "hub-self":  # M3 FR-MS-08: tool task_* của hub, ràng với run — không phá huỷ (server của hub sinh cho run)
+        if MCP_FORBIDDEN.match(tool):
+            return Verdict("destructive", "self_approval", "hub", f"agent không được tự duyệt/sửa chính sách qua {tool_name}", forbidden=True)
         from ..mcp_server.hub_self import MANAGER_READ_TOOLS  # M7: tool đọc của điều phối viên (quyền ghi kiểm ở daemon)
 
         safe = tool in ("task_show", "team_roster", "skills_list", "skill_view", "memory_view", "memory_search", "memory_recall") or tool in MANAGER_READ_TOOLS
         return Verdict("safe" if safe else "write", "hub_self_tool")  # M4-A: tool đọc tri thức
-    ann = None
-    if ctx.mcp_annotations is not None:
-        try:
-            ann = ctx.mcp_annotations(server, tool)
-        except Exception:  # fail-closed: không đọc được annotations → coi như không có (luật mcp mặc định)
-            ann = None
-    ann = ann or {}
-    prot = ctx.policy.match_mcp(server, tool)
-    if prot is not None:
-        return Verdict("destructive", "protected_mcp_tool", "mcp", f"tool MCP được bảo vệ ({prot.selector})", [f"{server}/{tool}"], prot.id)
-    claude_src = ann.get("source") == "claude" and not ann.get("probed")
-    if claude_src and ann.get("selected") is False:
-        # MCP nguồn claude: hub không probe → mẫu glob include/exclude không thành --disallowedTools được; chặn ở đây
-        return Verdict("destructive", "mcp_not_in_run", "mcp", f"{tool_name}: tool bị loại bởi tools.include/exclude của server",
+    from ..mcp_client.claude_source import tool_server_name
+
+    hub_names = {tool_server_name(n) for n in ctx.hub_mcp_servers} | {tool_server_name(n) for n in _names.HUB_MCP_SERVER_NAMES}
+    if server in hub_names:
+        # H-18: MCP server trỏ về CHÍNH hub trong cấu hình claude (theo lệnh/URL loopback cổng của hub, hoặc tên dành riêng) — MỌI
+        # tool (hub_run, hub_cancel, hub_approve…) = điều khiển hub bằng quyền của người → cấm (agent dùng hub-self của run)
+        return Verdict("destructive", "hub_mcp_forbidden", "hub", f"{tool_name}: MCP server của chính hub — agent không được điều khiển hub qua MCP",
                        [tool_name[:200]], forbidden=True)
-    if ann.get("destructiveHint") is True:
-        return Verdict("destructive", "mcp_destructive_hint", "mcp", "tool có destructiveHint", [f"{server}/{tool}"])
-    toks = _name_tokens(tool)
-    hit = toks & MCP_DELETE_TOKENS
-    if hit:
-        return Verdict("destructive", "mcp_delete_name", "mcp", f"tên tool khớp mẫu xoá ({', '.join(sorted(hit))})", [f"{server}/{tool}"])
-    if ann.get("require_approval") is True:
-        return Verdict("uncertain", "mcp_require_approval", "mcp", "người đặt tool này cần duyệt (tools.require_approval, FR-MC-03)", [f"{server}/{tool}"])
-    if ann.get("readOnlyHint") is True:
-        return Verdict("safe", "mcp_read_only")
-    desc = str(ann.get("description") or "")
-    human = ann.get("human_override") if isinstance(ann.get("human_override"), dict) else {}
-    if desc and MCP_DESC_RE.search(desc) and human.get("destructiveHint") is not False:  # người đã xem tool và ghi đè → bỏ khớp mô tả
-        return Verdict("destructive", "mcp_delete_description", "mcp", "mô tả tool khớp mẫu xoá", [f"{server}/{tool}"])
-    if claude_src:
-        # MCP nguồn claude (plan-mcp-claude-native PR2): không có annotations của server (token do claude giữ, hub không probe) → không
-        # dùng `mcp_unknown_tool` (luôn hỏi) mà suy theo TÊN như connector claude.ai: tên xoá → destructive (đã xét ở trên), tên đọc →
-        # safe, còn lại → ghi (server untrusted: hỏi duyệt như mọi tool ghi của server untrusted). Ghi đè của người
-        # (`cfharness mcp annotate`, readOnlyHint/destructiveHint) thắng: readOnlyHint=false bỏ suy "đọc" theo tên
-        if human.get("readOnlyHint") is not False and _CONNECTOR_READ_RE.match(tool):
-            return Verdict("safe", "mcp_claude_read_name")
-        if str(ann.get("trust") or "") != "trusted":
-            return Verdict("uncertain", "mcp_untrusted_write", "mcp", "server nguồn claude untrusted: tool không đọc theo tên/nhãn → phê duyệt động",
-                           [f"{server}/{tool}"])
-        return Verdict("write", "mcp_claude_write", "mcp", "tool MCP nguồn claude (tên không phải dạng đọc) → ghi (audit)", [f"{server}/{tool}"])
-    if ctx.mcp_annotations is not None and not ann:
-        return Verdict("uncertain", "mcp_unknown_tool", "mcp", "tool MCP chưa thấy khi probe → cần duyệt tới khi probe lại (FR-MC-03)", [f"{server}/{tool}"])
-    if str(ann.get("trust") or "") == "untrusted":
-        return Verdict("uncertain", "mcp_untrusted_write", "mcp", "server untrusted: tool không readOnlyHint → phê duyệt động (FR-MC-03)", [f"{server}/{tool}"])
-    return Verdict("write", "mcp_write", "mcp", "tool MCP không có readOnlyHint → ghi (audit)", [f"{server}/{tool}"])
+    if MCP_FORBIDDEN.match(tool) or (server.startswith("hub") and tool in ("approve", "deny")):  # server hub đăng ký dưới tên khác: chặn theo tên tool trên MỌI server
+        return Verdict("destructive", "self_approval", "hub", f"agent không được tự duyệt/sửa chính sách qua {tool_name}", forbidden=True)
+    if tool.startswith("hub_") and HUB_MCP_HUMAN_ONLY.match(tool):
+        # H-18: tool `hub_*` chỉ-người của server hub đăng ký dưới tên khác không nhận ra được
+        return Verdict("destructive", "hub_mcp_human_only", "hub", f"{tool_name}: thao tác chỉ dành cho người (agent không được gọi)", forbidden=True)
+    if ctx.playwright_off and ("playwright" in server.lower() or server in {tool_server_name(n) for n in ctx.playwright_servers}):
+        # chế độ Chrome / allowlist domain: Playwright đã bị gỡ khỏi run (--disallowedTools) — lớp thứ hai nếu CLI vẫn gọi được
+        return Verdict("destructive", "playwright_not_in_run", "mcp", f"{tool_name}: Playwright bị gỡ khỏi run (chế độ Chrome / allowlist domain)",
+                       [tool_name[:200]], forbidden=True)
+    return Verdict("safe", "mcp_third_party")
 
 
 # ============================================================================ SQL
