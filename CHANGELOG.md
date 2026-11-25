@@ -12,6 +12,16 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ---
 
+## v0.2.36 — 2026-11-25
+
+### MCP đổi theo tài khoản Claude (#231)
+- **Đổi tài khoản đang dùng (`cfharness account use`, Cài đặt › Tài khoản Claude) thì MCP của run đổi theo**: tài khoản có thư mục cấu hình riêng (`HUB_HOME/claude-config/<id>/`, nơi `CLAUDE_CONFIG_DIR=<thư mục> claude mcp add` ghi server) → run dùng server MCP của thư mục đó; tài khoản chỉ có token (chưa có thư mục) và "Đăng nhập của máy" dùng `~/.claude.json`. Trước đây trên Windows (chưa bật Developer Mode) hub không tạo được symlink nên run luôn rơi về MCP của máy dù đã đổi tài khoản.
+- Windows không cho tạo symlink → hub dùng **junction** cho thư mục `projects` (không cần quyền quản trị): session vẫn dùng chung giữa các tài khoản (`--resume` chéo tài khoản được). Nếu cả junction cũng không tạo được, run vẫn dùng thư mục của tài khoản cho MCP (chỉ mất resume chéo tài khoản, có cảnh báo trong log).
+- An toàn dữ liệu: xoá tài khoản gỡ liên kết (symlink/junction) trước rồi mới xoá thư mục — không bao giờ chạm `~/.claude/projects`; trang dung lượng và bước quét khi nhập gói chuyển hub không đi vào junction (Windows `os.walk` mặc định đi theo junction).
+- Run dùng thư mục của tài khoản (MCP) → không xoá/đăng xuất được tài khoản đó khi run đang chạy (như run dùng phiên claude.ai).
+
+---
+
 ## v0.2.35 — 2026-11-25
 
 ### MCP: sửa lỗi agent mất MCP của tài khoản (#230)

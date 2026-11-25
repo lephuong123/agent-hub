@@ -834,6 +834,12 @@ class RunManager:
         if cdir is None or not aid or not Path(cdir).exists():
             return None
         d, why = self._shared_config_dir(aid)
+        if d is None and why == "config_dir_unshared":
+            # MCP đi theo TÀI KHOẢN đang dùng (người chọn): vẫn dùng thư mục của nó dù `projects` không liên kết được về cây
+            # session chung (hiếm — Windows đã dùng junction) — đổi lại `--resume` session chéo tài khoản không được
+            log.warning("run %s: thư mục cấu hình claude của tài khoản %s không dùng chung session (%s) — vẫn dùng cho MCP; "
+                        "resume chéo tài khoản sẽ không được", run.get("id"), aid, why)
+            return Path(cdir)
         if d is None:
             log.warning("run %s: không dùng được thư mục cấu hình claude của tài khoản %s (%s) — MCP lấy từ cấu hình mặc định",
                         run.get("id"), aid, why)
