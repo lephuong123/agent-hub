@@ -1,7 +1,8 @@
 """Thông báo Telegram (FR-SG-09 mở rộng — docs/plan/web-telegram.md, luồng TG).
 
 - `TelegramApi`: gọi Bot API (`<api_base>/bot<token>/<method>`) bằng `httpx2` (AsyncClient, huỷ được giữa chừng —
-  long polling không giữ luồng khi daemon dừng; `httpx2` đã có sẵn qua phụ thuộc `mcp`, không thêm thư viện).
+  long polling không giữ luồng khi daemon dừng; `httpx2` đã có sẵn qua phụ thuộc `mcp`, không thêm thư viện). Một client sống
+  lâu cho mỗi đối tượng API (`PooledHttp`, giữ kết nối); bot giữ đối tượng tới khi token đổi (`ChatBot._cached_api`).
   Mọi thông báo lỗi được gỡ token trước khi ra log/event.
 - `TelegramNotifier`: cùng luồng sự kiện với Slack (`QueuedNotifier`, lọc `notify.telegram.events`), gửi tới MỌI chat
   trong `notify.telegram.allowed_chat_ids`. Tin `approval.open|waiting_human|reminder` kèm nút inline Cho phép / Từ chối.
@@ -13,9 +14,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import html as _html
+import http.cookiejar
 import json
 import logging
 import re
@@ -45,6 +48,46 @@ APPROVAL_EVENTS = ("approval.open", "approval.waiting_human", "approval.reminder
 GOLDEN_SUGGESTION_EVENT = "golden.suggestion_opened"  # đề xuất golden → cặp tin có nút Duyệt / Bỏ qua (chat/base.send_golden_suggestion)
 
 
+class PooledHttp:
+    """Một `AsyncClient` sống lâu cho mỗi đối tượng API (Telegram, Slack): giữ kết nối keep-alive/TLS giữa các lời gọi thay vì
+    bắt tay lại mỗi lần. Tạo lười trong event loop đang chạy (loop khác — vd test — → client mới); KHÔNG đặt header mặc định
+    (token đi theo từng request), không theo redirect. Bên giữ đối tượng gọi `aclose()` khi bỏ nó (đổi token, bot dừng).
+    `transport`: test thay bằng `MockTransport`."""
+
+    timeout: float = 15.0
+    transport: Any = None
+    _client: Any = None
+    _client_loop: Any = None
+
+    def _http(self) -> Any:
+        loop = asyncio.get_running_loop()
+        c = self._client
+        if c is None or c.is_closed or self._client_loop is not loop:
+            # không giữ cookie giữa các lời gọi (client dùng chung lâu dài; Slack/Telegram không cần cookie)
+            jar = http.cookiejar.CookieJar(policy=http.cookiejar.DefaultCookiePolicy(allowed_domains=[]))
+            kw: dict[str, Any] = {"timeout": self.timeout, "follow_redirects": False, "cookies": jar}
+            if self.transport is not None:
+                kw["transport"] = self.transport
+            c = _httpx.AsyncClient(**kw)
+            self._client, self._client_loop = c, loop
+        return c
+
+    async def aclose(self) -> None:
+        c, loop = self._client, self._client_loop
+        self._client = self._client_loop = None
+        if c is None or c.is_closed:
+            return
+        try:
+            same = asyncio.get_running_loop() is loop
+        except RuntimeError:  # pragma: no cover
+            same = False
+        if same:  # client của loop đã chết: kết nối mất cùng loop, không đóng được từ loop này
+            try:
+                await c.aclose()
+            except Exception:  # best-effort: đang dừng
+                log.debug("đóng http client lỗi", exc_info=True)
+
+
 class TelegramError(Exception):
     def __init__(self, message: str, *, code: int | None = None, retry_after: float | None = None) -> None:
         super().__init__(message)
@@ -52,11 +95,12 @@ class TelegramError(Exception):
         self.retry_after = retry_after
 
 
-class TelegramApi:
-    def __init__(self, base: str, token: str, *, timeout: float = 15.0) -> None:
+class TelegramApi(PooledHttp):
+    def __init__(self, base: str, token: str, *, timeout: float = 15.0, transport: Any = None) -> None:
         self.base = base.rstrip("/")
         self.token = token
         self.timeout = timeout
+        self.transport = transport
 
     def _scrub(self, s: Any) -> str:
         t = str(s)
@@ -69,12 +113,12 @@ class TelegramApi:
         """`files` (vd sendDocument) → multipart: các tham số khác gửi dạng form (reply_markup… phải là chuỗi JSON)."""
         url = f"{self.base}/bot{self.token}/{method}"
         try:
-            async with _httpx.AsyncClient(timeout=timeout or self.timeout) as c:
-                if files:
-                    form = {k: (v if isinstance(v, str) else json.dumps(v)) for k, v in (params or {}).items()}
-                    r = await c.post(url, data=form, files=files)
-                else:
-                    r = await c.post(url, json=params or {})
+            c = self._http()
+            if files:
+                form = {k: (v if isinstance(v, str) else json.dumps(v)) for k, v in (params or {}).items()}
+                r = await c.post(url, data=form, files=files, timeout=timeout or self.timeout)
+            else:
+                r = await c.post(url, json=params or {}, timeout=timeout or self.timeout)
             try:
                 data = r.json()
             except ValueError:
@@ -101,16 +145,15 @@ class TelegramApi:
             raise TelegramError(f"tệp quá lớn ({size // 1024} KB)", code=413)
         url = f"{self.base}/file/bot{self.token}/{fp}"
         try:
-            async with _httpx.AsyncClient(timeout=timeout or max(self.timeout, 30.0)) as c:
-                async with c.stream("GET", url) as r:
-                    if r.status_code != 200:
-                        raise TelegramError(f"tải tệp: HTTP {r.status_code}", code=r.status_code)
-                    buf = bytearray()
-                    async for chunk in r.aiter_bytes():
-                        buf.extend(chunk)
-                        if len(buf) > max_bytes:
-                            raise TelegramError(f"tệp quá lớn (> {max_bytes // 1024} KB)", code=413)
-                    return bytes(buf)
+            async with self._http().stream("GET", url, timeout=timeout or max(self.timeout, 30.0)) as r:
+                if r.status_code != 200:
+                    raise TelegramError(f"tải tệp: HTTP {r.status_code}", code=r.status_code)
+                buf = bytearray()
+                async for chunk in r.aiter_bytes():
+                    buf.extend(chunk)
+                    if len(buf) > max_bytes:
+                        raise TelegramError(f"tệp quá lớn (> {max_bytes // 1024} KB)", code=413)
+                return bytes(buf)
         except TelegramError:
             raise
         except Exception as e:  # lỗi mạng: URL chứa token → gỡ

@@ -29,6 +29,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import tomllib
 import urllib.error
@@ -62,23 +63,42 @@ def parse_version(v: str | None) -> tuple[int, int, int] | None:
     return (int(m[1]), int(m[2]), int(m[3])) if m else None
 
 
-def _get_json(url: str, timeout: float) -> Any:
-    req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": f"cfharness/{__version__}"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 — URL cố định https api.github.com
-        return json.loads(r.read().decode("utf-8"))
-
-
-def fetch_latest(timeout: float = 8.0) -> dict[str, Any]:
-    """Bản phát hành mới nhất: `{tag, name, published_at, url}`. Không có release → tag `vX.Y.Z` lớn nhất."""
+def _get_json(url: str, timeout: float, http: dict[str, Any] | None = None) -> Any:
+    """GET JSON. `http` = cache có điều kiện `{url: {etag, body}}`: gửi `If-None-Match`, 304 → body đã lưu (GitHub không tính
+    304 vào hạn mức API), 200 có ETag → lưu lại."""
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": f"cfharness/{__version__}"}
+    prev = (http or {}).get(url) if http is not None else None
+    if isinstance(prev, dict) and prev.get("etag") and "body" in prev:
+        headers["If-None-Match"] = str(prev["etag"])
+    req = urllib.request.Request(url, headers=headers)
     try:
-        r = _get_json(f"{API}/releases/latest", timeout)
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 — URL cố định https api.github.com
+            body = json.loads(r.read().decode("utf-8"))
+            etag = r.headers.get("ETag")
+    except urllib.error.HTTPError as e:
+        if e.code == 304 and isinstance(prev, dict) and "body" in prev:
+            return prev["body"]
+        raise
+    if http is not None:
+        if etag:
+            http[url] = {"etag": etag, "body": body}
+        else:
+            http.pop(url, None)
+    return body
+
+
+def fetch_latest(timeout: float = 8.0, *, http: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Bản phát hành mới nhất: `{tag, name, published_at, url}`. Không có release → tag `vX.Y.Z` lớn nhất.
+    `http`: cache ETag (`_get_json`) — Updater lưu ở `HUB_HOME/update/latest.json`."""
+    try:
+        r = _get_json(f"{API}/releases/latest", timeout, http)
         tag = str(r.get("tag_name") or "")
         if parse_version(tag):
             return {"tag": tag, "name": r.get("name") or tag, "published_at": r.get("published_at"), "url": r.get("html_url") or f"{RELEASES_URL}/tag/{tag}"}
     except urllib.error.HTTPError as e:
         if e.code != 404:
             raise
-    tags = [str(t.get("name") or "") for t in _get_json(f"{API}/tags?per_page=100", timeout) or []]
+    tags = [str(t.get("name") or "") for t in _get_json(f"{API}/tags?per_page=100", timeout, http) or []]
     tags = [t for t in tags if parse_version(t)]
     if not tags:
         raise HubError("repo phát hành chưa có tag vX.Y.Z nào")
@@ -149,6 +169,8 @@ class Updater:
         self.python = python or sys.executable
         self.base_python = base_python or getattr(sys, "_base_executable", None) or sys.executable
         self._cache: tuple[float, dict[str, Any]] | None = None
+        self._lock = threading.Lock()  # singleflight: nhiều lượt `update.check` cùng lúc (thread) chỉ gọi GitHub một lần
+        self._disk_loaded = False
 
     # ------------------------------------------------------------------ đường dẫn
     @property
@@ -158,6 +180,11 @@ class Updater:
     @property
     def state_path(self) -> Path:
         return self.dir / "state.json"
+
+    @property
+    def latest_path(self) -> Path:
+        """Cache kiểm bản mới qua lần khởi động lại daemon: `{ts, result, http: {url: {etag, body}}}` (không có định danh)."""
+        return self.dir / "latest.json"
 
     @property
     def log_path(self) -> Path:
@@ -179,17 +206,56 @@ class Updater:
             return False
         return time.time() - float(st.get("updated_at") or st.get("started_at") or 0) < 1200  # helper treo quá 20 phút → coi như chết
 
-    def latest(self, refresh: bool = False) -> dict[str, Any]:
-        now = time.monotonic()
-        if not refresh and self._cache and now - self._cache[0] < CHECK_TTL_S:
-            return self._cache[1]
+    def _uses_github(self) -> bool:
+        return self.fetch is fetch_latest  # test thay `fetch` → không đọc/ghi cache đĩa (kết quả giả không lẫn sang lần sau)
+
+    def _load_disk(self) -> dict[str, Any]:
         try:
-            res = {"ok": True, **self.fetch(8.0)}
-        except Exception as e:  # best-effort: mạng/GitHub lỗi → báo trong kết quả, trang Cài đặt vẫn hiện
-            res = {"ok": False, "error": f"không kiểm tra được bản mới: {e}"}
-        res["checked_at"] = time.time()
-        self._cache = (now, res)
-        return res
+            d = json.loads(self.latest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return d if isinstance(d, dict) else {}
+
+    def _save_disk(self, d: dict[str, Any]) -> None:
+        try:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            tmp = self.latest_path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, self.latest_path)
+        except OSError:  # best-effort: không lưu được thì lần sau hỏi lại GitHub
+            pass
+
+    def latest(self, refresh: bool = False) -> dict[str, Any]:
+        """Bản mới nhất, cache `CHECK_TTL_S` (cả lỗi). Cache RAM + đĩa (`latest.json`, qua lần khởi động lại) + ETag
+        (`If-None-Match` → 304 rẻ). Singleflight: lượt tới sau khi đã có lượt khác hỏi xong thì dùng kết quả đó."""
+        asked = time.monotonic()
+        if not refresh and self._cache and asked - self._cache[0] < CHECK_TTL_S:
+            return self._cache[1]
+        with self._lock:
+            now = time.monotonic()
+            if self._cache and (self._cache[0] >= asked or (not refresh and now - self._cache[0] < CHECK_TTL_S)):
+                return self._cache[1]  # lượt khác vừa hỏi xong trong lúc chờ khoá
+            disk = self._load_disk() if self._uses_github() else {}
+            if not refresh and not self._disk_loaded and isinstance(disk.get("result"), dict):
+                self._disk_loaded = True
+                try:
+                    age = time.time() - float(disk.get("ts") or 0)
+                except (TypeError, ValueError):
+                    age = CHECK_TTL_S
+                if 0 <= age < CHECK_TTL_S and disk["result"].get("ok"):
+                    self._cache = (now - age, disk["result"])
+                    return disk["result"]
+            self._disk_loaded = True
+            http = disk.get("http") if isinstance(disk.get("http"), dict) else {}
+            try:
+                res = {"ok": True, **(fetch_latest(8.0, http=http) if self._uses_github() else self.fetch(8.0))}
+            except Exception as e:  # best-effort: mạng/GitHub lỗi → báo trong kết quả, trang Cài đặt vẫn hiện
+                res = {"ok": False, "error": f"không kiểm tra được bản mới: {e}"}
+            res["checked_at"] = time.time()
+            self._cache = (time.monotonic(), res)
+            if self._uses_github() and res.get("ok"):  # lỗi chỉ cache RAM — lần khởi động sau hỏi lại
+                self._save_disk({"ts": res["checked_at"], "result": res, "http": http})
+            return res
 
     def check(self, refresh: bool = False) -> dict[str, Any]:
         info = self.info()

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hashlib
 import logging
 import re
 import secrets as _secrets
@@ -142,6 +143,7 @@ class ChatBot:
         self._ready_for: str | None = None
         self._ignored_at: dict[str, float] = {}
         self.pairing: dict[str, Any] | None = None
+        self._api_cache: tuple[str, Any] | None = None  # (dấu vân tay cấu hình+token, đối tượng API giữ client http sống lâu)
         self.info: dict[str, Any] = {"polling": False, "last_error": None, "last_poll_at": None, "updates": 0}
 
     # ------------------------------------------------------------------ cấu hình
@@ -450,6 +452,32 @@ class ChatBot:
                 t.cancel()
         self._task = None
         self.info["polling"] = False
+        cur, self._api_cache = self._api_cache, None
+        if cur is not None:
+            self._close_api(cur[1])
+
+    def _cached_api(self, parts: tuple[Any, ...], make: Any) -> Any:
+        """Giữ một đối tượng API (một `AsyncClient` sống lâu, `notify.telegram.PooledHttp`) cho tới khi cấu hình/token đổi —
+        theo mẫu `filehub/lane/service.py`. Khoá là sha256 của các phần (không giữ token dạng rõ ngoài chính đối tượng API);
+        đổi → tạo mới và đóng client cũ ở nền."""
+        fp = hashlib.sha256("\x00".join(str(x) for x in parts).encode("utf-8")).hexdigest()
+        cur = self._api_cache
+        if cur is not None and cur[0] == fp:
+            return cur[1]
+        api = make()
+        self._api_cache = (fp, api)
+        if cur is not None:
+            self._close_api(cur[1])
+        return api
+
+    def _close_api(self, api: Any) -> None:
+        if getattr(api, "_client", None) is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # không có loop: client gắn loop cũ đã dừng — kết nối đóng theo loop
+            return
+        track(loop.create_task(api.aclose(), name=f"{self.NAME}-api-close"))
 
     def kick(self) -> None:
         """Cấu hình đổi (setup/disable/allow) → khởi động lại vòng nhận ngay (huỷ kết nối/long poll đang treo)."""

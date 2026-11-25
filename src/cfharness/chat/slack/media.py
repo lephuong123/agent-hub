@@ -20,7 +20,6 @@ import logging
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from urllib.parse import urlsplit
 
-from ...notify.telegram import _httpx
 from ..media import UNSUPPORTED, MediaBase, MediaItem, classify
 from .api import SlackApi, SlackError
 
@@ -55,22 +54,22 @@ def allowed_url(url: Any, files_base: Any = None) -> bool:
 async def download(api: SlackApi, url: str, max_bytes: int, *, html_ok: bool = False, timeout: float | None = None) -> bytes:
     """GET `url` với bot token (header), stream, dừng khi vượt `max_bytes`; không theo redirect. Lỗi → SlackError đã gỡ token."""
     try:
-        async with _httpx.AsyncClient(timeout=timeout or max(api.timeout, 30.0), follow_redirects=False) as c:
-            async with c.stream("GET", url, headers={"Authorization": f"Bearer {api.token}"}) as r:
-                if r.status_code != 200:
-                    raise SlackError(f"tải tệp: HTTP {r.status_code}" + (" (thiếu scope files:read?)" if r.status_code in (301, 302, 303, 401, 403) else ""))
-                ctype = str(r.headers.get("Content-Type") or "").lower()
-                if ctype.startswith("text/html") and not html_ok:
-                    raise SlackError("Slack trả trang HTML thay vì tệp (app thiếu scope files:read?)")
-                declared = r.headers.get("Content-Length")
-                if declared and declared.isdigit() and int(declared) > max_bytes:
-                    raise SlackError(f"tệp quá lớn ({int(declared) // 1024} KB)")
-                buf = bytearray()
-                async for chunk in r.aiter_bytes():
-                    buf.extend(chunk)
-                    if len(buf) > max_bytes:
-                        raise SlackError(f"tệp quá lớn (> {max_bytes // 1024} KB)")
-                return bytes(buf)
+        async with api._http().stream("GET", url, headers={"Authorization": f"Bearer {api.token}"}, follow_redirects=False,
+                                      timeout=timeout or max(api.timeout, 30.0)) as r:
+            if r.status_code != 200:
+                raise SlackError(f"tải tệp: HTTP {r.status_code}" + (" (thiếu scope files:read?)" if r.status_code in (301, 302, 303, 401, 403) else ""))
+            ctype = str(r.headers.get("Content-Type") or "").lower()
+            if ctype.startswith("text/html") and not html_ok:
+                raise SlackError("Slack trả trang HTML thay vì tệp (app thiếu scope files:read?)")
+            declared = r.headers.get("Content-Length")
+            if declared and declared.isdigit() and int(declared) > max_bytes:
+                raise SlackError(f"tệp quá lớn ({int(declared) // 1024} KB)")
+            buf = bytearray()
+            async for chunk in r.aiter_bytes():
+                buf.extend(chunk)
+                if len(buf) > max_bytes:
+                    raise SlackError(f"tệp quá lớn (> {max_bytes // 1024} KB)")
+            return bytes(buf)
     except SlackError:
         raise
     except Exception as e:  # lỗi mạng: không để token lọt ra log/tin

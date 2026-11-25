@@ -27,6 +27,28 @@ def clip(s: Any, n: int = 300) -> str:
     return t if len(t) <= n else t[:n] + "…"
 
 
+RETRY_AFTER_MAX_S = 300.0  # trần chờ theo Retry-After / retry_after khi gửi thông báo bị 429
+
+
+def _retry_after(e: BaseException) -> float | None:
+    """Số giây dịch vụ yêu cầu chờ khi bị giới hạn tốc độ: thuộc tính `retry_after` (SlackError/TelegramError) hoặc header
+    `Retry-After` (giây) của response 429 gắn trên lỗi. Không có/không hợp lệ → None."""
+    v = getattr(e, "retry_after", None)
+    if v is None:  # httpx: lỗi có `.response`; urllib HTTPError: chính lỗi có `.code` + `.headers` (webhook Slack)
+        resp = getattr(e, "response", None) or e
+        headers = getattr(resp, "headers", None)
+        if headers is not None and (getattr(resp, "status_code", None) or getattr(resp, "code", None)) == 429:
+            try:
+                v = headers.get("Retry-After")
+            except Exception:  # pragma: no cover
+                v = None
+    try:
+        f = float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+    return f if f is not None and f > 0 else None
+
+
 class QueuedNotifier:
     channel = "base"
 
@@ -158,6 +180,9 @@ class QueuedNotifier:
                 err = clip(e, 300)
                 log.warning("gửi %s lỗi (lần %d/%d, %s): %s", self.channel, i + 1, attempts, ev.type, err)
                 retry_in = base * (2**i) if i + 1 < attempts else None
+                ra = _retry_after(e)
+                if retry_in is not None and ra is not None:  # 429: dịch vụ bảo chờ bao lâu → chờ đủ (trần RETRY_AFTER_MAX_S)
+                    retry_in = max(retry_in, min(ra, RETRY_AFTER_MAX_S))
                 self.hub.publish(
                     make_event(
                         "notify.failed",

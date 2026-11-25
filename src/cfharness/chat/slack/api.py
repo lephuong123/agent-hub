@@ -11,7 +11,7 @@ import json
 from typing import Any
 
 from ...redact import redact_str
-from ...notify.telegram import _httpx
+from ...notify.telegram import PooledHttp
 
 
 class SlackError(Exception):
@@ -21,12 +21,15 @@ class SlackError(Exception):
         self.retry_after = retry_after
 
 
-class SlackApi:
-    def __init__(self, base: str, bot_token: str, app_token: str | None = None, *, timeout: float = 15.0) -> None:
+class SlackApi(PooledHttp):
+    """Một client http sống lâu cho mỗi đối tượng (`PooledHttp`); `SlackBot.api()` giữ đối tượng tới khi token đổi."""
+
+    def __init__(self, base: str, bot_token: str, app_token: str | None = None, *, timeout: float = 15.0, transport: Any = None) -> None:
         self.base = base.rstrip("/")
         self.token = bot_token
         self.app_token = app_token
         self.timeout = timeout
+        self.transport = transport
 
     def _scrub(self, s: Any) -> str:
         t = str(s)
@@ -41,8 +44,8 @@ class SlackApi:
             raise SlackError(f"{method}: thiếu {'app token (xapp-)' if app else 'bot token (xoxb-)'}")
         form = {k: (v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)) for k, v in (params or {}).items() if v is not None}
         try:
-            async with _httpx.AsyncClient(timeout=timeout or self.timeout) as c:
-                r = await c.post(f"{self.base}/{method}", data=form, headers={"Authorization": f"Bearer {tok}"})
+            r = await self._http().post(f"{self.base}/{method}", data=form, headers={"Authorization": f"Bearer {tok}"},
+                                        timeout=timeout or self.timeout)
             if r.status_code == 429:
                 ra = r.headers.get("Retry-After")
                 raise SlackError(f"{method}: bị giới hạn tốc độ (429)", code="ratelimited", retry_after=float(ra) if ra and ra.isdigit() else 1.0)
@@ -68,8 +71,8 @@ class SlackApi:
         if not url or not fid:
             raise SlackError("files.getUploadURLExternal: thiếu upload_url/file_id")
         try:
-            async with _httpx.AsyncClient(timeout=timeout or max(self.timeout, 60.0)) as c:
-                r = await c.post(str(url), content=data, headers={"Content-Type": "application/octet-stream"})
+            r = await self._http().post(str(url), content=data, headers={"Content-Type": "application/octet-stream"},
+                                        timeout=timeout or max(self.timeout, 60.0))
             if r.status_code != 200:
                 raise SlackError(f"tải tệp lên: HTTP {r.status_code}")
         except SlackError:

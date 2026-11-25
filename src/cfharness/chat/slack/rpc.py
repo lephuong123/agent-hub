@@ -69,6 +69,8 @@ def register_rpc(d: "Daemon") -> None:
             await api.call("apps.connections.open", app=True)  # app token đúng + Socket Mode đã bật (URL bỏ đi, vòng bot tự mở)
         except SlackError as e:
             raise HubError(f"Slack từ chối token / chưa bật Socket Mode: {clip(e, 300)}") from None
+        finally:
+            await api.aclose()  # đối tượng tạm của bước kiểm token — bot tự tạo đối tượng riêng (giữ kết nối)
         team = str(me.get("team_id") or "")
         pinned = c.get("team_id")
         if pinned and team and str(pinned) != team:
