@@ -60,7 +60,7 @@ export function ConvList({ limit }) {
     <ul class="mgr-convs">${rows.length ? rows.map((c) => {
       const url = paneUrl(c.id, scope), title = c.title || "Cuộc trò chuyện " + fmtTs(c.updated_at);
       return html`<li key=${c.id}><a href=${url} class=${c.id === cur ? "on" : ""} title=${title} onClick=${(e) => onNav(e, url)}>
-        <span class="ct">${c.running ? html`<span class="ws-dot run" title="Đang chạy" aria-hidden="true"></span><span class="sr-only">Đang chạy. </span>` : null}${title}${
+        <span class="ct"><span class="cdot">${c.running ? html`<span class="ws-dot run" title="Đang chạy" aria-hidden="true"></span><span class="sr-only">Đang chạy. </span>` : null}</span><span class="t">${title}</span>${
           c.unread && c.id !== cur ? html`<span class="ws-unread">${c.unread}</span>` : null}</span>
         <span class="cm"><${Time} ts=${c.updated_at} />${c.count ? " · " + c.count + " tin" : ""}</span></a></li>`;
     }) : html`<li class="muted small side-none">Chưa có hội thoại — gõ tin để bắt đầu.</li>`}</ul>`;

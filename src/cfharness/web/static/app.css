@@ -117,7 +117,7 @@ ul, ol { margin: 0 0 var(--s3); padding-left: 1.3rem; }
 .nav .lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; font-size: 11px; font-weight: 650; color: var(--on-accent); background: var(--accent); font-variant-numeric: tabular-nums; }
 .badge.danger { background: var(--danger); color: var(--on-danger); } .badge.ask { background: var(--ask); color: var(--on-ask); }
-.side-recents { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin-top: 6px; border-top: 1px solid var(--line); padding-top: 4px; }
+.side-recents { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .side-recents .mgr-convs a { padding: 6px 10px; }
 .side-recents .mgr-convs .cm { display: none; }
 .side-recents .mgr-convs .ct { font-weight: 450; }
@@ -134,10 +134,7 @@ ul, ol { margin: 0 0 var(--s3); padding-left: 1.3rem; }
 .side-btn { justify-content: flex-start !important; }
 .side-foot > .side-btn { width: 100%; }
 /* chat-first: vùng HỘI THOẠI trên mọi trang (_side_convs.html), mục tạm "Cài đặt › …" khi đang ở trang cấu hình */
-.side-sub { font-size: 11px; font-weight: 550; color: var(--muted); padding: 8px 10px 2px; text-transform: uppercase; letter-spacing: .04em; }
-.side-recents .mgr-convs + .side-sub { margin-top: 4px; }
 .side-recents .side-more .ct { color: var(--muted); font-weight: 450; }
-.side-recents .ws-head { padding-top: 6px; }
 /* Dừng khẩn cấp — luôn hiện ở chân thanh bên */
 .estop-ctl { display: flex; gap: 6px; margin: 0; width: 100%; }
 .estop-ctl .side-btn, .estop-ctl.side-btn { flex: 1 1 auto; min-width: 0; }
@@ -1527,3 +1524,69 @@ select { max-width: 100%; text-overflow: ellipsis; }
 .need:has(> .xcard:nth-child(4)) .xcard-title .t > .pill { display: none; }
 .need:has(> .xcard:nth-child(4)) .xcard-why { margin-top: 4px; font-size: var(--fs-xs); }
 .need:has(> .xcard:nth-child(4)) .xcard-actions { margin-top: 8px; }
+
+/* ============================================================ thanh bên: Luồng việc | Hội thoại
+   Một kiểu tiêu đề nhóm (chữ thường, không viết hoa), mọi dòng có ô dẫn rộng bằng icon của Luồng việc → chữ thẳng một cột.
+   Đường chia giữa hai phần kéo lên/xuống được (app.js, nhớ theo người xem); "Luồng đang mở" / "Gần đây" gập được. */
+.nav-group, .side-recents .ws-head { font-size: var(--fs-xs); font-weight: 600; color: var(--muted); letter-spacing: .01em; }
+.side-recents .ws-head { position: sticky; top: 0; z-index: 1; background: var(--side-bg); padding: 6px 4px 4px 10px; margin: 0; }
+.side-sub { display: flex; align-items: center; gap: 6px; width: 100%; padding: 8px 10px 4px; margin: 0; border: 0; background: none;
+  font: inherit; font-size: var(--fs-xs); font-weight: 500; color: var(--muted); text-align: left; cursor: pointer; border-radius: 6px; }
+.side-sub::before { content: ""; flex: none; width: 5px; height: 5px; margin: 0 6px 0 2px; border: solid currentColor; border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg); transition: transform .15s; opacity: .8; }
+.side-sub:hover { color: var(--text-2); }
+.side-sub:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.side-sub[aria-expanded="false"]::before { transform: rotate(-45deg); }
+.side-n { margin-left: auto; font-weight: 500; font-variant-numeric: tabular-nums; opacity: .8; }
+html.sf-ws [data-fold-body="ws"], html.sf-recent [data-fold-body="recent"] { display: none; }
+.side-recents .mgr-convs a { display: flex; align-items: center; height: 32px; padding: 0 8px 0 10px; }
+.side-recents .mgr-convs .ct { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; font-weight: 450; white-space: nowrap; }
+.side-recents .ct .cdot { flex: 0 0 17px; display: inline-flex; align-items: center; justify-content: center; }
+.side-recents .ct .cdot .ws-dot { margin: 0; }
+.side-recents .ct .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.side-recents .ct .ws-unread { margin-left: auto; }
+.side-recents .side-none { padding: 6px 10px 6px 37px; }
+.side-split { position: relative; flex: none; height: 11px; margin: 3px 0; cursor: row-resize; touch-action: none; }
+.side-split::before { content: ""; position: absolute; left: 10px; right: 10px; top: 5px; height: 1px; background: var(--line); transition: background .15s; }
+.side-split::after { content: ""; position: absolute; left: 50%; top: 3px; width: 32px; height: 5px; margin-left: -16px; border-radius: 3px;
+  background: var(--side-bg); box-shadow: inset 0 0 0 1px var(--line); opacity: 0; transition: opacity .15s; }
+.side-split:hover::before, .side-split.drag::before, .side-split:focus-visible::before { background: var(--accent); }
+.side-split:hover::after, .side-split.drag::after, .side-split:focus-visible::after { opacity: 1; box-shadow: inset 0 0 0 1px var(--accent); }
+.side-split:focus-visible { outline: none; }
+html.dragging-split, html.dragging-split * { cursor: row-resize !important; user-select: none; }
+.nav, .nav > * { flex-shrink: 0; }
+@media (min-width: 1101px) { html.side-nav-sized:not(.side-min) .nav { flex: 0 0 var(--side-nav-h); overflow: hidden; }
+  html.side-nav-sized:not(.side-min) .nav:hover, html.side-nav-sized:not(.side-min) .nav:focus-within { overflow-y: auto; } }
+@media (max-width: 1100px) { .side-split { display: none; } }
+html.side-min .side-split { display: none; }
+
+/* ============================================================ trang Điều phối: hết cuộn ngang, hàng tab Luồng, chữ gọn hơn
+   1) Nhãn `.sr-only` (position:absolute) trong tab luồng thoát khỏi vùng cuộn của #ws-tabs (không có tổ tiên định vị bên trong)
+      → kéo cả trang rộng thêm ~430px. #ws-tabs làm khối chứa. Lưới an toàn: gốc tài liệu không cuộn ngang (panel trượt
+      position:fixed ẩn ngoài mép phải trên điện thoại cũng từng gây cuộn ngang).
+   2) Hàng tab: tab hẹp hơn, mờ dần ở mép khi còn tab bị khuất, thanh cuộn mảnh khi rê chuột, lăn chuột dọc = cuộn ngang (app.js).
+   3) Nội dung trả lời là trọng tâm: chữ trả lời 15px, tin của bạn 14px, ô nhập thấp và gọn hơn. */
+html { overflow-x: clip; }
+.ws-tabs { position: relative; scroll-behavior: smooth; overscroll-behavior-x: contain; scroll-padding-inline: 24px;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+.ws-tabs.at-end { -webkit-mask-image: none; mask-image: none; }
+.ws-tabs.scrolled:not(.at-end) { -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+.ws-tabs.scrolled.at-end { -webkit-mask-image: linear-gradient(to right, transparent, #000 28px); mask-image: linear-gradient(to right, transparent, #000 28px); }
+.ws-tabs:hover { scrollbar-width: thin; }
+.ws-tabs:hover::-webkit-scrollbar { display: block; height: 4px; }
+.ws-tabs::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 2px; }
+.ws-tab { max-width: 180px; padding: 4px 10px; font-size: var(--fs-xs); }
+.ws-tab .ws-unread { min-width: 16px; height: 16px; line-height: 16px; font-size: 10px; padding: 0 4px; }
+.ws-bar { gap: 6px; }
+.ws-bar > details { flex: none; }
+
+.mm-md .md { font-size: 15px; line-height: 1.65; }
+.mm-md .md h1, .mm-md .md h2, .mm-md .md h3 { font-size: 15.5px; }
+.mm.user .mm-text { font-size: 14px; line-height: 1.5; padding: 8px 14px; border-radius: 16px; }
+.mgr-form { padding: 8px 8px 6px 14px; gap: 2px; border-radius: 18px; }
+.mgr-form textarea { font-size: 14px; min-height: 24px; padding: 4px 0; }
+.mgr-form .btn.icon { width: 30px; height: 30px; }
+.btn.send { width: 30px; height: 30px; }
+.btn.send .ic { width: 16px; height: 16px; }
+.chat-disclaimer { margin-top: 4px; font-size: 11px; }
