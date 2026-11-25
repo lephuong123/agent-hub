@@ -5,7 +5,7 @@
 .coord .mgr-chat.is-empty .coord-panes { flex: 0 0 auto; margin-top: auto; }
 .coord .mgr-chat.is-empty .mgr-log { flex: 0 0 auto; overflow: visible; }
 .coord .mgr-chat.is-empty .composer-wrap { margin-bottom: auto; padding-bottom: 48px; }
-.coord .mgr-chat.is-empty .mgr-suggest { display: flex; }
+#coord .mgr-chat.is-empty .mgr-suggest { display: flex; }  /* thắng `.mgr-chat:not(:has(#mgr-empty))` của app.css (có id) — trước đây gợi ý không bao giờ hiện */
 .coord-boot-msg { margin: auto; }
 .coord-loading { margin: auto; display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: var(--fs-sm);
   opacity: 0; animation: coord-in .15s ease-out .4s forwards; }  /* chỉ hiện khi tải lâu hơn 400 ms — đổi nhanh thì không nháy */
@@ -67,3 +67,73 @@
 .coord-estop { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 max(16px, calc((100% - var(--read-w)) / 2)) 8px; padding: 8px 12px;
   border: 1px solid var(--danger-line); border-radius: var(--r); background: var(--danger-soft, var(--surface-2)); color: var(--danger); font-size: var(--fs-sm); }
 .coord-estop a { margin-left: auto; }
+
+/* ---------------------------------------------------------------- luồng việc ngay trong chat (coord/views.js phần cuối, web/flow.py) */
+/* khay "Cần bạn" ghim trên ô nhập — thu gọn mặc định; mở ra cuộn riêng (không đẩy ô nhập khỏi màn hình) */
+.ctray { flex: 0 0 auto; margin: 6px max(16px, calc((100% - var(--read-w)) / 2)) 6px; border: 1px solid var(--danger-line); border-radius: var(--r);
+  background: var(--surface); box-shadow: var(--shadow-sm); position: relative; z-index: 3; }
+.ctray > summary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; min-height: 44px; box-sizing: border-box; cursor: pointer;
+  list-style: none; font-size: var(--fs-sm); }
+.ctray > summary::-webkit-details-marker { display: none; }
+.ctray > summary > .ic:first-child { color: var(--danger); }
+.ctray > summary .chev { margin-left: auto; transition: transform .15s; color: var(--muted); }
+.ctray[open] > summary .chev { transform: rotate(180deg); }
+.ctray-wm { color: var(--muted); font-size: var(--fs-xs); }
+.ctray-list { display: flex; flex-direction: column; gap: 12px; max-height: min(52vh, 520px); overflow-y: auto; padding: 4px 12px 12px; overscroll-behavior: contain; }
+.ctray-list .xcard { box-shadow: none; }
+/* thẻ việc sống (dưới khối "Đã làm N việc") */
+.wcards { display: flex; flex-direction: column; gap: 8px; margin-top: -12px; }
+.wcard { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.wcard.live { border-color: var(--ok-line, var(--line-2)); }
+.wcard[data-tone="danger"] { border-color: var(--danger-line); }
+.wcard[data-tone="ask"] { border-color: var(--ask-line); }
+.wcard-head { display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
+.wcard-t { min-width: 0; flex: 1; }
+.wcard-t > a { font-weight: 550; color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
+.wcard-t > a:hover { text-decoration: underline; }
+.wcard-m { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 3px; color: var(--muted); font-size: var(--fs-xs); }
+.wcard-step { color: var(--text-2); }
+.wcard.live .wcard-step::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 5px; vertical-align: middle; }
+.wcard-res { margin: 0; font-size: var(--fs-sm); color: var(--text-2); overflow-wrap: anywhere; }
+.wcard-acts { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+.wcard-steer > summary { list-style: none; }
+.wcard-steer > summary::-webkit-details-marker { display: none; }
+.wcard-steer[open] { flex-basis: 100%; order: 9; }
+.wcard-steer form { display: flex; gap: 8px; align-items: flex-end; margin-top: 8px; }
+.wcard-steer textarea { flex: 1; min-width: 0; font: inherit; font-size: var(--fs-sm); padding: 6px 10px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--bg); color: var(--text); resize: vertical; }
+.avatar.sm { width: 26px; height: 26px; font-size: 13px; }
+/* panel phải "Đội đang làm gì" */
+.team-need { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.need-btn { border-color: var(--danger-line); color: var(--danger); }
+.team-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.team-list li { display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
+.team-b { flex: 1; min-width: 0; }
+.team-n { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: var(--fs-sm); font-weight: 550; }
+.team-t, .team-s { font-size: var(--fs-xs); color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-s { color: var(--muted); }
+.team-list .btn.sm { padding: 0 10px; flex: 0 0 auto; }
+.team-foot { margin: 12px 0 0; }
+.side-fold > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; min-height: 32px; }
+.side-fold > summary::-webkit-details-marker { display: none; }
+.side-fold > summary h3 { margin: 0; }
+.side-fold > summary .chev { margin-left: auto; color: var(--muted); transition: transform .15s; }
+.side-fold[open] > summary .chev { transform: rotate(180deg); }
+.side-fold[open] > summary { margin-bottom: 8px; }
+/* hội thoại mới: dòng tình hình + gợi ý nổi khi có việc chờ */
+.hero-line { margin: 10px 0 0; font-size: var(--fs-sm); color: var(--text-2); }
+.linkish { background: none; border: 0; padding: 0; font: inherit; color: var(--danger); text-decoration: underline; cursor: pointer; }
+.mgr-suggest button.hot { border-color: var(--danger-line); color: var(--danger); background: var(--danger-soft); }
+.mgr-suggest button.hot .ic { color: var(--danger); }
+/* phím tắt: chỉ hiện khi đang gõ (màn hẹp đã ẩn hẳn) */
+.coord .composer-hint { opacity: 0; transition: opacity .15s; }
+.coord .mgr-form:focus-within .composer-hint { opacity: 1; }
+/* tin mở từ kết quả tìm kiếm */
+.coord .mm.hl { outline: 2px solid var(--accent); outline-offset: 6px; border-radius: var(--r); transition: outline-color 1s; }
+/* diễn biến lượt chạy trong panel trượt (`/runs/<id>?panel=1`) */
+.run-pcard .fview-head { gap: 8px; flex-wrap: wrap; }
+.run-pcard .run-ptx { margin-top: 12px; }
+@media (max-width: 760px) {
+  .ctray { margin: 4px 10px; }
+  .ctray-list { max-height: 46vh; }
+  .ctray-wm { display: none; }
+}

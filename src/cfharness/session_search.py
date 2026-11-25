@@ -707,6 +707,8 @@ def _mode_search(conn: sqlite3.Connection, p: dict[str, Any], vis: Visibility) -
 
     def hit(r: sqlite3.Row) -> dict[str, Any]:
         h = _msg(r, full=False)
+        if r["source"] == "manager" and r["ref"]:
+            h["ref"] = r["ref"]  # "mm:<id tin>" → web mở đúng tin trong hội thoại điều phối (`/manager?c=…#m<id>`)
         h["score"] = round(-float(r["rank"] or 0.0), 4)
         h["snippet"] = _snippet(r["text"], needles)
         return h

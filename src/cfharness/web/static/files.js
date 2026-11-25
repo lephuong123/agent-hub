@@ -6,6 +6,8 @@
  * - Panel xem file (base.html #fpanel, kiểu claude.ai): bấm "Xem" ở chip (không giữ Ctrl/⌘/Shift, không chuột giữa) → nạp
  *   /files/view?…&panel=1 (HTML do server dựng + escape) vào panel trượt từ phải; Esc / × để đóng, nút ↗ mở tab mới như cũ.
  *   HTML nhận về được parse bằng DOMParser rồi gắn node (script trong đó không bao giờ chạy; CSP script-src 'self' chặn thêm một lớp).
+ * - Cùng panel cho diễn biến một lượt chạy: link `a[data-xpanel]` (thẻ việc / "Đội đang làm gì" ở trang Điều phối) → `/runs/<id>?panel=1`,
+ *   tiêu đề panel từ `data-ptitle` (gán textContent).
  * - Markdown: nút "Xem đẹp" / "Mã nguồn" (data-fmode) đổi data-mode của .fview-body — nhớ lựa chọn theo người xem (localStorage).
  */
 (function () {
@@ -104,6 +106,8 @@
   function mark(a) {
     var on = document.querySelectorAll("a.fchip-view.on");
     for (var i = 0; i < on.length; i++) on[i].classList.remove("on");
+    on = document.querySelectorAll("a[data-xpanel].on");
+    for (i = 0; i < on.length; i++) on[i].classList.remove("on");
     cur = a;
     curHref = a ? a.getAttribute("href") : "";
     if (cur) cur.classList.add("on");
@@ -130,9 +134,9 @@
     var href = a.getAttribute("href");
     var chip = a.closest("[data-path]");
     var name = (chip && chip.getAttribute("data-path")) || "";
-    name = name.split("\\").join("/").split("/").pop() || "Xem file";
+    name = a.getAttribute("data-ptitle") || name.split("\\").join("/").split("/").pop() || "Xem file";
     ptitle.textContent = name;
-    ptitle.title = (chip && chip.getAttribute("data-path")) || "";
+    ptitle.title = (chip && chip.getAttribute("data-path")) || name;
     ptab.href = href;
     mark(a);
     openPanel();
@@ -169,7 +173,7 @@
   }
 
   document.addEventListener("click", function (e) {
-    var a = e.target.closest && e.target.closest("a.fchip-view");
+    var a = e.target.closest && e.target.closest("a.fchip-view, a[data-xpanel]");
     if (!a || a.classList.contains("fchip-fh")) return;
     if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;  // giữ phím → tab mới như cũ
     e.preventDefault();

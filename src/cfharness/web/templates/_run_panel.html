@@ -1,0 +1,18 @@
+{% import "_macros.html" as m with context %}
+{% import "_items.html" as ti %}
+{#- Diễn biến của một lượt chạy trong panel trượt bên phải (`/runs/<id>?panel=1`, static/files.js) — mở từ thẻ việc / "Đội đang làm gì" ở
+    trang Điều phối. Ảnh chụp tại lúc mở (không SSE); "Mở trang đầy đủ" để xem trực tiếp, nhắn thêm, dừng. Chữ agent autoescape;
+    chỉ `it.html` (present.md, đã cứng hoá) là |safe — qua macro `_items.html` như trang run. Lớp `fview-card` = dấu hiệu cho files.js. -#}
+{% set tt = run_title(run, {run.task_id: run.task_title} if run.task_title else None, 90) %}
+<section class="card fview-card run-pcard">
+  <div class="fview-head"><h1>{{ tt }}</h1>{{ m.run_pill(run_disp) }}</div>
+  <div class="fview-meta"><span>{{ run.agent_id }}</span>{% if run.started_at or run.queued_at %}<span>{{ m.rel(run.started_at or run.queued_at) }}</span>{% endif %}{% if run.cost_usd %}<span>{{ run.cost_usd|usd }}</span>{% endif %}</div>
+  <div class="fview-actions"><a class="btn sm" href="/runs/{{ run.id }}">{{ m.icon('external') }}<span>Mở trang đầy đủ</span></a>
+    {% if run.task_id %}<a class="btn ghost sm" href="/tasks/{{ run.task_id }}">{{ m.icon('task') }}<span>Công việc</span></a>{% endif %}</div>
+  {% if pend %}<p class="banner danger small">{{ m.icon('shield') }}<span>Đang chờ bạn duyệt {{ pend|length }} thao tác — duyệt ở khay “Cần bạn” trên ô nhập.</span></p>{% endif %}
+  <div class="transcript run-ptx">
+    {% if hidden %}<p class="muted small">… {{ hidden }} mục trước — <a href="/runs/{{ run.id }}">xem đủ ở trang lượt chạy</a></p>{% endif %}
+    {% for it in items %}{{ ti.item(it) }}{% endfor %}
+    {% if not items %}{{ m.empty("Chưa có diễn biến nào" ~ (" — đang chờ slot" if run.status == 'queued' else "") ~ ".", "clock") }}{% endif %}
+  </div>
+</section>

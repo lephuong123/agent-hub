@@ -10,6 +10,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Luồng việc ngay trong trò chuyện
+- **Theo dõi và duyệt việc của cả đội mà không rời khung chat**: khay **"N việc cần bạn"** ghim ngay trên ô nhập (cả ở hội thoại mới) liệt kê thao tác phá huỷ chờ duyệt và câu hỏi chờ bạn của mọi agent — cho phép/từ chối/trả lời tại chỗ với cùng bước xác nhận như trang Duyệt (thao tác nặng vẫn sang trang Duyệt). Khi điều phối viên giao task/chạy việc, dưới khối "Đã làm N việc" có **thẻ việc tự cập nhật**: agent, trạng thái, bước đang làm, kết quả khi xong, nút **Xem** (diễn biến trong panel trượt bên phải), **Nhắn thêm**, **Dừng**. Panel phải đổi thành **"Đội đang làm gì"** (việc cần bạn, agent đang làm, chi phí hôm nay); "Kiểm tra ngay"/"Huỷ chỉ định" gọn vào mục "Điều phối viên". Hội thoại mới cho biết bao nhiêu agent đang có việc/việc cần bạn và lại hiện các gợi ý câu hỏi; gợi ý phím tắt chỉ hiện khi đang gõ. **Tìm kiếm** nhóm kết quả theo hội thoại và mở đúng hội thoại (tô sáng tin tìm được); kết quả của lượt chạy thường vẫn mở lượt chạy. Bộ lọc **Lượt chạy → Chờ duyệt** giờ gồm cả lượt đang chạy có thao tác chờ duyệt.
+
 ---
 
 ## v0.2.32 — 2026-11-25
