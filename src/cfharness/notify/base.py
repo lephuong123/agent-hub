@@ -62,7 +62,9 @@ class QueuedNotifier:
     # ------------------------------------------------------------------ cấu hình (lớp con ghi đè)
     def cfg(self) -> dict[str, Any]:
         # gọi ở MỌI event của bus → nhớ theo revision của config (plan-api-caching PR1); trả bản sao nông như trước
-        rev = self.hub.config.revision
+        rev = getattr(self.hub.config, "revision", None)  # config giả (test) không có revision → không nhớ
+        if rev is None:
+            return dict(self.hub.config.get(f"notify.{self.channel}") or {})
         memo = getattr(self, "_cfg_memo", None)
         if memo is None or memo[0] != rev:
             memo = (rev, dict(self.hub.config.get(f"notify.{self.channel}") or {}))

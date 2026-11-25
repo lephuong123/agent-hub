@@ -88,7 +88,9 @@ class OtelExporter:
     @property
     def enabled(self) -> bool:
         # hỏi ở MỌI event → nhớ theo revision của config (plan-api-caching PR1)
-        rev = self.hub.config.revision
+        rev = getattr(self.hub.config, "revision", None)
+        if rev is None:
+            return bool(self.cfg().get("enabled"))
         memo = getattr(self, "_enabled_memo", None)
         if memo is None or memo[0] != rev:
             memo = (rev, bool(self.cfg().get("enabled")))
