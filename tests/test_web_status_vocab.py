@@ -117,3 +117,11 @@ def test_board_template_collapses_empty_columns_and_empty_state():
     assert html.count('class="col ') == 5
     empty = tpl.render(cols={c: [] for c in P.TASK_COLUMNS}, q={}, csrf="x")
     assert "Chưa có việc" in empty and 'href="/manager"' in empty
+
+
+def test_heavy_data_vocab_leaks():
+    """Dữ liệu thật nhiều: run tự học (prompt Hermes tiếng Anh) và task chờ trưởng nhóm không lộ chuỗi nội bộ."""
+    from cfharness.web import present as P
+
+    assert P.run_title({"prompt": "Review the conversation above and update two things:\n\n1. memory"}) == "Tự học · rà soát hội thoại"
+    assert P.wait_reason("no_lead") == "team chưa có trưởng nhóm"
