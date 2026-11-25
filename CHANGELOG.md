@@ -10,6 +10,10 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+---
+
+## v0.2.38 — 2026-11-25
+
 ### Super Admin Console — sửa lỗi web SAC (#206)
 - Mã QR trên trang kích hoạt tài khoản hiện được (trước bị vỡ ảnh); form không còn bị từ chối "Bad Origin" trên Chrome/Safari (`Referrer-Policy: same-origin` thay cho `no-referrer`).
 - Mọi nút thao tác không còn báo "Bad CSRF".
@@ -18,6 +22,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - Nút "Gửi lại báo cáo ngày" không còn lồng trong form lọc ngày (trước bấm không gửi, còn đưa mã CSRF lên URL).
 - Nhập user từ CSV báo đúng từng dòng lỗi / số dòng hợp lệ khi chạy thử, thay vì luôn "xong".
 - Tên miền chưa kiểm hiện "—" ở cột HTTP/TLS thay vì chữ "ngày" trơ trọi.
+
+### Lưu ý khi cập nhật
+- Không có migration DB hay cấu hình phải sửa tay. Chỉ ảnh hưởng Super Admin Console (bản cài `/opt/cfharness`); hub của user không đổi hành vi.
 
 ---
 
