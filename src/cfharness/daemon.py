@@ -1077,7 +1077,12 @@ def _kickstart_autostart(paths: HubPaths) -> bool:
     return True
 
 
-def spawn_background(paths: HubPaths, wait_s: float = 15.0) -> int:
+# Chờ daemon mở socket tối đa bấy nhiêu giây (trả về ngay khi sẵn sàng). Ngay sau `uv tool install` (cập nhật), lần chạy đầu phải biên dịch
+# lại .pyc + Windows Defender quét file mới → daemon có thể mất 30 s+ mới lên; 15 s cũ làm bộ cập nhật tưởng hỏng và quay về bản cũ.
+SPAWN_WAIT_S = 120.0
+
+
+def spawn_background(paths: HubPaths, wait_s: float = SPAWN_WAIT_S) -> int:
     """Khởi chạy daemon nền (tách session), chờ socket sẵn sàng. Trả pid."""
     paths.ensure()
     _rotate_daemon_out(paths, _log_settings(paths))
