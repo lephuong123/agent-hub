@@ -49,11 +49,9 @@ def test_create_validation_lists_fields(hub):
     assert {"id", "model"} <= fields
 
 
-def test_create_unknown_mcp_rejected(hub, hub_home):
-    with pytest.raises(HubError, match="registry"):
-        hub.agents.create({"id": "c", "name": "c", "mcp_servers": ["vb"]})
-    hub_home.mcp_registry.write_text(yaml.safe_dump({"servers": {"vb": {"command": "echo"}}}))
-    assert hub.agents.create({"id": "c", "name": "c", "mcp_servers": ["vb"]})["mcp_servers"] == ["vb"]
+def test_create_with_legacy_mcp_servers_ignored(hub):
+    """PR7: không còn gán MCP theo agent — trường `mcp_servers` cũ được nhận rồi bỏ qua (không lỗi, không lưu)."""
+    assert hub.agents.create({"id": "c", "name": "c", "mcp_servers": ["vb"]})["mcp_servers"] == []
 
 
 def test_list_show_edit_revisions(hub):

@@ -126,10 +126,10 @@ uv run cfharness web --open        # khởi động web (http://cfharness.localh
   thao tác phá huỷ — bấm *Cho phép một lần* hoặc *Từ chối* (có hộp xác nhận), và ô **Giao việc nhanh**.
 - **Xem live**: bấm *Xem live* ở một agent → diễn biến chạy trực tiếp (lời agent, tool đang chạy, diff), ô **Chỉ đạo** để nói thêm
   với agent đang chạy, nút **Dừng run**. Khi xong: kết quả, chi phí, nút 👍/👎 để agent tự học, ô **Nói tiếp** để tiếp hội thoại.
-- **Agent → + Tạo agent**: chọn mẫu (researcher/coder/reviewer/ops), tích các **MCP** được dùng, đặt ngân sách → *Tạo agent*.
+- **Agent → + Tạo agent**: chọn mẫu (researcher/coder/reviewer/ops), đặt ngân sách (mọi agent dùng mọi MCP của tài khoản Claude — không cần gán) → *Tạo agent*.
   Trang agent có ô **Giao việc**, lịch sử cấu hình (quay về bản cũ), tạm dừng, xoá mềm (khôi phục ở *Thùng rác*).
 - Các trang khác: *Công việc* (kanban + phụ thuộc), *Team*, *Tự học* (thay đổi đã áp dụng, diff, rollback, golden task),
-  *MCP* (thêm/kiểm tra/nhập từ Claude Code), *Chi phí*, *Nhật ký* (audit), *Cài đặt* (ESTOP, cấu hình thường dùng, secret).
+  *MCP* (danh sách chỉ đọc theo tài khoản Claude — thêm server bằng `claude mcp add`), *Chi phí*, *Nhật ký* (audit), *Cài đặt* (ESTOP, cấu hình thường dùng, secret).
 
 Dùng được trên điện thoại/màn nhỏ; sáng/tối theo hệ thống. Ảnh màn: `docs/screenshots/web/`.
 
@@ -232,7 +232,7 @@ hub.db (SQLite WAL)  hub.sock  hub.pid  config.yaml
 agents/<id>/{config.yaml, SOUL.md, MEMORY.md, USER.md, skills/, .archive/, runtime/, workspaces/}
 runs/<run_id>.jsonl.gz (stdout thô)  runs/<run_id>.stderr.log
 trash/agents/<id>__<ts>/   (xoá mềm, giữ 30 ngày)
-logs/hub.log (JSON lines, xoay vòng)  mcp/registry.yaml
+logs/hub.log (JSON lines, xoay vòng)
 ```
 
 ## Kiểm thử

@@ -178,7 +178,7 @@ LEARN_TOOLS: dict[str, dict[str, Any]] = {
         "inputSchema": {"type": "object", "properties": {"name": _S, "absorbed_into": _S, "reason": _S, "rationale": _S}, "required": ["name", "absorbed_into"]},
     },
     "propose_config_change": {
-        "description": "Change your own agent configuration: changes = {model, effort, fallback_model, tool_policy, mcp_servers, limits} and/or soul (full new SOUL.md). "
+        "description": "Change your own agent configuration: changes = {model, effort, fallback_model, tool_policy, limits} and/or soul (full new SOUL.md). "
                        "Evaluated on golden tasks BEFORE applying; bounded by the human's config_bounds; never escalates destructive permissions." + _PROPOSAL_NOTE,
         "inputSchema": {"type": "object", "properties": {"changes": {"type": "object"}, "soul": _S, "rationale": _S}},
     },
@@ -285,7 +285,6 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
     "digest_get": _t("Latest learning digest (or one by id).", {"id": _S}, ro=True),
     "cost_report": _t("Cost breakdown since a time (by agent|team|day|kind|model).", {"by": _S, "since": _S}, ro=True),
     "templates": _t("Agent templates you can create agents from (name, role, model, tools).", ro=True),
-    "mcp_registry_list": _t("MCP servers registered by the human (names you may assign to agents). No secrets.", ro=True),
     "system_list": _t("Systems OUTSIDE the hub that the owner registered (apps in ~/Workspace) and their launchd (macOS) / Task Scheduler (Windows) jobs: label, kind "
                       "(service = always running, e.g. a web server or bot; scheduled = timed, e.g. daily Telegram reports), schedule, status "
                       "(running|idle|paused|not_loaded|error), locked. A system's `path` is a valid task workspace when its code must change.", ro=True),
@@ -303,14 +302,14 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
     # ---- ghi (trong quyền)
     "agent_create": _t("Create an agent. Either template (see templates) + optional spec overrides, or a full spec {name, role, description, "
                        "model, effort, fallback_model, tool_policy{tools, allowed_tools, disallowed_tools, permission_mode, browser: none|playwright|chrome|auto (chrome/auto = Claude in Chrome, the owner's real browser), "
-                       "web_allow_domains: [domain globs] limiting WebFetch (null = any; on existing agents you can only narrow it)}, mcp_servers, limits, "
+                       "web_allow_domains: [domain globs] limiting WebFetch (null = any; on existing agents you can only narrow it)}, limits, "
                        "workspace_default}. soul = full SOUL.md in English (optional). Write a precise `description`: tasks are routed by it." + _DENIED,
                        {"id": _S, "template": _S, "spec": _O, "soul": _S, "rationale": _S}, ["id"]),
     "agent_clone": _t("Add another agent of the same kind when one is busy: copies src's config (fields you may set), SOUL and skills "
                       "(not memory) into a new agent id (default: next free <src>-N) and adds it to src's teams with the same role "
                       "(lead → worker). Then send the work to the clone." + _DENIED,
                       {"src": _S, "id": _S, "name": _S, "join_teams": {"type": "boolean"}, "rationale": _S}, ["src"]),
-    "agent_update": _t("Change another agent: changes = subset of {name, role, description, model, effort, fallback_model, tool_policy, mcp_servers, "
+    "agent_update": _t("Change another agent: changes = subset of {name, role, description, model, effort, fallback_model, tool_policy, "
                        "limits, workspace_default}; soul = full new SOUL.md. Recorded in the ledger (rollback-able). You can ADD disallowed tool "
                        "patterns but never remove ones the human set." + _DENIED, {"id": _S, "changes": _O, "soul": _S, "rationale": _S}, ["id"]),
     "agent_archive": _t("Soft-delete (archive) an agent; recoverable with agent_restore." + _DENIED, {"id": _S, "detach_teams": {"type": "boolean"}}, ["id"]),
@@ -490,7 +489,7 @@ FS_TOOLS = {**FS_READ_TOOLS, **FS_WRITE_TOOLS}
 FS_BROWSE_TOOLS = ("fs_list", "fs_stat", "fs_read", "fs_versions", "fs_link")
 TOOLS.update(FS_TOOLS)
 MANAGER_READ_TOOLS = frozenset(n for n, t in MANAGER_TOOLS.items() if (t.get("annotations") or {}).get("readOnlyHint"))
-# Mọi tool đọc của hub-self (mọi vai trò) — ToolWriteWatcher không audit chúng là `tool.write` (hub-self không nằm trong registry MCP)
+# Mọi tool đọc của hub-self (mọi vai trò)
 READ_ONLY_TOOLS = frozenset(n for n, t in {**TOOLS, **MANAGER_TOOLS}.items() if (t.get("annotations") or {}).get("readOnlyHint"))
 _KNOW = ("skills_list", "skill_view")
 ROLE_TOOLS = {

@@ -1221,7 +1221,7 @@ MGR_TARGET_KINDS: dict[str, tuple[str, str]] = {
     "team": ("team", "/teams#team-"),
     "approval": ("yêu cầu duyệt", "/approvals#"),
     "learning": ("thay đổi học", "/learnings/"),
-    "mcp": ("MCP", "/mcp/"),
+    "mcp": ("MCP", "/mcp#"),  # danh sách chỉ đọc — không còn trang riêng từng server
 }
 _TOOL_KIND = (("agent_", "agent"), ("team_", "team"), ("task_", "task"), ("run_", "run"), ("learn_", "learning"))
 _ID_SAFE = __import__("re").compile(r"^[A-Za-z0-9_.:\-]{1,128}$")

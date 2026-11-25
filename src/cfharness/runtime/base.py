@@ -63,7 +63,8 @@ class RunSpec:
     cwd_main_checkout: bool = False
     # M4-B: run eval (FR-LN-10) — `--no-session-persistence`, không ghi session ra đĩa
     no_session_persistence: bool = False
-    # run điều phối viên có connector claude.ai: ghi đè `runtime.claude.isolation` (setting_sources/strict_mcp_config) cho riêng run
+    # ghi đè `runtime.claude.isolation` cho riêng run: run làm việc bỏ strict_mcp_config (MCP của tài khoản — plan-mcp-claude-native
+    # PR7); run có connector claude.ai thêm setting_sources=user
     isolation_overrides: dict[str, Any] | None = None
     allowed_mcp_prefixes: list[str] | None = None
     # connector claude.ai người cho phép (slug, vd "Google_Drive") — adapter báo `connector.unavailable` khi CLI không nạp/chưa kết nối
@@ -74,9 +75,6 @@ class RunSpec:
     # auth_mode="login" của tài khoản token đang dùng: thư mục cấu hình riêng (`HUB_HOME/claude-config/<id>/`, accounts/claude_config.py)
     # → CLAUDE_CONFIG_DIR của run (phiên claude.ai + connector của CHÍNH tài khoản đó). None = cấu hình mặc định của user OS
     claude_config_dir: Path | None = None
-    # MCP nguồn claude gán cho agent (plan-mcp-claude-native PR2): claude tự nạp từ `.claude.json` của tài khoản (không có trong mcp.json);
-    # adapter báo `mcp.unavailable` khi init không có server / server chưa `connected` (vd needs-auth)
-    claude_mcp_servers: list[str] | None = None
     # agent được người đặt trust full (guard/service.trust_set): cho phép `bypassPermissions` trên mọi workspace (ngoại lệ NFR-15 do người chọn)
     trust_full: bool = False
     # plugin Claude Code của agent (plugins.py) → `--plugin-dir <thư mục>` mỗi plugin
@@ -218,7 +216,6 @@ def make_adapter(spec: RunSpec) -> ClaudeStreamAdapter:
         require_no_auto_memory=spec.require_no_auto_memory,
         allowed_mcp_prefixes=spec.allowed_mcp_prefixes,
         expected_connectors=spec.connectors,
-        expected_mcp=spec.claude_mcp_servers,
         persist_thinking=spec.persist_thinking,
         thinking_max=spec.thinking_max_chars,
     )

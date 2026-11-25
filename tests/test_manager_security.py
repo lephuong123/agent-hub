@@ -203,21 +203,16 @@ async def test_manager_cannot_remove_human_disallowed_patterns(env):
     await _deny_rpc(d, rid, "agent.update", {"id": "w1", "changes": {"tool_policy": {"disallowed_tools": ["Bash(rm:*)"]}}}, match="git push")
 
 
-# ------------------------------------------------------------------ MCP ngoài registry / MCP của hub
-async def test_manager_cannot_assign_unregistered_or_hub_mcp(env):
+# ------------------------------------------------------------------ MCP: không còn gán theo agent (PR7)
+async def test_manager_cannot_set_mcp_servers(env):
+    """MCP bên thứ ba do claude quản lý, mọi agent dùng chung → `mcp_servers` không còn là trường điều phối viên đặt được; tool
+    `mcp_registry_list` và RPC registry đã gỡ."""
     d, rid = env
-    await _deny_tool(d, rid, "agent_update", {"id": "w1", "changes": {"mcp_servers": ["evil"]}}, match="registry")
-    await _deny_tool(d, rid, "agent_create", {"id": "w6", "spec": {"mcp_servers": ["evil"]}}, match="registry")
-    d.hub.mcp.add({"name": "docs", "transport": "stdio", "trust": "trusted"})
-    d.hub.mcp.add({"name": "raw", "transport": "stdio"})  # untrusted (mặc định) → chỉ người gán (MGR-7d)
-    await _deny_tool(d, rid, "agent_update", {"id": "w1", "changes": {"mcp_servers": ["raw"]}}, match="untrusted")
-    names = {m["name"] for m in await tool(d, rid, "mcp_registry_list")}
-    assert "docs" in names
-    await _deny_rpc(d, rid, "mcp.add", {"name": "x", "config": {"command": "x"}})
-    await _deny_rpc(d, rid, "mcp.assign", {"agent": "w1", "server": "x"})
+    await _deny_tool(d, rid, "agent_update", {"id": "w1", "changes": {"mcp_servers": ["evil"]}}, match="không được phép")
+    await _deny_tool(d, rid, "agent_create", {"id": "w6", "spec": {"mcp_servers": ["evil"]}}, match="không được phép")
+    with pytest.raises(HubError):
+        await tool(d, rid, "mcp_registry_list")
     assert d.hub.store.get_agent("w1")["mcp_servers"] in ([], None)
-    await tool(d, rid, "agent_update", {"id": "w1", "changes": {"mcp_servers": ["docs"]}})  # trong registry → được
-    assert d.hub.store.get_agent("w1")["mcp_servers"] == ["docs"]
 
 
 # ------------------------------------------------------------------ workspace vào vùng an toàn

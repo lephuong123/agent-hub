@@ -34,7 +34,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Button, DataTable, Footer, Input, Label, RichLog, Select, SelectionList, Static
+from textual.widgets import Button, DataTable, Footer, Input, Label, RichLog, Select, Static
 
 from ..rpc import DaemonUnavailable, RpcError
 from ..ui import theme as th
@@ -357,9 +357,8 @@ class HtopScreen(Screen):
         app = self.app
         try:
             templates = await app.client.call("template.list")  # type: ignore[attr-defined]
-            mcp = [m["name"] for m in await app.client.call("mcp.list") or []]  # type: ignore[attr-defined]
-        except Exception:  # best-effort: daemon cũ/lỗi → form không có gợi ý template/MCP
-            templates, mcp = [], []
+        except Exception:  # best-effort: daemon cũ/lỗi → form không có gợi ý template
+            templates = []
         agent = None
         if agent_id:
             try:
@@ -386,7 +385,7 @@ class HtopScreen(Screen):
             await app.refresh_snapshot()  # type: ignore[attr-defined]
             return None
 
-        app.push_screen(AgentFormScreen(agent, templates, mcp, save))
+        app.push_screen(AgentFormScreen(agent, templates, save))
 
     def action_delete_agent(self) -> None:
         r = self.selected()
@@ -1070,11 +1069,10 @@ class TasksScreen(Screen):
 class AgentFormScreen(ModalScreen[None]):
     BINDINGS = [Binding("escape", "cancel", "Huỷ")]
 
-    def __init__(self, agent: dict[str, Any] | None, templates: list[dict[str, Any]], mcp: list[str], save) -> None:
+    def __init__(self, agent: dict[str, Any] | None, templates: list[dict[str, Any]], save) -> None:
         super().__init__()
         self.agent = agent
         self.templates = templates
-        self.mcp = mcp
         self.save = save
 
     def compose(self) -> ComposeResult:
@@ -1107,9 +1105,6 @@ class AgentFormScreen(ModalScreen[None]):
                     yield Label("Ngân sách $/run")
                     v = lim.get("max_budget_usd_per_run")
                     yield Input(value="" if v is None else str(v), placeholder="vd 0.3", id="f-budget")
-            yield Label("MCP servers (Space để chọn)")
-            chosen = set(a.get("mcp_servers") or [])
-            yield SelectionList[str](*[(m, m, m in chosen) for m in self.mcp], id="f-mcp")
             yield Label("", id="f-error")
             with Horizontal(id="buttons"):
                 yield Button("Lưu", variant="primary", id="save")
@@ -1151,9 +1146,6 @@ class AgentFormScreen(ModalScreen[None]):
             except ValueError:
                 self._error("Ngân sách phải là số")
                 return
-        mcp = list(self.query_one("#f-mcp", SelectionList).selected)
-        if self.mcp and (mcp or (self.agent or {}).get("mcp_servers")):
-            changes["mcp_servers"] = mcp
         data: dict[str, Any] = {"changes": changes}
         if not self.agent:
             aid = self.query_one("#f-id", Input).value.strip()

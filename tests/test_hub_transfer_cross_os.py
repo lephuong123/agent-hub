@@ -264,6 +264,8 @@ def _windowsify(pkg: Path, pairs: list[tuple[str, str]], extra_state: dict | Non
 def _add_mcp(home: Path, servers: dict[str, str]) -> None:
     c = sqlite3.connect(home / "hub.db")
     with c:
+        c.execute("CREATE TABLE IF NOT EXISTS mcp_servers (name TEXT PRIMARY KEY, transport TEXT NOT NULL, config TEXT NOT NULL, "
+                  "trust TEXT, tools_include TEXT, tools_exclude TEXT, source TEXT, created_at TEXT, updated_at TEXT, deleted_at TEXT)")
         for name, cmd in servers.items():
             cfg = {"name": name, "transport": "stdio", "command": cmd, "args": []}
             c.execute("INSERT INTO mcp_servers (name, transport, config, trust, tools_include, tools_exclude, source, created_at, updated_at) "
@@ -291,11 +293,11 @@ def test_import_package_from_windows_on_this_machine(tmp_path, monkeypatch):
     assert not plan["blockers"], plan["blockers"]
     assert {"from": WA + r"\.cfharness", "to": str(dst.home)} in plan["path_map"] and {"from": WA, "to": str(ub)} in plan["path_map"]
     assert any("gói từ máy windows" in w for w in plan["warnings"]) and any("install-service" in w for w in plan["warnings"])
-    assert plan["mcp_missing"] == [{"server": "winnode", "command": r"C:\Program Files\nodejs\node.exe", "reason": "đường dẫn kiểu windows trên máy posix"}]
+    assert "mcp_missing" not in plan  # PR7: hub không giữ lệnh MCP — không kiểm khi nhập
     assert plan["claude_sessions"]["sessions"] == 3 and not dst.home.exists()
 
     r = T.import_package(dst, wpkg, claude_home=chome_b)
-    assert r["claude_sessions"]["written"] and r["mcp_missing"][0]["server"] == "winnode"
+    assert r["claude_sessions"]["written"] and "mcp_missing" not in r
     new_proj = str(ub / "Workspace" / "proj")
     new_conv = str(dst.home / "agents" / "a1" / "workspaces" / "conv-mc_0001")
     c = sqlite3.connect(dst.db)
@@ -305,9 +307,7 @@ def test_import_package_from_windows_on_this_machine(tmp_path, monkeypatch):
     st = {r_["key"]: json.loads(r_["value"]) for r_ in c.execute("SELECT key, value FROM hub_state")}
     assert st["keep_me"] == {"p": new_proj} and st["win_forward"] == {"p": new_proj + "/x"}
     assert c.execute("SELECT cwd FROM runs WHERE id='r_m'").fetchone()[0] == new_conv
-    mcp = {x["name"]: x["probe_error"] for x in c.execute("SELECT name, probe_error FROM mcp_servers")}
-    assert mcp["winnode"].startswith("[hub]") and "cfharness mcp edit winnode" in mcp["winnode"] and mcp["plain"] is None
-    assert st["import_followups"]["mcp_missing"][0]["server"] == "winnode"
+    assert "mcp_missing" not in (st.get("import_followups") or {})
     blob = "\n".join(str(v) for v in st.values())
     assert WA not in blob and "C:/Users/a" not in blob and "c:/Users/a" not in blob
     c.close()
@@ -360,7 +360,6 @@ def test_import_posix_package_into_simulated_windows_target(tmp_path, monkeypatc
     assert not plan["blockers"], plan["blockers"]
     assert plan["target_os"] == "windows" and {"from": "agents/a1/skills/con/SKILL.md", "to": "agents/a1/skills/con-skill/SKILL.md"} in plan["renamed"]
     assert any("sandbox" in w for w in plan["warnings"]) and any("đổi tên" in w for w in plan["warnings"])
-    assert plan["mcp_missing"][0]["reason"] == "đường dẫn kiểu posix trên máy windows"
 
     r = T.import_package(dst, pkg, **kw)
     sk = dst.home / "agents" / "a1" / "skills" / "con-skill"
@@ -376,7 +375,7 @@ def test_import_posix_package_into_simulated_windows_target(tmp_path, monkeypatc
     assert st["keep_me"] == {"p": WB + r"\Workspace\proj"}  # cột JSON: escape đúng, đọc lại được
     fu = st["import_followups"]
     assert {"from": "agents/a1/skills/con/references/a:b.md", "to": "agents/a1/skills/con-skill/references/a_b.md"} in fu["renamed"]
-    assert fu["skills_renamed"] == [{"scope": "agent", "owner": "a1", "old": "con", "new": "con-skill"}] and fu["mcp_missing"][0]["server"] == "brew"
+    assert fu["skills_renamed"] == [{"scope": "agent", "owner": "a1", "old": "con", "new": "con-skill"}] and "mcp_missing" not in fu
     c.close()
     cfg = yaml.safe_load(dst.config.read_text())
     assert WB + r"\Workspace" in cfg["workspace"]["allowed_roots"]

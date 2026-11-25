@@ -59,11 +59,11 @@ def test_slug_and_server_names():
     assert connector_server("Abacum (MCP)") == "claude_ai_Abacum__MCP_"
 
 
-def test_resolve_needs_trusted_mcp():
+def test_resolve_connectors_no_mcp_gate():
     ok = resolve_capabilities({"profile": "hermes", "mcp": "trusted", "connectors": ["Claude Docs", "claude.ai Claude Docs", "Atlassian"]})
     assert ok["connectors"] == ("Claude_Docs", "Atlassian") and not ok["warnings"]
-    ro = resolve_capabilities({"profile": "hermes", "connectors": ["Claude Docs"]})  # hermes mặc định read_only_trusted
-    assert ro["connectors"] == () and any("trusted" in w for w in ro["warnings"])
+    # PR7: khoá `mcp` cũ bỏ qua — connectors không còn cần mcp=trusted
+    assert resolve_capabilities({"profile": "hermes", "connectors": ["Claude Docs"]})["connectors"] == ("Claude_Docs",)
     assert resolve_capabilities({"profile": "hermes", "mcp": "trusted"})["connectors"] == ()
     assert resolve_capabilities({"profile": "hermes", "mcp": "trusted", "connectors": "Claude Docs"})["connectors"] == ()
 
@@ -121,12 +121,9 @@ def test_adapter_connector_prefix_not_violation():
 
 async def _connector_manager(d, connectors, add_mcp=None):
     d.hub.config.set("manager.capabilities", {"profile": "hermes", "tools": None, "mcp": "trusted", "web": None, "connectors": connectors})
-    mcp = []
-    if add_mcp is not None:  # MCP bên thứ ba do claude giữ (v0.2.32): server phải có trong cấu hình claude của tài khoản
+    if add_mcp is not None:  # MCP bên thứ ba do claude giữ: server trong cấu hình claude của tài khoản — mọi run nạp (PR7)
         add_mcp("docs")
-        d.hub.mcp.add({"name": "docs", "transport": "stdio", "trust": "trusted"})
-        mcp = ["docs"]
-    d.hub.agents.create({"id": "boss", "name": "boss", "role": "hub boss", "model": "haiku", "tool_policy": {"tools": HERMES_TOOLS}, "mcp_servers": mcp})
+    d.hub.agents.create({"id": "boss", "name": "boss", "role": "hub boss", "model": "haiku", "tool_policy": {"tools": HERMES_TOOLS}})
     await rpc(d, "manager.set", {"agent_id": "boss"})
     res = await rpc(d, "manager.chat", {"channel": "web", "text": "hi"})
     await wait_status(d, res["run_id"])
@@ -137,7 +134,7 @@ async def test_manager_run_spec_with_connectors(d, user_home, claude_mcp):
     spec, _ = await _connector_manager(d, ["Claude Docs"], claude_mcp)
     assert spec.isolation_overrides == {"setting_sources": "user", "strict_mcp_config": False}
     assert spec.allowed_mcp_prefixes and "claude.ai " in spec.allowed_mcp_prefixes
-    assert {"playwright", "video-context", "docs", "hub-guard", "hub-self"} <= set(spec.allowed_mcp_servers)
+    assert spec.allowed_mcp_servers is None  # nạp MCP của tài khoản: không isolation.violation theo tên server
     assert "SessionStart" in spec.allowed_hooks
     st = json.loads(spec.settings_path.read_text())
     assert st["enabledPlugins"] == {"vercel@official": False}
@@ -147,10 +144,8 @@ async def test_manager_run_spec_with_connectors(d, user_home, claude_mcp):
 
 async def test_manager_run_without_connectors_unchanged(d, user_home):
     spec, _ = await _connector_manager(d, None)
-    assert spec.isolation_overrides is None and not spec.allowed_mcp_prefixes
-    assert "playwright" not in (spec.allowed_mcp_servers or [])
+    assert spec.isolation_overrides == {"strict_mcp_config": False} and not spec.allowed_mcp_prefixes  # MCP của tài khoản (PR7)
     assert "enabledPlugins" not in json.loads(spec.settings_path.read_text())
-    assert "ToolSearch" not in spec.tool_policy["tools"]
 
 
 async def test_connectors_need_guard(d, user_home, claude_mcp):
@@ -163,35 +158,25 @@ async def test_connectors_need_guard(d, user_home, claude_mcp):
         return  # manager từ chối khung rộng khi guard tắt (lớp có sẵn) — cũng đạt
     await wait_status(d, res["run_id"], ("running", "failed", "blocked", "completed"))
     specs = [s for s in d.script.specs if s.run_id == res["run_id"]]
-    assert all(s.isolation_overrides is None for s in specs)
+    assert all(not (s.isolation_overrides or {}).get("setting_sources") and not s.connectors for s in specs)
 
 
 # ------------------------------------------------------------------ guard
 async def test_guard_connector_rules(d, user_home, claude_mcp):
+    """PR7: guard không còn lọc theo connector cho phép — mọi tool MCP/connector bên thứ ba = safe; tool của hub giữ luật riêng."""
     _, run_id = await _connector_manager(d, ["Claude Docs", "Abacum (MCP)"], claude_mcp)
-    run = d.hub.store.get_run(run_id)
-    ctx = d.hub.guard.context_for(run)
-    assert ctx.connectors == ("Claude_Docs", "Abacum__MCP_") and ctx.run_mcp_servers == frozenset({"docs"})
+    ctx = d.hub.guard.context_for(d.hub.store.get_run(run_id))
     v = lambda name: classify(name, {}, ctx)  # noqa: E731
-    assert v("mcp__claude_ai_Claude_Docs__read").verdict == "safe"
-    assert v("mcp__claude_ai_Claude_Docs__guide").verdict == "safe"
-    w = v("mcp__claude_ai_Claude_Docs__update")
-    assert w.verdict == "write" and not w.forbidden
-    dl = v("mcp__claude_ai_Claude_Docs__delete")
-    assert dl.verdict == "destructive" and not dl.forbidden  # xoá vẫn qua approval
-    assert v("mcp__claude_ai_Abacum__MCP___get_report").verdict == "safe"  # slug có "__"
-    for name in ("mcp__claude_ai_Gmail__send_message", "mcp__claude_ai_Gmail__search_threads", "mcp__playwright__browser_navigate",
-                 "mcp__plugin_vercel_vercel__deploy"):
-        assert v(name).forbidden, name
-    assert not v("mcp__docs__search").forbidden  # MCP của agent: luật cũ
+    for name in ("mcp__claude_ai_Claude_Docs__read", "mcp__claude_ai_Claude_Docs__update", "mcp__claude_ai_Claude_Docs__delete",
+                 "mcp__claude_ai_Abacum__MCP___get_report", "mcp__claude_ai_Gmail__send_message", "mcp__playwright__browser_navigate",
+                 "mcp__plugin_vercel_vercel__deploy", "mcp__docs__search"):
+        assert v(name).verdict == "safe" and not v(name).forbidden, name
     assert v("mcp__hub-guard__approval_prompt").verdict == "safe"
 
 
 async def test_guard_non_connector_run_unchanged(d, user_home):
     _, run_id = await _connector_manager(d, None)
     ctx = d.hub.guard.context_for(d.hub.store.get_run(run_id))
-    assert ctx.connectors is None
-    v = classify("mcp__claude_ai_Gmail__send_message", {}, ctx)
-    assert v.rule != "mcp_not_in_run"
+    assert classify("mcp__claude_ai_Gmail__send_message", {}, ctx).rule == "mcp_third_party"
     other = dataclasses.replace(ctx, manager_run=False)
-    assert other.connectors is None
+    assert classify("mcp__claude_ai_Gmail__send_message", {}, other).verdict == "safe"

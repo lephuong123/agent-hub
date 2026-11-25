@@ -39,7 +39,7 @@ class Hub:
         self.runs = RunManager(self, runtime)
         self.agents = AgentService(self.store, paths, self.config, self.publish, active_runs=self.runs.active_runs)
         self.agents.hub = self  # MGR-1: validate_workspace cần config/guard/paths của hub
-        # M1 luồng A: self.secrets, self.audit, self.mcp + watcher tool.write (mcp_client/wiring.py)
+        # M1 luồng A: self.secrets, self.audit, self.claude_redact (mcp_client/wiring.py)
         from .mcp_client.wiring import attach as _attach_integration
 
         _attach_integration(self)
@@ -274,8 +274,6 @@ class Hub:
         await self.questions.stop()
         await self.filehub.stop()  # type: ignore[attr-defined]  # SIGTERM tiến trình sync (dừng êm, không bỏ dở commit)
         await self.accounts.close_all_logins()  # type: ignore[attr-defined]  # kill tiến trình `claude setup-token` đang chờ code
-        if getattr(self, "mcp_claude", None) is not None:
-            await self.mcp_claude.close_all()  # type: ignore[attr-defined]  # kill `claude mcp login` đang chờ URL chuyển hướng
         await self.runs.shutdown()
         self.integrity.stop()
         self.audit_watch.stop()  # type: ignore[attr-defined]

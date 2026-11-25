@@ -183,7 +183,7 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     for name, hlp in (("restore", "khôi phục một mục"), ("purge", "XOÁ VĨNH VIỄN (phá huỷ; hiện chỉ agent)")):
         x = ts.add_parser(name, help=hlp, parents=[common])
         x.add_argument("id")
-        x.add_argument("--kind", choices=["agent", "team", "mcp"], help="khi trùng tên giữa các loại")
+        x.add_argument("--kind", choices=["agent", "team"], help="khi trùng tên giữa các loại")
         if name == "purge":
             x.add_argument("--confirm", help="gõ lại id để xác nhận")
     tr.set_defaults(fn=cmd_trash)

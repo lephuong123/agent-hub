@@ -43,7 +43,6 @@ EDITABLE = (
     "effort",
     "fallback_model",
     "tool_policy",
-    "mcp_servers",
     "limits",
     "workspace_default",
     # M3: subagent của Claude Code → `--agents` (FR-RT-13); schema output → `--json-schema` (FR-RT-14)
@@ -52,6 +51,9 @@ EDITABLE = (
     # plugin Claude Code nạp cho run qua `--plugin-dir` (plugins.py) — chỉ người đặt (không có trong manager AGENT_FIELDS)
     "plugins",
 )
+# trường cũ được NHẬN rồi BỎ QUA (YAML agent / gói chuyển hub / client cũ): `mcp_servers` — MCP gán theo agent, bỏ từ
+# plan-mcp-claude-native PR7 (mọi agent dùng chung MCP của tài khoản Claude; migration v35 làm rỗng cột)
+IGNORED_FIELDS = ("mcp_servers",)
 
 DEFAULT_SOUL = """# {name}
 
@@ -82,8 +84,9 @@ class ToolPolicy(BaseModel):
     browser: Literal["none", "playwright", "chrome", "auto"] | None = None
     # allowlist domain WebFetch/Chrome theo agent (guard/service.agent_web_check): None = không giới hạn (hành vi cũ) | [] = chặn mọi WebFetch
     web_allow_domains: list[str] | None = None
-    # connector claude.ai cho run của agent này (docs/dev-notes/manager-connectors.md): None/[] = tắt. Bật = run nạp cấu hình user
-    # ~/.claude (--setting-sources user, bỏ --strict-mcp-config); guard chặn MCP ngoài agent + connector cho phép. Cần guard bật.
+    # connector claude.ai cho run của agent này (docs/dev-notes/manager-connectors.md): None/[] = tắt. Bật = run dùng phiên claude.ai
+    # (/login) để connector được nạp + `--setting-sources user`. Cần guard bật. (MCP/connector KHÔNG bị lọc theo agent — mọi run làm
+    # việc nạp mọi MCP của tài khoản, plan-mcp-claude-native PR7.)
     connectors: list[str] | None = None
 
     @field_validator("permission_mode")
@@ -135,7 +138,6 @@ class AgentConfig(BaseModel):
     effort: str | None = None
     fallback_model: str | None = None
     tool_policy: ToolPolicy = Field(default_factory=ToolPolicy)
-    mcp_servers: list[str] = Field(default_factory=list)
     limits: Limits = Field(default_factory=Limits)
     workspace_default: str | None = None
     subagents: dict[str, dict[str, Any]] | None = None
@@ -191,15 +193,6 @@ def _validation_message(e: ValidationError) -> tuple[str, list[dict[str, str]]]:
     return "cấu hình agent không hợp lệ: " + "; ".join(f"{f['field']}: {f['error']}" for f in fields), fields
 
 
-def load_mcp_registry(paths: HubPaths) -> dict[str, dict[str, Any]]:
-    """Registry MCP tối thiểu cho M0: `HUB_HOME/mcp/registry.yaml` dạng `{servers: {name: {command, args, env…}}}`."""
-    if not paths.mcp_registry.exists():
-        return {}
-    data = yaml.safe_load(paths.mcp_registry.read_text(encoding="utf-8")) or {}
-    servers = data.get("servers", data) if isinstance(data, dict) else {}
-    return servers if isinstance(servers, dict) else {}
-
-
 class AgentService:
     def __init__(
         self,
@@ -218,18 +211,6 @@ class AgentService:
         self.hub: Any = None  # gắn sau trong Hub.__init__ (validate_workspace cần config/guard)
 
     # ------------------------------------------------------------------ helpers
-    def _check_mcp(self, cfg: AgentConfig, *, keep: list[str] | None = None) -> None:
-        """`keep` = server agent ĐÃ có: không kiểm lại (server bị xoá sau khi gán vẫn để agent sửa được / gỡ dần từng cái)."""
-        if not cfg.mcp_servers:
-            return
-        reg = load_mcp_registry(self.paths)
-        missing = [s for s in cfg.mcp_servers if s not in reg and s not in (keep or [])]
-        if missing:
-            raise HubError(
-                f"MCP server không có trong registry ({self.paths.mcp_registry}): {', '.join(missing)}",
-                data={"fields": [{"field": "mcp_servers", "error": f"không có: {m}"} for m in missing]},
-            )
-
     @staticmethod
     def _to_row_fields(cfg: AgentConfig) -> dict[str, Any]:
         d = cfg.model_dump()
@@ -252,7 +233,7 @@ class AgentService:
     # ------------------------------------------------------------------ CRUD
     def create(self, data: dict[str, Any], soul: str | None = None) -> dict[str, Any]:
         try:
-            cfg = AgentConfig(**{k: v for k, v in data.items() if v is not None})
+            cfg = AgentConfig(**{k: v for k, v in data.items() if v is not None and k not in IGNORED_FIELDS})
         except ValidationError as e:
             msg, fields = _validation_message(e)
             raise HubError(msg, data={"fields": fields}) from None
@@ -265,7 +246,6 @@ class AgentService:
         if existing is not None:
             extra = " (đang trong thùng rác — dùng `agent restore`)" if existing.get("deleted_at") else ""
             raise Conflict(f"agent đã tồn tại: {cfg.id}{extra}")
-        self._check_mcp(cfg)
         if cfg.workspace_default:
             from .workspace import validate_workspace
             validate_workspace(self.hub, cfg.workspace_default, "workspace_default")
@@ -322,6 +302,7 @@ class AgentService:
 
     def update(self, agent_id: str, changes: dict[str, Any], *, soul: str | None = None, actor: str = "user") -> dict[str, Any]:
         row = self.get_row(agent_id)
+        changes = {k: v for k, v in changes.items() if k not in IGNORED_FIELDS}
         if "id" in changes and changes["id"] != agent_id:
             raise HubError("không được đổi id của agent")
         unknown = [k for k in changes if k not in EDITABLE and k != "id"]
@@ -341,7 +322,6 @@ class AgentService:
         except ValidationError as e:
             msg, fields = _validation_message(e)
             raise HubError(msg, data={"fields": fields}) from None
-        self._check_mcp(cfg, keep=list(current.get("mcp_servers") or []))
         if cfg.workspace_default and cfg.workspace_default != current.get("workspace_default"):
             from .workspace import validate_workspace
             validate_workspace(self.hub, cfg.workspace_default, "workspace_default")
@@ -445,7 +425,6 @@ class AgentService:
         except ValidationError as e:
             msg, fields = _validation_message(e)
             raise HubError(msg, data={"fields": fields}) from None
-        self._check_mcp(cfg)
         home = Path(row["home_path"])
         rev = int(row["config_revision"]) + 1
         if soul is not None:

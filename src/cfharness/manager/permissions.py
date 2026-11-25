@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from ..auth import Caller
     from ..hub import Hub
 
-AGENT_FIELDS = frozenset({"name", "role", "description", "model", "effort", "fallback_model", "tool_policy", "mcp_servers", "limits", "workspace_default"})
+AGENT_FIELDS = frozenset({"name", "role", "description", "model", "effort", "fallback_model", "tool_policy", "limits", "workspace_default"})
 # `browser` (Claude in Chrome, browser.py): điều phối viên đặt được cho agent KHÁC; agent điều phối viên (kể cả chính nó) thì không —
 # chỉ người (luật "không đụng agent manager" bên dưới)
 TOOL_POLICY_FIELDS = frozenset({"permission_mode", "tools", "allowed_tools", "disallowed_tools", "browser", "web_allow_domains"})
@@ -59,15 +59,14 @@ RATE_LIMITS = {
 # §9 (M7-core.md): khung quyền của điều phối viên — NGƯỜI đặt ở `manager.capabilities` (nhánh `manager` ∈ integrity.SECURITY_KEYS,
 # `config.set` ∈ HUMAN_ONLY). Tool ngoài CAP_TOOLS_MAX không bao giờ được (Task/Agent = subagent, có thể mang permissionMode riêng).
 CAP_PROFILES: dict[str, dict[str, Any]] = {
-    # strict mặc định cho MCP trusted CHỈ ĐỌC (tool đã probe không readOnlyHint → --disallowedTools; chưa probe → hook guard giữ chờ người):
-    # agent điều phối viên gắn MCP trusted chạy được ngay, không phải `capabilities set --mcp`. `--mcp none` = tắt hẳn.
-    "strict": {"tools": ["Read", "Grep", "Glob"], "mcp": "read_only_trusted", "web": False},
-    "hermes": {"tools": ["Bash", "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Grep", "Glob", "TodoWrite"],
-               "mcp": "read_only_trusted", "web": True},
+    # MCP bên thứ ba: điều phối viên dùng như mọi agent (mọi MCP của tài khoản Claude — plan-mcp-claude-native PR7); khoá `mcp` cũ
+    # (`none|read_only_trusted|trusted`) được nhận rồi bỏ qua.
+    "strict": {"tools": ["Read", "Grep", "Glob"], "web": False},
+    "hermes": {"tools": ["Bash", "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Grep", "Glob", "TodoWrite"], "web": True},
 }
 CAP_WEB_TOOLS = ("WebFetch", "WebSearch")
 CAP_TOOLS_MAX = frozenset(CAP_PROFILES["hermes"]["tools"]) | frozenset(CAP_WEB_TOOLS)
-CAP_MCP_MODES = ("none", "read_only_trusted", "trusted")
+CAP_MCP_MODES = ("none", "read_only_trusted", "trusted")  # khoá `manager.capabilities.mcp` cũ — nhận để không làm hỏng config.yaml cũ, BỎ QUA
 _CAP_ORDER = ("Read", "Grep", "Glob", "Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "TodoWrite", "WebFetch", "WebSearch")
 
 
@@ -113,7 +112,7 @@ def validate_capabilities(key: str, value: Any) -> None:
         if value is None:
             return
         if not isinstance(value, dict):
-            raise ValueError("manager.capabilities phải là object {profile, tools, mcp, web}")
+            raise ValueError("manager.capabilities phải là object {profile, tools, web, connectors}")
         bad = sorted(set(value) - set(CAP_KEYS))
         if bad:
             raise ValueError(f"manager.capabilities: khoá lạ {bad} (được: {', '.join(CAP_KEYS)})")
@@ -129,9 +128,9 @@ def validate_capabilities(key: str, value: Any) -> None:
         bad = sorted(set(value or []) - CAP_TOOLS_MAX)
         if bad:
             raise ValueError(f"manager.capabilities.tools: {bad} không bao giờ cấp cho điều phối viên (tối đa: {sorted(CAP_TOOLS_MAX)})")
-    elif sub == "mcp":
+    elif sub == "mcp":  # đã bỏ (PR7) — nhận giá trị cũ, không có tác dụng
         if value is not None and value not in CAP_MCP_MODES:
-            raise ValueError(f"manager.capabilities.mcp phải là {'|'.join(CAP_MCP_MODES)} hoặc null")
+            raise ValueError("manager.capabilities.mcp đã bỏ (điều phối viên dùng mọi MCP của tài khoản Claude) — đặt null")
     elif sub == "web":
         if value is not None and not isinstance(value, bool):
             raise ValueError("manager.capabilities.web phải là true/false hoặc null")
@@ -148,7 +147,7 @@ def validate_capabilities(key: str, value: Any) -> None:
 
 
 def resolve_capabilities(raw: Any) -> dict[str, Any]:
-    """Cấu hình thô → khung hiệu lực `{profile, tools: frozenset, mcp, web, warnings}`. Giá trị lạ (sửa tay config.yaml) → FAIL-CLOSED
+    """Cấu hình thô → khung hiệu lực `{profile, tools: frozenset, web, connectors, warnings}`. Giá trị lạ (sửa tay config.yaml) → FAIL-CLOSED
     (bỏ qua, về strict/không) + cảnh báo."""
     raw = raw if isinstance(raw, dict) else {}
     warnings: list[str] = []
@@ -166,23 +165,16 @@ def resolve_capabilities(raw: Any) -> dict[str, Any]:
     ts = {t for t in tools if t in CAP_TOOLS_MAX and t not in CAP_WEB_TOOLS}
     if web:
         ts |= set(CAP_WEB_TOOLS)
-    mcp = raw.get("mcp") if raw.get("mcp") in CAP_MCP_MODES else base["mcp"]
-    if raw.get("mcp") is not None and raw.get("mcp") not in CAP_MCP_MODES:
-        mcp = "none"
-        warnings.append(f"mcp '{raw.get('mcp')}' không hợp lệ → none")
     conns_raw = raw.get("connectors")
     connectors: tuple[str, ...] = ()
     if isinstance(conns_raw, list) and conns_raw:
         slugs = [connector_slug(x) for x in conns_raw if valid_connector(x)]
         if len(slugs) != len(conns_raw):
             warnings.append("connectors có tên không hợp lệ — bỏ qua tên đó")
-        if mcp != "trusted":
-            warnings.append(f"connectors claude.ai cần mcp=trusted (đang {mcp}) — tắt connectors")
-        else:
-            connectors = tuple(dict.fromkeys(slugs))
+        connectors = tuple(dict.fromkeys(slugs))
     elif conns_raw is not None and not isinstance(conns_raw, list):
         warnings.append("connectors không phải danh sách → tắt")
-    return {"profile": profile, "tools": frozenset(ts), "mcp": mcp, "web": web, "connectors": connectors, "warnings": warnings}
+    return {"profile": profile, "tools": frozenset(ts), "web": web, "connectors": connectors, "warnings": warnings}
 
 
 def _deep_keys(obj: Any, prefix: str = "") -> list[str]:
@@ -302,15 +294,6 @@ class ManagerPermissions:
                     return True
         return False
 
-    def _mcp_trust(self) -> dict[str, str]:
-        out: dict[str, str] = {}
-        try:
-            for m in self.hub.mcp.list():
-                out[str(m["name"])] = str(m.get("trust") or (m.get("config") or {}).get("trust") or "untrusted")
-        except Exception:
-            log.debug("manager: không đọc được registry MCP (trust)", exc_info=True)
-        return out
-
     # ------------------------------------------------------------------ MGR-8: cấu hình tối thiểu của agent được chỉ định làm manager
     MANAGER_TOOLS_OK = frozenset({"Read", "Grep", "Glob"})  # khung strict (mặc định) — giữ tên cũ
 
@@ -346,68 +329,22 @@ class ManagerPermissions:
             return f"permission_mode '{tp.get('permission_mode')}' không hợp với điều phối viên (chỉ default/plan)"
         if tp.get("allow_bypass"):
             return "allow_bypass phải tắt"
-        mcp_ok = list(row.get("mcp_servers") or []) if caps["mcp"] != "none" else []
-        prefixes = tuple(sorted(ok_tools)) + ("mcp__hub-self",) + tuple(f"mcp__{s}" for s in mcp_ok)
+        prefixes = tuple(sorted(ok_tools)) + ("mcp__",)  # MCP: hub-self + mọi MCP của tài khoản (không lọc theo agent — PR7)
         extra = [x for x in tp.get("allowed_tools") or [] if not str(x).startswith(prefixes)]
         if extra:
             return f"allowed_tools vượt khung '{caps['profile']}': {extra}"
-        if row.get("mcp_servers"):
-            if caps["mcp"] == "none":
-                return (f"khung '{caps['profile']}' không cho MCP ngoài hub-self (agent đang có {row['mcp_servers']}) — "
-                        "`cfharness manager capabilities set --mcp read_only_trusted` nếu muốn")
-            names, own = self._mcp_names()
-            trust = self._mcp_trust()
-            for s in row["mcp_servers"]:
-                if s in own:
-                    return f"MCP '{s}' là MCP của chính hub — điều phối viên điều khiển hub qua hub-self, không qua MCP này"
-                if s not in names:
-                    return (f"MCP '{s}' không có trong registry (đã xoá hoặc chưa thêm) — gỡ khỏi điều phối viên: "
-                            f"`cfharness mcp unassign {s} {aid}`, hoặc thêm/khôi phục server (`cfharness mcp add|restore {s}`)")
-                if trust.get(s, "untrusted") != "trusted":
-                    return f"MCP '{s}' có trust=untrusted — điều phối viên chỉ dùng MCP người đã đánh dấu trusted (`cfharness mcp edit {s} --trust trusted`)"
         if row.get("subagents"):
             return "điều phối viên không được có subagents (có thể mang permissionMode riêng)"
         if row.get("workspace_default"):
             return "điều phối viên dùng workspace scratch (không workspace_default)"
-        if set(tools) - self.MANAGER_TOOLS_OK or row.get("mcp_servers"):
+        if set(tools) - self.MANAGER_TOOLS_OK:
             # tool rộng hơn strict CHỈ khi đủ lớp an toàn của agent thường: hook guard (approval) + sandbox OS
             g = self.hub.config.get("guard") or {}
             if not g.get("enabled", True):
-                return "khung rộng (Bash/Write/Web/MCP) cần guard.enabled=true (hook guard + approval) — đang tắt"
+                return "khung rộng (Bash/Write/Web) cần guard.enabled=true (hook guard + approval) — đang tắt"
             if not (g.get("sandbox") or {}).get("enabled", True):
-                return "khung rộng (Bash/Write/Web/MCP) cần guard.sandbox.enabled=true (sandbox OS) — đang tắt"
+                return "khung rộng (Bash/Write/Web) cần guard.sandbox.enabled=true (sandbox OS) — đang tắt"
         return None
-
-    def mcp_run_disallowed(self, row: dict[str, Any]) -> list[str]:
-        """`mcp: read_only_trusted` — tool MCP đã probe mà KHÔNG readOnlyHint → --disallowedTools cho run manager (tool chưa probe
-        vẫn qua hook guard: `mcp_unknown_tool` → giữ chờ người)."""
-        if self.capabilities()["mcp"] != "read_only_trusted":
-            return []
-        out: list[str] = []
-        for s in row.get("mcp_servers") or []:
-            try:
-                r = self.hub.mcp.get_row(s) or {}  # type: ignore[attr-defined]
-            except Exception:
-                log.debug("manager: không đọc được dòng registry MCP", exc_info=True)
-                r = {}
-            for tool_name, rec in sorted((r.get("annotations_cache") or {}).items()):
-                if not (rec or {}).get("readOnlyHint"):
-                    out.append(f"mcp__{s}__{tool_name}")
-        return out
-
-    # ------------------------------------------------------------------ agent
-    def _mcp_names(self) -> tuple[set[str], frozenset[str]]:
-        names: set[str] = set()
-        try:
-            names = {str(m["name"]) for m in self.hub.mcp.list()}
-        except Exception:
-            log.debug("manager: không đọc được danh sách MCP", exc_info=True)
-        try:
-            own = self.hub.guard.hub_mcp_servers()
-        except Exception:
-            log.debug("manager: không đọc được MCP của hub", exc_info=True)
-            own = frozenset()
-        return names, own
 
     def check_agent_spec(self, target: str, changes: dict[str, Any], soul: Any = None, *, creating: bool, mid: str | None = None) -> str | None:
         if not isinstance(changes, dict):
@@ -461,16 +398,6 @@ class ManagerPermissions:
                 return f"{k} '{changes[k]}' dễ nhầm với điều phối viên — chọn tên/vai khác (MGR-9)"
         if creating and self._confusable(target):
             return f"id '{target}' dễ nhầm với điều phối viên (MGR-9)"
-        if "mcp_servers" in changes:
-            names, own = self._mcp_names()
-            trust = self._mcp_trust()
-            for s in changes.get("mcp_servers") or []:
-                if s in own:
-                    return f"MCP '{s}' là MCP của chính hub (quyền điều khiển hub) — không gán cho agent"
-                if s not in names:
-                    return f"MCP '{s}' không có trong registry — thêm server MCP là việc của người (`cfharness mcp add`)"
-                if trust.get(s, "untrusted") == "untrusted":
-                    return f"MCP '{s}' có trust=untrusted — chỉ người gán (điều phối viên chỉ gán server người đã đánh dấu tin cậy)"
         if "workspace_default" in changes:
             why = self.check_path(changes.get("workspace_default"), "workspace_default", agent_id=target)
             if why:

@@ -211,7 +211,7 @@ class ManagerOps:
 
     def op_agent_get(self, a: dict[str, Any]) -> dict[str, Any]:
         r = self.hub.agents.show(str(a.get("id") or ""))
-        keep = ("id", "name", "role", "description", "model", "effort", "fallback_model", "tool_policy", "mcp_servers", "limits", "workspace_default",
+        keep = ("id", "name", "role", "description", "model", "effort", "fallback_model", "tool_policy", "limits", "workspace_default",
                 "status", "config_revision", "archived_at", "skills", "cost_today_usd", "recent_runs")
         out = {k: r.get(k) for k in keep}
         out["soul"] = (r.get("soul") or "")[:3000]
@@ -278,18 +278,6 @@ class ManagerOps:
 
     def op_templates(self, a: dict[str, Any]) -> list[dict[str, Any]]:
         return [t for t in templates.list_templates() if t["name"] != "manager"]
-
-    def op_mcp_registry_list(self, a: dict[str, Any]) -> list[dict[str, Any]]:
-        own = self.hub.guard.hub_mcp_servers()
-        out = []
-        for m in self.hub.mcp.list():
-            if m["name"] in own:
-                continue
-            cfg = m.get("config") or {}
-            # source: hub (hub giữ cấu hình + secret) | claude (claude giữ, theo tài khoản đang dùng — plan-mcp-claude-native PR2)
-            out.append({"name": m["name"], "description": (m.get("description") or cfg.get("description") or "")[:200],
-                        "transport": cfg.get("type") or m.get("transport"), "source": "claude" if cfg.get("source") == "claude" else "hub"})
-        return out
 
     def op_filehub_list(self, a: dict[str, Any]) -> list[dict[str, Any]]:
         fh = getattr(self.hub, "filehub", None)

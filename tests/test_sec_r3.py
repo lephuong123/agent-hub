@@ -117,12 +117,11 @@ def test_allow_domain_cli_forbidden_from_agent(ctx):
     assert not classify("Bash", {"command": "cfharness guard sandbox list"}, ctx).forbidden
 
 
-def test_agent_mcp_domains_feed_sandbox(tmp_path):
+def test_sandbox_overrides_no_mcp_domains(tmp_path):
+    """PR7: MCP do tiến trình claude gọi (không qua sandbox Bash), không còn gán theo agent → không mở domain MCP cho Bash."""
     h = Hub(HubPaths.resolve(tmp_path / "hub"), runtime=FakeRuntime())
-    h.mcp.add({"name": "vb", "transport": "http", "url": "https://vb.cchchn.com/mcp"})
     h.agents.create({"id": "a", "name": "A", "mcp_servers": ["vb"]})
     ov = h.guard.run_sandbox_overrides("a")
-    assert "vb.cchchn.com" in ov["mcp_domains"]
-    doms = network_domains({}, ov)
-    assert "vb.cchchn.com" in doms
+    assert "mcp_domains" not in ov
+    assert network_domains({}, {"mcp_domains": ["x.example"]})[-1] == "x.example"  # khoá cũ vẫn đọc được (runtime)
     h.store.close()

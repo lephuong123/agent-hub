@@ -400,9 +400,9 @@ def cmd_doctor(ctx: Ctx) -> int:
         else:
             try:
                 ag = client.call("agent.get", {"id": ctx.args.agent})
-                from .agents import AgentConfig, load_mcp_registry
+                from .agents import AgentConfig
 
-                AgentConfig(id=ag["id"], **{k: ag[k] for k in ("name", "role", "description", "model", "effort", "fallback_model", "tool_policy", "mcp_servers", "limits", "workspace_default") if ag.get(k) is not None})
+                AgentConfig(id=ag["id"], **{k: ag[k] for k in ("name", "role", "description", "model", "effort", "fallback_model", "tool_policy", "limits", "workspace_default") if ag.get(k) is not None})
                 add(f"cấu hình agent {ag['id']}", True, f"model={ag['model']} rev={ag['config_revision']}")
                 if ag.get("plugins"):
                     from .plugins import PluginError, resolve as _resolve_plugins
@@ -412,23 +412,6 @@ def cmd_doctor(ctx: Ctx) -> int:
                         add("plugin", True, ", ".join(f"{x.name} ({x.path})" for x in found))
                     except PluginError as e:
                         add("plugin", False, str(e))
-                reg = load_mcp_registry(ctx.paths)
-                st_by_name: dict[str, str] = {}
-                if ag.get("mcp_servers"):
-                    try:  # MCP do claude giữ theo tài khoản: trạng thái từ lần `claude mcp list` gần nhất (không chạy claude)
-                        st = client.call("mcp.claude_status", {"cached": True}) or {}
-                        st_by_name = {x["name"]: x.get("status") or "unknown" for x in st.get("servers") or []}
-                    except RpcError as e:
-                        add("MCP của tài khoản claude", False, f"không đọc được: {e.message}", "warning")
-                for s in ag.get("mcp_servers") or []:
-                    if s not in reg:
-                        add(f"MCP {s}", False, "không có trong registry")
-                    elif s not in st_by_name:
-                        add(f"MCP {s}", False, "không có trong cấu hình claude của tài khoản đang dùng — `cfharness mcp claude add`")
-                    elif st_by_name[s] in ("connected", "unknown"):
-                        add(f"MCP {s}", True, f"cấu hình claude: {st_by_name[s]}" + (" (`cfharness mcp claude status` để kiểm)" if st_by_name[s] == "unknown" else ""))
-                    else:
-                        add(f"MCP {s}", False, f"cấu hình claude: {st_by_name[s]} — `cfharness mcp claude status` / `cfharness mcp claude login {s}`")
                 json.dumps(cfg["runtime"]["claude"].get("settings") or {})
                 add("settings.json hub sinh", isinstance(cfg["runtime"]["claude"].get("settings") or {}, dict), "hợp lệ")
             except RpcError as e:
@@ -473,8 +456,8 @@ def _agent_payload(a: argparse.Namespace, *, creating: bool) -> dict[str, Any]:
             tp[dst] = v
     if tp:
         d["tool_policy"] = tp
-    if a.mcp is not None:
-        d["mcp_servers"] = _split_list(a.mcp)
+    if getattr(a, "mcp", None):
+        eprint("lưu ý: --mcp đã bỏ — mọi agent dùng mọi MCP của tài khoản Claude (`cfharness mcp list`); bỏ qua cờ này")
     if getattr(a, "plugin", None) is not None:  # "none" = bỏ hết plugin
         d["plugins"] = [] if [x.strip() for x in a.plugin] == ["none"] else _split_list(a.plugin)
     lim: dict[str, Any] = {}
@@ -519,9 +502,9 @@ def _agent_text(ag: dict[str, Any]) -> str:
         f"  permission_mode: {tp.get('permission_mode') or '(mặc định)'}  allowed: {','.join(tp.get('allowed_tools') or []) or '-'}  disallowed: {','.join(tp.get('disallowed_tools') or []) or '-'}",
         f"  browser: {tp.get('browser') or '(mặc định hub: runtime.claude.chrome.default_mode)'}  (Claude in Chrome: chrome|auto — docs/dev-notes/chrome.md)",
         f"  web_allow_domains: {_web_domains_text(tp)}",
-        f"  mcp: {','.join(ag.get('mcp_servers') or []) or '-'}",
+        "  mcp: mọi MCP của tài khoản Claude đang dùng (cfharness mcp list)",
         f"  connector claude.ai: {','.join(tp.get('connectors') or []) or '-'}"
-        + ("  (run nạp cấu hình user ~/.claude; cần guard bật)" if tp.get("connectors") else ""),
+        + ("  (run dùng phiên claude.ai + cấu hình user ~/.claude; cần guard bật)" if tp.get("connectors") else ""),
         f"  plugins: {', '.join(ag.get('plugins') or []) or '-'}",
         f"  limits: {json.dumps(lim, ensure_ascii=False)}",
         f"  workspace: {ag.get('workspace_default') or '(scratch theo run)'}",
@@ -825,9 +808,9 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--tools", action="append", help="danh sách tool built-in được dùng (--tools '' = không tool nào)")
         sp.add_argument("--web-domains", help="allowlist domain WebFetch, phân tách dấu phẩy (vd docs.python.org,*.github.io); "
                         "'any' = không giới hạn, 'none' = chặn mọi WebFetch")
-        sp.add_argument("--mcp", action="append", help="tên MCP server trong registry")
+        sp.add_argument("--mcp", action="append", help=argparse.SUPPRESS)  # đã bỏ (PR7): mọi agent dùng mọi MCP của tài khoản — cờ cũ bị bỏ qua
         sp.add_argument("--connectors", help="connector claude.ai cho agent, phân cách dấu phẩy (vd \"Atlassian,Slack\"); 'none' = tắt. "
-                        "Bật = run nạp cấu hình user ~/.claude; cần guard bật; tool ghi KHÔNG hỏi duyệt, chỉ xoá mới hỏi")
+                        "Bật = run dùng phiên claude.ai + cấu hình user ~/.claude; cần guard bật")
         sp.add_argument("--plugin", action="append", help="plugin Claude Code nạp cho run (tên@marketplace đã `claude plugin install`, "
                         "hoặc đường dẫn tuyệt đối); lặp lại hoặc phân tách dấu phẩy; 'none' = bỏ hết")
         sp.add_argument("--browser", choices=["chrome", "playwright", "auto", "none", "default"],

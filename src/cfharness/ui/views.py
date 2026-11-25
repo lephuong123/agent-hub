@@ -313,7 +313,7 @@ def agent_show(ag: dict[str, Any], mode: Mode | None = None, *, width: int | Non
         ("tool cấm", th.cell(",".join(tp.get("disallowed_tools") or []))),
         ("trình duyệt", Text(str(tp.get("browser") or "(mặc định hub)"))),
         ("domain WebFetch", Text("không giới hạn" if tp.get("web_allow_domains") is None else ", ".join(tp["web_allow_domains"]) or "chặn mọi WebFetch")),
-        ("MCP", th.cell(",".join(ag.get("mcp_servers") or []))),
+        ("MCP", Text("mọi MCP của tài khoản Claude (cfharness mcp list)", style=th.MUTED)),
         ("giới hạn", th.cell(", ".join(f"{k}={v}" for k, v in lim.items()))),
         ("workspace", Text(str(ag.get("workspace_default") or "(scratch theo run)"), style=th.MUTED)),
         ("home", Text(str(ag.get("home_path")), style=th.MUTED)),

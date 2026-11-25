@@ -179,17 +179,16 @@ def test_all_wildcard_normalized():
         validate_setting("connectors.auto", "yes")
 
 
-def test_guard_wildcard_allows_only_claude_ai(tmp_path):
+def test_guard_third_party_mcp_and_connectors_safe(tmp_path):
+    """PR7: guard không lọc theo connector cho phép — connector claude.ai và MCP của `.claude.json` đều qua (safe)."""
     from cfharness.guard.classifier import GuardContext, classify
     from cfharness.guard.policy import PolicyStore
 
-    ctx = GuardContext(cwd=tmp_path, policy=PolicyStore(tmp_path / "h", user_home=tmp_path).load(), git_probe=False,
-                       connectors=("*",), run_mcp_servers=frozenset())
-    assert classify("mcp__claude_ai_Google_Drive__search_files", {}, ctx).verdict == "safe"
-    assert classify("mcp__claude_ai_Gmail__send_message", {}, ctx).verdict == "write"
-    assert classify("mcp__claude_ai_Google_Drive__delete_file", {}, ctx).verdict == "destructive"
-    v = classify("mcp__playwright__browser_click", {}, ctx)  # MCP của ~/.claude.json vẫn bị chặn cứng
-    assert v.forbidden and v.rule == "mcp_not_in_run"
+    ctx = GuardContext(cwd=tmp_path, policy=PolicyStore(tmp_path / "h", user_home=tmp_path).load(), git_probe=False)
+    for name in ("mcp__claude_ai_Google_Drive__search_files", "mcp__claude_ai_Gmail__send_message",
+                 "mcp__claude_ai_Google_Drive__delete_file", "mcp__playwright__browser_click"):
+        v = classify(name, {}, ctx)
+        assert v.verdict == "safe" and not v.forbidden, name
 
 
 def test_adapter_wildcard_none_connected():
@@ -207,15 +206,13 @@ async def test_connectors_auto_on_with_login(d, user_home, monkeypatch):
     spec, fb = await _run(d, None, monkeypatch, True)
     assert spec.connectors == ["*"] and spec.auth_mode == "login" and not fb
     assert spec.isolation_overrides == {"setting_sources": "user", "strict_mcp_config": False}
-    ctx = d.hub.guard.context_for(d.hub.store.get_run(spec.run_id))
-    assert ctx.connectors == ("*",)
 
 
 async def test_connectors_auto_needs_login(d, user_home, monkeypatch):
     monkeypatch.delenv("CFHARNESS_CONNECTORS_AUTO")
     spec, fb = await _run(d, None, monkeypatch, False)
-    assert spec.connectors is None and spec.isolation_overrides is None and not fb  # không /login → không nạp ~/.claude
-    assert d.hub.guard.context_for(d.hub.store.get_run(spec.run_id)).connectors is None
+    # không /login → không phiên claude.ai, không nguồn setting user (MCP của tài khoản vẫn nạp — PR7)
+    assert spec.connectors is None and spec.isolation_overrides == {"strict_mcp_config": False} and not fb
 
 
 async def test_connectors_auto_on_by_default_can_turn_off(d, user_home, monkeypatch):

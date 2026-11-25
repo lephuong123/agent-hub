@@ -27,9 +27,9 @@ def os_sandbox_available() -> bool:
 
 
 def is_wide(caps: dict[str, Any]) -> bool:
-    """Khung (đã resolve) rộng hơn strict: tool ngoài Read/Grep/Glob hoặc MCP `trusted` (cả tool ghi). MCP `read_only_trusted`
-    (mặc định của strict) không phụ thuộc sandbox OS — server MCP không chạy trong sandbox Bash — nên không tính là rộng."""
-    return bool(set(caps.get("tools") or ()) - STRICT_TOOLS) or caps.get("mcp") == "trusted"
+    """Khung (đã resolve) rộng hơn strict: tool ngoài Read/Grep/Glob. MCP không tính (server MCP không chạy trong sandbox Bash —
+    MCP của tài khoản Claude dùng chung cho mọi agent, plan-mcp-claude-native PR7)."""
+    return bool(set(caps.get("tools") or ()) - STRICT_TOOLS)
 
 
 def opted_in(manager_cfg: Any) -> bool:
@@ -40,7 +40,7 @@ def blocked(caps: dict[str, Any], manager_cfg: Any) -> bool:
     return is_wide(caps) and not os_sandbox_available() and not opted_in(manager_cfg)
 
 
-BLOCK_MSG = ("khung điều phối viên rộng (hermes: Bash/Write/Web/MCP) cần sandbox OS — máy này (Windows) không có, nên mặc định bị từ "
+BLOCK_MSG = ("khung điều phối viên rộng (hermes: Bash/Write/Web) cần sandbox OS — máy này (Windows) không có, nên mặc định bị từ "
              "chối. Nếu chấp nhận rủi ro, NGƯỜI đặt `cfharness config set manager.allow_hermes_without_sandbox true` trước "
              "(docs/dev-notes/windows.md)")
 

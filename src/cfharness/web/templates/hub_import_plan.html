@@ -43,7 +43,6 @@
     {% if p.approvals_cancelled or p.questions_cancelled %}<li>Huỷ (nhân bản): {{ p.approvals_cancelled or 0 }} yêu cầu duyệt, {{ p.questions_cancelled or 0 }} câu hỏi đang chờ</li>{% endif %}
     {% if p.state_cleared %}<li>Dọn trạng thái máy cũ: {{ p.state_cleared|join(', ') }}</li>{% endif %}
     {% if p.agents_paused %}<li>Agent nhập ở trạng thái tạm dừng (workspace chưa có): {{ p.agents_paused|list|sort|join(', ') }}</li>{% endif %}
-    {% for mm in p.mcp_missing or [] %}<li>{{ m.icon('alert') }} MCP <b>{{ mm.server }}</b>: lệnh <code>{{ mm.command }}</code> {{ mm.reason or 'không thấy ở máy này' }} — sửa sau bằng <code>cfharness mcp edit {{ mm.server }}</code></li>{% endfor %}
     {% for r in (p.renamed or [])[:20] %}<li>Đổi tên (tên không hợp lệ ở máy này): <code>{{ r['from'] }}</code> → <code>{{ r['to'] }}</code></li>{% endfor %}
     {% for r in (p.names_refused or [])[:20] %}<li>{{ m.icon('x') }} {{ r.reason }}</li>{% endfor %}
   </ul>

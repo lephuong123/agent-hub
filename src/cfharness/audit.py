@@ -8,8 +8,7 @@
 
 L4: mỗi dòng nối vào chuỗi băm (`audit_chain.insert_chained` — writer DUY NHẤT của `audit_log`; neo + kiểm ở `audit_chain.AuditChain`).
 
-Không phát event cho mỗi dòng audit (tránh nhân đôi luồng); riêng tool ghi có event `tool.write`
-(phát trong `mcp_client.wiring`).
+Không phát event cho mỗi dòng audit (tránh nhân đôi luồng).
 """
 
 from __future__ import annotations

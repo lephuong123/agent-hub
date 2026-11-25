@@ -295,9 +295,6 @@ def _plan_text(p: dict[str, Any]) -> str:
         out.append(f"  … và {len(p['renamed']) - 10} file khác")
     for r in (p.get("names_refused") or [])[:10]:
         out.append(f"  ✗ {r['reason']}")
-    for m in p.get("mcp_missing") or []:
-        out.append(f"! MCP '{m['server']}': lệnh {m['command']} ({m.get('reason') or 'không thấy ở máy này'}) — nhập ở trạng thái ĐÁNH DẤU lỗi; "
-                   f"sửa bằng `cfharness mcp edit {m['server']}`")
     repos = p.get("repos") or []
     if repos:
         out.append(f"Repo workspace: {len(repos)} ({sum(1 for r in repos if not r.get('exists'))} chưa có ở máy này)"
@@ -402,7 +399,8 @@ def _import(ctx: Any) -> int:
                      + (" + TOTP web" if rs.get("totp") else "") + (" + token MCP HTTP" if rs.get("mcp_tokens") else ""))
     if rs.get("skipped_mode"):
         lines.append(f"Secret bỏ theo chế độ {r['mode']}: {', '.join(rs['skipped_mode'])} — bot Telegram/Slack RIÊNG (`cfharness notify … setup`), "
-                     "MCP OAuth đăng nhập lại (`cfharness mcp claude login <tên>`)")
+                     "MCP OAuth đăng nhập lại bằng `claude mcp login <tên>` hoặc `/mcp` trong claude (tài khoản thêm trong cfharness: chạy với "
+                     "`CLAUDE_CONFIG_DIR=<HUB_HOME>/claude-config/<id>`)")
     if rs.get("kept_target"):
         lines.append(f"Giữ nguyên của máy này (khác gói): {', '.join(rs['kept_target'])}")
     if r.get("missing_secrets"):
@@ -425,8 +423,6 @@ def _import(ctx: Any) -> int:
     if r.get("renamed"):
         lines.append(f"Đổi tên {len(r['renamed'])} file tri thức không hợp lệ ở máy này (xem hub_state.import_followups.renamed)"
                      + (": skill " + ", ".join(f"{s['old']} → {s['new']}" for s in r.get("skills_renamed") or []) if r.get("skills_renamed") else ""))
-    if r.get("mcp_missing"):
-        lines.append("MCP thiếu lệnh (đã đánh dấu lỗi): " + ", ".join(f"cfharness mcp edit {m['server']}" for m in r["mcp_missing"][:6]))
     if r.get("review") or r.get("knowledge_rows_with_old_paths"):
         lines.append(f"Tri thức còn đường dẫn máy cũ ({len(r.get('review') or [])} file, {r.get('knowledge_rows_with_old_paths') or 0} hàng graph) — "
                      "daemon tự viết lại qua ledger (actor import, rollback được) ở lần lên đầu tiên")

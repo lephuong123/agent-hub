@@ -293,13 +293,10 @@ DEFAULTS: dict[str, Any] = {
         "auto_resume_backoff_s": 30,
         "auto_resume_backoff_max_s": 900,
     },
-    # M1 luồng A — MCP client registry (FR-MC-*)
-    "mcp": {
-        # server MCP nội bộ của hub không ghi audit tool.write (tool điều khiển của guard)
-        "audit_ignore_servers": ["hub-guard"],
-        # `mcp.oauth_proxy.*` + `mcp_client.oauth_callback_port` (gỡ v0.2.28), `mcp.probe_timeout_s` (gỡ v0.2.32 — hub không probe MCP
-        # bên thứ ba nữa): config.yaml cũ còn các khoá này vẫn đọc bình thường (khoá lạ được bỏ qua).
-    },
+    # M1 luồng A — MCP bên thứ ba: do claude quản lý theo tài khoản, hub chỉ liệt kê (plan-mcp-claude-native PR7). Khoá cũ
+    # `mcp.oauth_proxy.*` + `mcp_client.oauth_callback_port` (gỡ v0.2.28), `mcp.probe_timeout_s` (gỡ v0.2.32), `mcp.audit_ignore_servers`
+    # (gỡ PR7 — hết audit `tool.write` theo annotations): config.yaml cũ còn các khoá này vẫn đọc bình thường (khoá lạ được bỏ qua).
+    "mcp": {},
     "secrets": {
         # `${VAR}` không có trong secret store thì lấy biến môi trường của daemon (tương thích ~/.claude.json)
         "env_fallback": True,
@@ -361,8 +358,8 @@ DEFAULTS: dict[str, Any] = {
         # §9 M7-core.md: khung quyền của điều phối viên (CHỈ người: config.set ∈ HUMAN_ONLY, nhánh `manager` kiểm toàn vẹn).
         # profile strict = Read/Grep/Glob (như MGR-8); hermes = Bash/Read/Write/Edit/Grep/Glob/TodoWrite + Web + MCP trusted (chỉ đọc),
         # VẪN dưới hook guard + sandbox OS + approval. null = theo profile. `cfharness manager capabilities show|set`.
-        # connectors: connector claude.ai cho phép (cần mcp=trusted + guard bật) — manager/connectors.py
-        "capabilities": {"profile": "strict", "tools": None, "mcp": None, "web": None, "connectors": None},
+        # connectors: connector claude.ai cho phép (cần guard bật) — manager/connectors.py. Khoá `mcp` cũ bỏ (PR7: mọi MCP của tài khoản)
+        "capabilities": {"profile": "strict", "tools": None, "web": None, "connectors": None},
         # WEB-1: WebFetch của điều phối viên — `any` = mọi domain công khai (vẫn chặn SSRF + guard.web.deny_domains);
         # `allowlist` = chỉ guard.web.allow_domains (+ host người đã "luôn cho phép"), ngoài danh sách → giữ chờ người duyệt
         "web_domains": "any",

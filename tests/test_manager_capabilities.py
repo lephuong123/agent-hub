@@ -48,18 +48,9 @@ def _hermes(d, **over):
     d.hub.config.set("manager.capabilities", {"profile": "hermes", "tools": None, "mcp": None, "web": None, **over})
 
 
-def _mcp(d, name: str, trust: str, cache: dict | None = None, claude_mcp=None) -> None:
-    if claude_mcp is not None:  # MCP bên thứ ba do claude giữ (v0.2.32): run cần server trong cấu hình claude của tài khoản
-        claude_mcp(name)
-    d.hub.mcp.add({"name": name, "transport": "stdio", "trust": trust})
-    if cache is not None:
-        d.hub.store.conn.execute("UPDATE mcp_servers SET annotations_cache=? WHERE name=?", (json.dumps(cache), name))
-
-
 def _agent(d, aid: str, **tp) -> None:
-    mcp = tp.pop("mcp_servers", [])
     sub = tp.pop("subagents", None)
-    spec = {"id": aid, "name": aid, "role": "hub boss", "model": "haiku", "tool_policy": tp, "mcp_servers": mcp}
+    spec = {"id": aid, "name": aid, "role": "hub boss", "model": "haiku", "tool_policy": tp}
     if sub:
         spec["subagents"] = sub
     d.hub.agents.create(spec)
@@ -68,13 +59,15 @@ def _agent(d, aid: str, **tp) -> None:
 # ------------------------------------------------------------------ strict mặc định = hành vi cũ
 def test_resolve_defaults_and_fail_closed():
     s = resolve_capabilities(None)
-    assert s["profile"] == "strict" and s["tools"] == {"Read", "Grep", "Glob"} and s["mcp"] == "read_only_trusted" and s["web"] is False
+    assert s["profile"] == "strict" and s["tools"] == {"Read", "Grep", "Glob"} and "mcp" not in s and s["web"] is False
     h = resolve_capabilities({"profile": "hermes"})
-    assert {"Bash", "Write", "Edit", "WebFetch", "WebSearch"} <= h["tools"] and h["mcp"] == "read_only_trusted"
+    assert {"Bash", "Write", "Edit", "WebFetch", "WebSearch"} <= h["tools"]
     assert "Task" not in h["tools"] and "Agent" not in h["tools"]
     # sửa tay config.yaml giá trị lạ → về strict / none (fail-closed), tool ngoài trần bị bỏ
     bad = resolve_capabilities({"profile": "god", "mcp": "all", "tools": ["Read", "Task", "Agent"]})
-    assert bad["profile"] == "strict" and bad["mcp"] == "none" and bad["tools"] == {"Read"} and bad["warnings"]
+    assert bad["profile"] == "strict" and bad["tools"] == {"Read"} and bad["warnings"]
+    # khoá `mcp` cũ (PR7): nhận rồi bỏ qua; connectors không còn cần mcp=trusted
+    assert resolve_capabilities({"mcp": "read_only_trusted", "connectors": ["Slack"]})["connectors"] == ("Slack",)
     assert resolve_capabilities({"profile": "hermes", "web": False})["tools"].isdisjoint({"WebFetch", "WebSearch"})
     assert CAP_TOOLS_MAX.isdisjoint({"Task", "Agent", "KillShell"})
 
@@ -82,6 +75,7 @@ def test_resolve_defaults_and_fail_closed():
 def test_validate_setting_rejects_bad_capabilities():
     validate_setting("manager.capabilities", {"profile": "hermes"})
     validate_setting("manager.capabilities.profile", "strict")
+    validate_setting("manager.capabilities.mcp", "read_only_trusted")  # config.yaml cũ
     for k, v in (("manager.capabilities.profile", "root"), ("manager.capabilities.tools", ["Bash", "Task"]),
                  ("manager.capabilities.mcp", "everything"), ("manager.capabilities.web", "yes"),
                  ("manager.capabilities", {"profile": "hermes", "bypass": True}), ("manager.capabilities.extra_args", ["--x"])):
@@ -97,18 +91,9 @@ async def test_strict_default_keeps_mgr8(d):
     _agent(d, "webby", tools=["Read", "WebFetch"])
     with pytest.raises(HubError, match="vượt|chỉ cho"):
         await rpc(d, "manager.set", {"agent_id": "webby"})
-    # strict mặc định = MCP trusted CHỈ ĐỌC: MCP untrusted vẫn chặn, trusted được; `--mcp none` tắt hẳn
-    _mcp(d, "shady", "untrusted")
-    _agent(d, "mcpu", tools=["Read"], mcp_servers=["shady"])
-    with pytest.raises(HubError, match="untrusted"):
-        await rpc(d, "manager.set", {"agent_id": "mcpu"})
-    _mcp(d, "docs", "trusted")
-    _agent(d, "mcpy", tools=["Read"], mcp_servers=["docs"])
+    # MCP: điều phối viên dùng mọi MCP của tài khoản như mọi agent (PR7) — allowed_tools `mcp__…` không vượt khung
+    _agent(d, "mcpy", tools=["Read"], allowed_tools=["mcp__docs"])
     assert d.hub.manager.perms.manager_config_problem(d.hub.store.get_agent("mcpy")) is None
-    d.hub.config.set("manager.capabilities.mcp", "none")
-    with pytest.raises(HubError, match="không cho MCP"):
-        await rpc(d, "manager.set", {"agent_id": "mcpy"})
-    d.hub.config.set("manager.capabilities.mcp", None)
     _agent(d, "ro", tools=["Read", "Grep", "Glob"])
     await rpc(d, "manager.set", {"agent_id": "ro"})
     info = await rpc(d, "manager.capabilities")
@@ -118,8 +103,7 @@ async def test_strict_default_keeps_mgr8(d):
 # ------------------------------------------------------------------ hermes: nới có kiểm soát
 async def test_hermes_allows_bash_web_trusted_mcp(d):
     _hermes(d)
-    _mcp(d, "docs", "trusted")
-    _agent(d, "boss", tools=HERMES_TOOLS, allowed_tools=["Bash(git status:*)", "mcp__docs"], mcp_servers=["docs"])
+    _agent(d, "boss", tools=HERMES_TOOLS, allowed_tools=["Bash(git status:*)", "mcp__docs"])
     await rpc(d, "manager.set", {"agent_id": "boss"})
     info = await rpc(d, "manager.capabilities")
     assert info["problem"] is None and "Bash" in info["effective"]["tools"]
@@ -127,9 +111,7 @@ async def test_hermes_allows_bash_web_trusted_mcp(d):
 
 async def test_hermes_still_blocks_untrusted_unregistered_and_escalation(d):
     _hermes(d)
-    _mcp(d, "shady", "untrusted")
     cases = {
-        "u1": dict(tools=["Read", "Bash"], mcp_servers=["shady"]),          # MCP untrusted
         "u3": dict(tools=["Read", "Bash", "Task"]),                         # subagent tool
         "u4": dict(tools=None),                                             # mọi tool (có Task)
         "u5": dict(tools=["Read", "Bash"], permission_mode="acceptEdits"),
@@ -144,20 +126,10 @@ async def test_hermes_still_blocks_untrusted_unregistered_and_escalation(d):
         with pytest.raises(HubError) as ei:
             await rpc(d, "manager.set", {"agent_id": aid})
         assert ei.value.code == BLOCKED, (aid, ei.value.message)
-    # MCP không có trong registry: agents.create đã từ chối → giả lập hàng DB bị sửa
-    _agent(d, "u2", tools=["Read"])
-    d.hub.store.conn.execute("UPDATE agents SET mcp_servers=? WHERE id='u2'", (json.dumps(["ghost"]),))
-    assert "registry" in (d.hub.manager.perms.manager_config_problem(d.hub.store.get_agent("u2")) or "")
     # allow_bypass (chỉ người đặt được trên agent) vẫn bị khung từ chối
     _agent(d, "u9", tools=["Read", "Bash"], allow_bypass=True)
     with pytest.raises(HubError, match="allow_bypass"):
         await rpc(d, "manager.set", {"agent_id": "u9"})
-    # mcp=none trong hermes → MCP trusted cũng không được
-    _hermes(d, mcp="none")
-    _mcp(d, "docs", "trusted")
-    _agent(d, "u10", tools=["Read", "Bash"], mcp_servers=["docs"])
-    with pytest.raises(HubError, match="không cho MCP"):
-        await rpc(d, "manager.set", {"agent_id": "u10"})
     assert d.hub.manager.agent_id() is None
 
 
@@ -274,9 +246,8 @@ async def test_child_over_real_socket_denied(d):
 # ------------------------------------------------------------------ spec run manager hermes: guard + sandbox vẫn đủ
 async def test_hermes_manager_run_spec_keeps_guard_and_sandbox(d, claude_mcp):
     _hermes(d)
-    _mcp(d, "docs", "trusted", cache={"search": {"name": "search", "readOnlyHint": True}, "update_page": {"name": "update_page", "readOnlyHint": None}},
-         claude_mcp=claude_mcp)
-    _agent(d, "boss", tools=HERMES_TOOLS, mcp_servers=["docs"])
+    claude_mcp("docs")  # MCP của cấu hình claude: điều phối viên dùng như mọi agent (PR7 — không khung read_only_trusted)
+    _agent(d, "boss", tools=HERMES_TOOLS)
     await rpc(d, "manager.set", {"agent_id": "boss"})
     res = await rpc(d, "manager.chat", {"channel": "web", "text": "hi"})
     await wait_status(d, res["run_id"])
@@ -285,7 +256,8 @@ async def test_hermes_manager_run_spec_keeps_guard_and_sandbox(d, claude_mcp):
     assert spec.agents_json is None
     tp = spec.tool_policy
     assert tp.get("permission_mode") in (None, "default", "plan")
-    assert "mcp__docs__update_page" in tp["disallowed_tools"] and "mcp__docs__search" not in tp["disallowed_tools"]
+    assert not [x for x in tp["disallowed_tools"] if str(x).startswith("mcp__docs")]
+    assert spec.isolation_overrides == {"strict_mcp_config": False}
     assert any("git push --force" in x for x in tp["disallowed_tools"])  # lớp tĩnh
     st = json.loads(spec.settings_path.read_text())
     assert st["hooks"]["PreToolUse"], "hook guard PreToolUse phải có"
@@ -300,7 +272,6 @@ async def test_hermes_manager_run_spec_keeps_guard_and_sandbox(d, claude_mcp):
     assert st.get("permissions", {}).get("deny"), "permissions.deny tĩnh phải có"
     mcp = json.loads(spec.mcp_config_path.read_text())["mcpServers"]
     assert "hub-guard" in mcp and "hub-self" in mcp and "docs" not in mcp  # MCP bên thứ ba: claude nạp từ cấu hình tài khoản
-    assert spec.claude_mcp_servers == ["docs"]
 
 
 # ------------------------------------------------------------------ classifier: đường vòng từ Bash/Write/Web của run manager
@@ -414,24 +385,3 @@ async def test_cli_capabilities_set_and_sync(d):
         assert json.loads(cp.stdout)["problem"]  # agent giờ vượt khung strict → báo
     finally:
         srv.close()
-
-
-# ------------------------------------------------------------------ MCP mồ côi (xoá mềm / không còn trong registry) gỡ được
-async def test_unassign_orphan_mcp_unblocks_manager(d):
-    """Hub thật (lamlinh): điều phối viên mang MCP 'toa-soan' không còn trong registry → mọi lượt chat bị chặn, và
-    `mcp unassign` trước đây cũng đòi server tồn tại → kẹt. Gỡ phải được; lỗi phải chỉ đúng lệnh sửa."""
-    _mcp(d, "toa-soan", "trusted")
-    _agent(d, "boss2", tools=["Read", "Grep", "Glob"], mcp_servers=["toa-soan"])
-    await rpc(d, "mcp.remove", {"name": "toa-soan", "force": True})  # xoá mềm khi agent còn dùng
-    why = d.hub.manager.perms.manager_config_problem(d.hub.store.get_agent("boss2")) or ""
-    assert "cfharness mcp unassign toa-soan boss2" in why, why
-    d.hub.store.conn.execute("UPDATE agents SET mcp_servers=? WHERE id='boss2'", (json.dumps(["toa-soan", "ghost"]),))
-    await rpc(d, "mcp.assign", {"server": "toa-soan", "agent": "boss2", "unassign": True})  # đã xoá mềm
-    await rpc(d, "mcp.assign", {"server": "ghost", "agent": "boss2", "unassign": True})  # chưa từng có
-    assert d.hub.store.get_agent("boss2")["mcp_servers"] == []
-    assert d.hub.manager.perms.manager_config_problem(d.hub.store.get_agent("boss2")) is None
-    # gán vẫn đòi server có trong registry; gỡ tên agent không có + không có trong registry → lỗi rõ
-    with pytest.raises(HubError):
-        await rpc(d, "mcp.assign", {"server": "ghost", "agent": "boss2"})
-    with pytest.raises(HubError):
-        await rpc(d, "mcp.assign", {"server": "ghost", "agent": "boss2", "unassign": True})

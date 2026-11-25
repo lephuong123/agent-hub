@@ -15,9 +15,7 @@ cục — để test trên macOS mô phỏng được đích Windows.
    `skills.name|path` (cặp đường dẫn vào pathmap), `name:` trong frontmatter SKILL.md; hàng ledger/append-only giữ tên cũ (lịch sử).
    Phần `claude/` (optional) → bỏ file đó + cảnh báo. Mọi file khác (id agent/team, chính sách, ledger, prompts…) → TỪ CHỐI cả gói, nêu
    rõ tên + lý do (đổi tên ở máy nguồn rồi xuất lại).
-2. MCP stdio (`mcp_missing`, MỌI lần nhập, không chỉ khác OS): `command` tuyệt đối không tồn tại ở máy đích (hoặc là đường dẫn kiểu OS
-   khác), lệnh trần không có trên PATH (`shutil.which`) → server được ĐÁNH DẤU (`probe_error` "[hub] …", không có cột bật/tắt — không thêm
-   migration) + gợi ý `cfharness mcp edit <tên>`; run dùng server đó vẫn chạy, Claude Code báo MCP không kết nối được.
+2. (PR7) MCP stdio không còn kiểm khi nhập — hub không giữ lệnh MCP (cấu hình claude của máy, không đi theo gói).
 3. Cảnh báo theo OS đích (`os_warnings`): khác họ OS, sandbox OS không có trên Windows (`docs/dev-notes/windows.md`), giam workspace dựa
    trên sandbox, HUB_HOME Windows ngoài hồ sơ người dùng (quyền file chỉ còn ACL hồ sơ — `oscompat`), gốc workspace còn kiểu đường dẫn
    OS khác (cần `--map-path`), autostart không chuyển (gợi ý lệnh đúng OS).
@@ -39,7 +37,6 @@ WIN_RESERVED = frozenset({"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range
                           "COM¹", "COM²", "COM³", "LPT¹", "LPT²", "LPT³"})
 SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")  # = knowledge.store.NAME_RE
 TIERS = ("agents", "teams")
-MCP_MARK = "[hub] nhập từ máy khác: không thấy lệnh '{cmd}' ở máy này — sửa bằng `cfharness mcp edit {name}`"
 
 
 def os_family(name: Any) -> OsKind:
@@ -260,43 +257,6 @@ def rename_pairs(renames: dict[str, str], src_home: str, dst_home: str) -> list[
 
 
 # ============================================================================ MCP stdio
-def mcp_missing(db: Path, pm: PathMap | None, *, target_os: OsKind, which: Any = shutil.which) -> list[dict[str, str]]:
-    """MCP stdio (chưa xoá mềm) có `command` không chạy được ở máy đích. `pm` = đổi đường dẫn trước khi kiểm (dry-run: DB chưa viết lại)."""
-    import json
-
-    out: list[dict[str, str]] = []
-    try:
-        c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    except sqlite3.Error:  # pragma: no cover
-        return out
-    try:
-        tabs = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if "mcp_servers" not in tabs:
-            return out
-        cols = {x[1] for x in c.execute("PRAGMA table_info(mcp_servers)")}
-        if not {"name", "config"} <= cols:
-            return out
-        where = " WHERE deleted_at IS NULL" if "deleted_at" in cols else ""
-        rows = c.execute(f"SELECT name, config FROM mcp_servers{where} ORDER BY name").fetchall()
-    except sqlite3.Error:
-        return out
-    finally:
-        c.close()
-    for name, conf in rows:
-        try:
-            cfg = json.loads(conf) or {}
-        except (TypeError, ValueError):
-            continue
-        cmd = cfg.get("command") if isinstance(cfg, dict) else None
-        if not cmd or not isinstance(cmd, str):
-            continue
-        cmd2 = pm.rewrite(cmd, syntax="text") if pm else cmd
-        why = command_problem(cmd2, target_os=target_os, which=which)
-        if why:
-            out.append({"server": str(name), "command": cmd2, "reason": why})
-    return out
-
-
 def command_problem(cmd: str, *, target_os: OsKind, which: Any = shutil.which) -> str | None:
     st = path_style(cmd)
     if st is not None:
@@ -304,24 +264,6 @@ def command_problem(cmd: str, *, target_os: OsKind, which: Any = shutil.which) -
             return f"đường dẫn kiểu {st} trên máy {target_os}"
         return None if os.path.exists(cmd) else "không có file này"
     return None if which(cmd) is not None else "không có trên PATH"
-
-
-def mark_mcp(db: Path, missing: list[dict[str, str]]) -> int:
-    """Đánh dấu server MCP thiếu lệnh (`probe_error`, xoá `last_probe_at`) — hiện ở `cfharness mcp list|show`."""
-    if not missing:
-        return 0
-    conn = sqlite3.connect(str(db), isolation_level=None)
-    try:
-        cols = {x[1] for x in conn.execute("PRAGMA table_info(mcp_servers)")}
-        if "probe_error" not in cols:
-            return 0
-        sets = "probe_error=?" + (", last_probe_at=NULL" if "last_probe_at" in cols else "")
-        with conn:
-            for m in missing:
-                conn.execute(f"UPDATE mcp_servers SET {sets} WHERE name=?", (MCP_MARK.format(cmd=m["command"], name=m["server"]), m["server"]))
-        return len(missing)
-    finally:
-        conn.close()
 
 
 # ============================================================================ cảnh báo theo OS đích
@@ -371,4 +313,4 @@ def default_target_os(target_os: str | None) -> OsKind:
 
 
 __all__ = ["os_family", "invalid_reason", "safe_segment", "plan_names", "fs_case_insensitive", "apply_skill_renames", "rename_pairs",
-           "mcp_missing", "command_problem", "mark_mcp", "os_warnings", "default_target_os", "WIN_RESERVED"]
+           "command_problem", "os_warnings", "default_target_os", "WIN_RESERVED"]

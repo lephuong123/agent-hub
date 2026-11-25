@@ -148,20 +148,13 @@ class GuardService:
         return bool(self.hub.config.get("guard.enabled"))
 
     def _annotations(self, server: str, tool: str) -> dict[str, Any] | None:
+        """Ghi đè của người cho tool Claude in Chrome (`runtime.claude.chrome.annotations`). MCP bên thứ ba không còn annotations
+        (plan-mcp-claude-native PR7 — guard không phân loại tool MCP bên thứ ba)."""
         from ..browser import CHROME_SERVER
 
-        if server == CHROME_SERVER:  # server dynamic của CLI (không có trong registry): ghi đè của người ở runtime.claude.chrome.annotations
+        if server == CHROME_SERVER:
             return self._chrome_annotations(tool)
-        reg = getattr(self.hub, "mcp", None)
-        if reg is not None and hasattr(reg, "tool_annotations"):
-            return reg.tool_annotations(server, tool)
-        try:
-            from ..mcp_client import tool_annotations
-
-            return tool_annotations(server, tool, home=self.hub.paths.home)
-        except Exception:  # fail-closed: không đọc được annotations MCP → coi như không có
-            log.debug("guard: không đọc được annotations MCP", exc_info=True)
-            return None
+        return None
 
     def _chrome_annotations(self, tool: str) -> dict[str, Any] | None:
         import fnmatch
@@ -257,12 +250,12 @@ class GuardService:
             worktree_since=self.task_since(run) if run else None,
             scratch_workspace=len(rel) >= 3 and rel[1] == "workspaces" and not rel[2].startswith("conv-"),
             chrome_allowed=self.chrome_allowed(run),
+            **self._playwright_ctx(run),
             trusted_repo_scripts=bool(self.knob("guard.trusted_repo_scripts")),
             task_created_deletes=bool(self.knob("guard.task_created_deletes")),
             filehub_old_copies=self._filehub_old_copies(),
             lane_ports=self._lane_ports(),
             **self._confine_ctx(c, run, roots),
-            **self._connector_ctx(run),
         )
 
     def _lane_ports(self) -> tuple[int, ...]:
@@ -298,34 +291,6 @@ class GuardService:
         out.update(confine_root=conf.root, confine_read=tuple(_c.read_roots(conf, self.hub.paths.home, cwd=cwd, extra=extra)),
                    confine_deny=tuple(_c.deny_read_roots(conf)))
         return out
-
-    def _connector_ctx(self, run: dict[str, Any] | None) -> dict[str, Any]:
-        """Run có connector claude.ai (điều phối viên: manager.capabilities.connectors; agent thường: tool_policy.connectors)
-        → {connectors, run_mcp_servers} cho classify_mcp; còn lại {}."""
-        if not run:
-            return {}
-        from ..runs import run_connectors
-
-        is_mgr = str((run.get("run_opts") or {}).get("hub_self") or "") == "manager"
-        if is_mgr and getattr(self.hub, "manager", None) is None:
-            return {}
-        try:
-            agent = self.hub.store.get_agent(run.get("agent_id")) or {} if run.get("agent_id") else {}
-            ar = getattr(getattr(self.hub, "runs", None), "active", {}).get(run.get("id"))
-            if ar is not None and getattr(ar, "connectors", None) is not None:
-                conns = ar.connectors  # đúng connector spec của run đã bật (gồm connectors.auto)
-                claude_mcp: Any = getattr(ar, "claude_mcp", ())
-            else:
-                conns = run_connectors(self.hub, agent, is_mgr)
-                claude_mcp = self.hub.runs._agent_claude_mcp(run, agent) if agent else ()  # type: ignore[attr-defined]
-        except Exception:  # fail-closed: lỗi đọc cấu hình = run connector không cho connector nào
-            log.debug("guard: không đọc được connector của run", exc_info=True)
-            return {"connectors": (), "run_mcp_servers": frozenset()}
-        if not conns and not claude_mcp:
-            return {}
-        # MCP nguồn claude (plan-mcp-claude-native PR2): run bỏ --strict-mcp-config như run connector → mọi MCP ngoài server của agent
-        # (và ngoài connector người cho phép) = `mcp_not_in_run` (forbidden); server claude đã gán nằm trong `mcp_servers` của agent
-        return {"connectors": conns, "run_mcp_servers": frozenset(str(x) for x in agent.get("mcp_servers") or [])}
 
     # ------------------------------------------------------------------ luật "luôn cho phép" (người tạo khi duyệt `--always`)
     def always_rules(self) -> list[dict[str, Any]]:
@@ -590,34 +555,9 @@ class GuardService:
         return dict(allv.get(agent_id) or {})
 
     def run_sandbox_overrides(self, agent_id: str) -> dict[str, Any]:
-        """Ngoại lệ dùng khi dựng settings của run: ngoại lệ người đặt + host của MCP server gán cho agent (R3-1)."""
-        out = self.sandbox_overrides(agent_id)
-        out["mcp_domains"] = self.agent_mcp_domains(agent_id)
-        return out
-
-    def agent_mcp_domains(self, agent_id: str) -> list[str]:
-        from urllib.parse import urlparse
-
-        try:
-            agent = self.hub.store.get_agent(agent_id) or {}
-            names = list(agent.get("mcp_servers") or [])
-        except Exception:  # pragma: no cover
-            log.debug("guard: không đọc được MCP của agent", exc_info=True)
-            return []
-        out: list[str] = []
-        reg = getattr(self.hub, "mcp", None)
-        for n in names:
-            try:
-                row = reg.get_row(n) if reg is not None else None
-            except Exception:
-                log.debug("guard: không đọc được dòng registry MCP", exc_info=True)
-                row = None
-            url = str(((row or {}).get("config") or {}).get("url") or "")
-            if url:
-                h = (urlparse(url).hostname or "").lower()
-                if h:
-                    out.append(h)
-        return list(dict.fromkeys(out))
+        """Ngoại lệ dùng khi dựng settings của run: ngoại lệ người đặt (R3-1). (Host MCP gán cho agent bỏ từ plan-mcp-claude-native
+        PR7 — MCP do tiến trình claude gọi, không qua sandbox của Bash.)"""
+        return self.sandbox_overrides(agent_id)
 
     def sandbox_allow_domain(self, agent_id: str, domain: str, *, remove: bool = False, by: str = "user", channel: str = "cli") -> dict[str, Any]:
         """CHỈ người: mở/gỡ một domain mạng cho Bash của agent (R3-1). Audit + event, như ngoại lệ localhost."""
@@ -895,28 +835,58 @@ class GuardService:
         audit_record("guard.trust", agent_id=ev.agent_id, run_id=None, data=info)
         self.hub.publish(make_event("guard.trust", ev.agent_id, info, source="hub"))
 
-    def hub_mcp_servers(self) -> frozenset[str]:
-        """H-18: tên đăng ký của MCP server trỏ về CHÍNH hub — nhận theo lệnh (`cfharness mcp serve`, `-m cfharness.mcp_server`)
-        hoặc URL loopback cổng `mcp_server.http_port`, không theo tên."""
-        from ..config import MCP_HTTP_DEFAULT_PORT
+    def _claude_dirs(self) -> list[Any]:
+        """Thư mục cấu hình claude có thể nạp MCP cho run: mặc định (None) + thư mục của tài khoản token đang dùng (nếu có)."""
+        from ..mcp_client import claude_source as cs
 
-        reg = getattr(self.hub, "mcp", None)
-        if reg is None or not hasattr(reg, "list"):
-            return frozenset()
+        dirs: list[Any] = [None]
         try:
-            port = int(self.hub.config.get("mcp_server.http_port") or MCP_HTTP_DEFAULT_PORT)
-        except (KeyError, TypeError, ValueError):
-            port = MCP_HTTP_DEFAULT_PORT
+            _aid, cdir = cs.account_config_dir(self.hub, None)
+            if cdir is not None:
+                dirs.append(cdir)
+        except Exception:  # best-effort: tài khoản lỗi → chỉ cấu hình mặc định
+            log.debug("guard: không đọc được tài khoản claude đang dùng", exc_info=True)
+        return dirs
+
+    def hub_mcp_servers(self) -> frozenset[str]:
+        """H-18: tên server trong cấu hình claude (mặc định + tài khoản đang dùng) trỏ về CHÍNH hub — nhận theo lệnh
+        (`cfharness mcp serve`, `-m cfharness.mcp_server`), URL loopback cổng `mcp_server.http_port` của hub, hoặc tên dành riêng.
+        Nhớ theo stat của file (`claude_source.cached_all_servers`) — gọi ở mọi guard.check."""
+        from ..mcp_client import claude_source as cs
+
         out: set[str] = set()
-        try:
-            rows = reg.list(include_deleted=False)
-        except Exception:  # best-effort: registry lỗi → không nhận diện MCP hub nào
-            log.debug("guard: không đọc được registry MCP", exc_info=True)
-            return frozenset()
-        for r in rows:
-            if is_hub_mcp_config(r.get("config") or {}, port):
-                out.add(str(r.get("name")))
+        port = cs.config_port(self.hub)
+        for d in self._claude_dirs():
+            try:
+                out.update(cs.hub_servers(d, port))
+            except Exception:  # best-effort: cấu hình claude hỏng → không nhận diện thêm
+                log.debug("guard: không đọc được cấu hình MCP của claude", exc_info=True)
         return frozenset(out)
+
+    def _playwright_ctx(self, run: dict[str, Any] | None) -> dict[str, Any]:
+        """Run của agent chế độ Chrome hoặc có allowlist domain: Playwright bị gỡ khỏi run → guard cấm gọi (lớp thứ hai)."""
+        if not run or not run.get("agent_id"):
+            return {}
+        from ..browser import effective_mode
+        from ..mcp_client import claude_source as cs
+
+        try:
+            agent = self.hub.store.get_agent(run["agent_id"]) or {}
+            tp = agent.get("tool_policy") or {}
+            off = tp.get("web_allow_domains") is not None or effective_mode(agent, self.hub.config) == "chrome"
+        except Exception:  # fail-closed: không đọc được agent → coi như tắt Playwright
+            log.debug("guard: không đọc được chế độ trình duyệt của agent", exc_info=True)
+            off = True
+        if not off:
+            return {}
+        names: set[str] = set()
+        port = cs.config_port(self.hub)
+        for d in self._claude_dirs():
+            try:
+                names.update(n for n, e in cs.cached_all_servers(d, port).items() if e.get("playwright"))
+            except Exception:  # best-effort: chỉ còn nhận theo tên chứa "playwright"
+                log.debug("guard: không đọc được cấu hình MCP của claude", exc_info=True)
+        return {"playwright_off": True, "playwright_servers": frozenset(names)}
 
     # ------------------------------------------------------------------ record
     def _record(self, run: dict[str, Any] | None, channel: str, tool_name: str, tool_input: dict[str, Any], v: Verdict, action: str, approval_id: str | None = None,

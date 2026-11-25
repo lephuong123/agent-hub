@@ -1,13 +1,18 @@
-"""MCP server nguồn `claude` (docs/dev-notes/plan-mcp-claude-native.md PR2): cấu hình + token do `claude` giữ trong thư mục cấu hình
-của TÀI KHOẢN đang dùng; registry hub chỉ giữ metadata an toàn (`McpServerConfig.source="claude"`).
+"""MCP bên thứ ba do `claude` tự quản lý theo tài khoản (`claude mcp add/login`, connector claude.ai) — hub CHỈ ĐỌC cấu hình.
 
-Sự thật đã kiểm (claude 2.1.329): chỉ `mcpServers` TẦNG ĐẦU (user-scope) của `<config_dir>/.claude.json` được nạp trong `-p`
-(local-scope `projects[<cwd>].mcpServers` thì không); `--strict-mcp-config` chặn cả server này lẫn connector claude.ai;
-`--disallowedTools "mcp__<s>__*"` gỡ hết tool của server khỏi ngữ cảnh (server vẫn connect); init `mcp_servers[].status` ∈
-connected | needs-auth | pending.
+Từ plan-mcp-claude-native PR7 hub không còn lớp chính sách MCP (registry, gán theo agent, trust, include/exclude, annotations, duyệt):
+mọi run làm việc bỏ `--strict-mcp-config` nên claude nạp MỌI server user-scope + connector của tài khoản đang dùng. Module này chỉ:
+- đọc danh sách server để liệt kê (`list_accounts` → RPC `mcp.list`), nhận ra server Playwright (chế độ Chrome / allowlist domain gỡ
+  khỏi run) và server trỏ về CHÍNH hub (H-18: gỡ khỏi run);
+- tìm thư mục cấu hình của tài khoản (`account_config_dir`).
 
-File `.claude.json` CHỨA SECRET (header/env/args của server, token…). Ở đây chỉ đọc ra TÊN, transport, host của url — không bao
-giờ trả, log hay lưu giá trị header/env/args/command. Không spawn `claude`.
+Sự thật đã kiểm (claude 2.1.329 / 2.1.332): chỉ `mcpServers` TẦNG ĐẦU (user-scope) của `<config_dir>/.claude.json` được nạp trong `-p`
+(local-scope `projects[<cwd>].mcpServers` thì không); `--strict-mcp-config` chặn cả server này lẫn connector claude.ai, còn
+`--setting-sources ""` thì KHÔNG; `--disallowedTools "mcp__<s>__*"` gỡ hết tool của server khỏi ngữ cảnh (server vẫn connect); init
+`mcp_servers[].status` ∈ connected | needs-auth | pending.
+
+File `.claude.json` CHỨA SECRET (header/env/args của server, token…). Ở đây không bao giờ trả, log hay lưu giá trị header/env; lệnh
+stdio chỉ trả sau khi che giá trị trông như secret (`secret_values`). Không spawn `claude` (`claude mcp list` mất ~50 s).
 
 Thư mục cấu hình theo tài khoản (accounts/claude_config.py): tài khoản token `a_xxxxxxxx` → `HUB_HOME/claude-config/<id>/.claude.json`
 (CLAUDE_CONFIG_DIR của run); `machine` / `custom` / chưa cấu hình → cấu hình mặc định của user OS (`$CLAUDE_CONFIG_DIR/.claude.json`
@@ -70,12 +75,11 @@ def _transport(entry: dict[str, Any]) -> str:
     return "http" if entry.get("url") and not entry.get("command") else "stdio"
 
 
-def read_servers(config_dir: Path | None) -> dict[str, dict[str, Any]]:
-    """mcpServers user-scope của `<config_dir>/.claude.json` → {tên: {transport, host, hub}}. CHỈ các trường đó (không header/env/
-    args/command/url đầy đủ); `hub` = server trỏ về CHÍNH hub (`cfharness mcp serve` / loopback cổng MCP — không được đăng ký).
+def read_servers(config_dir: Path | None, port: int | None = None) -> dict[str, dict[str, Any]]:
+    """mcpServers user-scope của `<config_dir>/.claude.json` → {tên: {transport, host, hub, playwright}}. CHỈ các trường đó (không
+    header/env/args/command/url đầy đủ); `hub` = server trỏ về CHÍNH hub (`cfharness mcp serve` / loopback cổng MCP `port` — cổng
+    `mcp_server.http_port` của hub, đa instance — hoặc tên dành riêng của hub); `playwright` = server Playwright (theo tên/lệnh/URL).
     File thiếu/hỏng/không phải object → {} (người gọi coi như tài khoản không có server)."""
-    from ..guard.service import is_hub_mcp_config
-
     p = claude_json_path(config_dir)
     try:
         if p.stat().st_size > MAX_BYTES:
@@ -90,10 +94,20 @@ def read_servers(config_dir: Path | None) -> dict[str, dict[str, Any]]:
     servers = data.get("mcpServers") if isinstance(data, dict) else None
     if not isinstance(servers, dict):
         servers = {}
-    return _entries(servers)
+    return _entries(servers, port=port)
 
 
-def _entries(servers: dict[str, Any], **extra: Any) -> dict[str, dict[str, Any]]:
+def is_hub_name(name: str) -> bool:
+    """Tên dành riêng của MCP server của hub (`names.HUB_MCP_SERVER_NAMES`: cfharness, agent-hub, hub…) — so cả dạng tên trong tên tool."""
+    from .. import names as _names
+
+    n = str(name).lower()
+    return n in _names.HUB_MCP_SERVER_NAMES or tool_server_name(n) in {tool_server_name(x) for x in _names.HUB_MCP_SERVER_NAMES}
+
+
+def _entries(servers: dict[str, Any], port: int | None = None, **extra: Any) -> dict[str, dict[str, Any]]:
+    """{tên: {transport, host, hub, playwright, …extra}} — cờ tính từ command/args/url NGAY ở đây (không giữ lại lệnh/đối số)."""
+    from ..browser import is_playwright_server
     from ..guard.service import is_hub_mcp_config
 
     out: dict[str, dict[str, Any]] = {}
@@ -102,22 +116,22 @@ def _entries(servers: dict[str, Any], **extra: Any) -> dict[str, dict[str, Any]]
             continue
         tr = _transport(entry)
         try:
-            hub = bool(is_hub_mcp_config(entry))
-        except Exception:  # fail-closed: không xác định được → coi như server của hub (không cho đăng ký)
+            hub = bool(is_hub_mcp_config(entry, port)) or is_hub_name(name)
+        except Exception:  # fail-closed: không xác định được → coi như server của hub (gỡ khỏi run)
             hub = True
-        out[name] = {"transport": tr, "host": _host(entry.get("url")) if tr != "stdio" else None, "hub": hub, **extra}
+        try:
+            pw = bool(is_playwright_server(name, entry))
+        except Exception:  # fail-closed: không xác định được → coi như Playwright (chỉ gỡ ở chế độ Chrome / allowlist)
+            pw = True
+        out[name] = {"transport": tr, "host": _host(entry.get("url")) if tr != "stdio" else None, "hub": hub, "playwright": pw, **extra}
     return out
 
 
 def playwright_servers(config_dir: Path | None) -> set[str]:
-    """Tên server Playwright trong mcpServers user-scope của `.claude.json` (tên hoặc lệnh/đối số/URL chứa 'playwright' —
-    `browser.is_playwright_server`). Chỉ trả TÊN. Dùng để gỡ Playwright khỏi run chế độ Chrome / allowlist domain (runs.py)."""
-    from ..browser import is_playwright_server
-
-    servers = _json_obj(claude_json_path(config_dir)).get("mcpServers")
-    if not isinstance(servers, dict):
-        return set()
-    return {n for n, e in servers.items() if isinstance(n, str) and isinstance(e, dict) and is_playwright_server(n, e)}
+    """Tên server Playwright claude sẽ nạp (user-scope `.claude.json` + do tổ chức cấp — `managedMcpServers` / `managed-mcp.json`),
+    nhận theo tên hoặc lệnh/đối số/URL (`browser.is_playwright_server`). Chỉ trả TÊN. Dùng để gỡ Playwright khỏi run chế độ Chrome /
+    allowlist domain (runs.py) và chặn gọi ở guard (`playwright_not_in_run`)."""
+    return {n for n, e in all_servers(config_dir).items() if e.get("playwright")}
 
 
 def _json_obj(p: Path) -> dict[str, Any]:
@@ -149,24 +163,62 @@ def remote_settings_path(config_dir: Path | None) -> Path:
 MANAGED_MCP_FILES = (Path("/Library/Application Support/ClaudeCode/managed-mcp.json"), Path("/etc/claude-code/managed-mcp.json"))
 
 
-def managed_servers(config_dir: Path | None) -> dict[str, dict[str, Any]]:
+def managed_servers(config_dir: Path | None, port: int | None = None) -> dict[str, dict[str, Any]]:
     """Server MCP do TỔ CHỨC cấp, claude nạp ngoài `.claude.json` (đã thấy thật: `remote-settings.json.managedMcpServers` trên
     2.1.329; `managed-mcp.json` hệ thống). Chỉ tên/transport/host (`managed=True`) — để gỡ khỏi run không gán và đăng ký được."""
     out: dict[str, dict[str, Any]] = {}
     ms = _json_obj(remote_settings_path(config_dir)).get("managedMcpServers")
     if isinstance(ms, dict):
-        out.update(_entries(ms, managed=True))
+        out.update(_entries(ms, port=port, managed=True))
     if not (os.environ.get("CFHARNESS_TESTING") == "1"):
         for f in MANAGED_MCP_FILES:
             srv = _json_obj(f).get("mcpServers")
             if isinstance(srv, dict):
-                out.update(_entries(srv, managed=True))
+                out.update(_entries(srv, port=port, managed=True))
     return out
 
 
-def all_servers(config_dir: Path | None) -> dict[str, dict[str, Any]]:
-    """Mọi server MCP claude sẽ nạp từ cấu hình (user-scope `.claude.json` + do tổ chức cấp); `.claude.json` thắng khi trùng tên."""
-    return {**managed_servers(config_dir), **read_servers(config_dir)}
+def all_servers(config_dir: Path | None, port: int | None = None) -> dict[str, dict[str, Any]]:
+    """Mọi server MCP claude sẽ nạp từ cấu hình (user-scope `.claude.json` + do tổ chức cấp); `.claude.json` thắng khi trùng tên.
+    `port` = `mcp_server.http_port` của hub (nhận server HTTP loopback trỏ về hub — `config_port`)."""
+    return {**managed_servers(config_dir, port), **read_servers(config_dir, port)}
+
+
+def config_port(hub: Any) -> int | None:
+    """Cổng MCP HTTP của hub (`mcp_server.http_port`) — None = mặc định (`is_hub_mcp_config` dùng cổng mặc định + cổng cũ)."""
+    try:
+        v = hub.config.get("mcp_server.http_port")
+        return int(v) if v else None
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def _stamp(p: Path) -> tuple[str, int, int] | None:
+    try:
+        st = p.stat()
+        return (str(p), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+_CACHE: dict[tuple[Any, ...], dict[str, dict[str, Any]]] = {}
+_CACHE_MAX = 32
+
+
+def cached_all_servers(config_dir: Path | None, port: int | None = None) -> dict[str, dict[str, Any]]:
+    """`all_servers` có nhớ theo (đường dẫn, mtime, size) của mọi file nguồn + cổng — chỉ `stat` khi không đổi. Dùng ở đường nóng
+    (guard.check mỗi tool): `.claude.json` của người dùng nặng có thể nhiều MB."""
+    files = [claude_json_path(config_dir), remote_settings_path(config_dir)]
+    if os.environ.get("CFHARNESS_TESTING") != "1":
+        files += list(MANAGED_MCP_FILES)
+    key = (str(config_dir), port, tuple(_stamp(f) for f in files))
+    hit = _CACHE.get(key)
+    if hit is None:
+        hit = all_servers(config_dir, port)
+        if len(_CACHE) >= _CACHE_MAX:
+            _CACHE.clear()
+        _CACHE[key] = hit
+    return hit
 
 
 def account_config_dir(hub: Any, account_id: str | None = None) -> tuple[str | None, Path | None]:
@@ -188,38 +240,135 @@ def account_label(aid: str | None) -> str:
     return aid or "chưa cấu hình (cấu hình claude mặc định)"
 
 
-def register(hub: Any, cfg: dict[str, Any], account_id: Any = None, *, info: dict[str, Any] | None = None,
-             reuse: bool = True) -> dict[str, Any]:
-    """Tạo dòng registry NGUỒN claude (PR2 `mcp.add{source:claude}`, PR3 `mcp.claude_add`): server phải có trong mcpServers user-scope
-    của `.claude.json` của tài khoản (mặc định: đang dùng); transport + host lấy từ đó — bỏ mọi command/url/env/header/auth người
-    truyền. Không probe. `reuse`: đã có dòng nguồn claude (kể cả đã xoá mềm → khôi phục) → trả dòng đó (một dòng dùng chung mọi tài
-    khoản); không `reuse` → trùng tên = Conflict của registry (như `mcp.add`)."""
-    from ..errors import HubError
-
-    name = str(cfg.get("name") or "")
-    aid, cdir = account_config_dir(hub, str(account_id) if account_id else None)
-    if info is None:
-        have = all_servers(cdir)
-        if name not in have:
-            raise HubError(f"không có MCP '{name}' trong cấu hình claude của tài khoản {account_label(aid)} "
-                           f"({claude_json_path(cdir)}) — thêm bằng `cfharness mcp claude add` / `claude mcp add -s user …` dưới tài khoản đó trước",
-                           data={"available": sorted(have), "account": aid})
-        info = have[name]
-    if info.get("hub"):
-        raise HubError(f"MCP '{name}' trong cấu hình claude trỏ về chính hub — không đăng ký làm MCP của agent (H-18)")
-    row = hub.mcp.get_row(name, include_deleted=True) if reuse else None
-    if row is not None:
-        out = hub.mcp.restore(name) if row.get("deleted_at") else hub.mcp.show(name)
-        out["account"] = aid
-        out["existing"] = True
-        return out
-    cfg = {k: v for k, v in cfg.items() if k not in ("command", "args", "env", "headers", "auth", "url", "transport")}
-    cfg["transport"] = info["transport"]
-    if info.get("host"):
-        cfg["url"] = f"https://{info['host']}"
-    out = hub.mcp.add(cfg)
-    out["account"] = aid
-    return out
+def hub_servers(config_dir: Path | None, port: int | None = None) -> list[str]:
+    """Tên server trong cấu hình claude (user-scope + tổ chức cấp) trỏ về CHÍNH hub (`cfharness mcp serve` / loopback cổng MCP `port`
+    / tên dành riêng của hub) — run gỡ khỏi ngữ cảnh (`--disallowedTools`), guard cấm gọi: cho agent quyền điều khiển hub (H-18)."""
+    return sorted(n for n, e in cached_all_servers(config_dir, port).items() if e.get("hub"))
 
 
-__all__ = ["all_servers", "managed_servers", "playwright_servers", "remote_settings_path", "account_config_dir", "account_label", "claude_json_path", "default_claude_json", "read_servers", "register", "tool_server_name"]
+# ------------------------------------------------------------------ danh sách thô cho RPC `mcp.list` (chỉ đọc)
+def _secret_free(text: str, names: Any) -> str:
+    for name in names:
+        text = text.replace(f"${{{name}}}", "***")
+    return text
+
+
+def _redact_url(url: str) -> str:
+    """URL trong đối số lệnh: bỏ userinfo, che giá trị query trông như secret."""
+    from urllib.parse import urlunsplit
+
+    from .secret_values import _Extractor
+
+    try:
+        parts = urlsplit(url)
+        netloc = parts.hostname or ""
+        if parts.port:
+            netloc = f"{netloc}:{parts.port}"
+        ex = _Extractor("x")
+        out = ex.url(urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment)))
+    except ValueError:
+        return "***"
+    return _secret_free(out, ex.secrets)
+
+
+def stdio_target(entry: dict[str, Any]) -> str:
+    """`command` + `args` của server stdio, giá trị trông như secret thay bằng `***` (cùng heuristic với bộ che `claude_redact`).
+    Không bao giờ env."""
+    from ..redact import redact
+    from .secret_values import _Extractor
+
+    cmd = str(entry.get("command") or "").strip()
+    raw = entry.get("args")
+    args = [str(a) for a in raw] if isinstance(raw, list) else []
+    ex = _Extractor("x")
+    out: list[str] = []
+    for a in ex.args(args):
+        a = _secret_free(str(a), ex.secrets)
+        if a.lower().startswith(("http://", "https://")):
+            a = _redact_url(a)
+        out.append(a)
+    return str(redact(" ".join(x for x in [cmd, *out] if x)))[:500]
+
+
+def entry_target(entry: dict[str, Any], transport: str) -> str:
+    """http/sse → host của URL; stdio → lệnh + đối số đã che."""
+    if transport in ("http", "sse"):
+        return _host(entry.get("url")) or ""
+    return stdio_target(entry)
+
+
+def raw_servers(config_dir: Path | None) -> tuple[list[dict[str, Any]], str | None]:
+    """mcpServers user-scope của `.claude.json` → ([{name, transport, target}], lỗi | None). File không có → ([], None); JSON hỏng /
+    không phải object → ([], <lỗi ngắn>). Không bao giờ header/env/giá trị secret."""
+    p = claude_json_path(config_dir)
+    try:
+        if p.stat().st_size > MAX_BYTES:
+            return [], f"file quá lớn (> {MAX_BYTES // (1024 * 1024)} MB)"
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return [], None
+    except ValueError as e:
+        return [], f"JSON không hợp lệ ({type(e).__name__})"
+    except OSError as e:
+        return [], f"không đọc được file ({type(e).__name__})"
+    if not isinstance(data, dict):
+        return [], "nội dung không phải object JSON"
+    servers = data.get("mcpServers")
+    if servers is None:
+        return [], None
+    if not isinstance(servers, dict):
+        return [], "mcpServers không phải object"
+    out = []
+    for name in sorted(servers, key=str):
+        entry = servers[name]
+        if not isinstance(name, str) or not name or not isinstance(entry, dict):
+            continue
+        tr = _transport(entry)
+        out.append({"name": name, "transport": tr, "target": entry_target(entry, tr)})
+    return out, None
+
+
+DEFAULT_LABEL = "Cấu hình claude mặc định của máy"
+
+
+def list_accounts(hub: Any) -> dict[str, Any]:
+    """RPC `mcp.list`: server MCP trong cấu hình MẶC ĐỊNH (id null — tài khoản `machine`/`custom`/chưa cấu hình) + MỖI tài khoản
+    token. Chỉ đọc `.claude.json` (không chạy `claude mcp list`)."""
+    rows: list[tuple[str | None, str, Path | None]] = [(None, DEFAULT_LABEL, None)]
+    acc = getattr(hub, "accounts", None)
+    if acc is not None:
+        from ..accounts.service import CUSTOM, MACHINE
+
+        try:
+            items = acc.list().get("accounts") or []
+        except Exception:  # best-effort: không đọc được danh sách tài khoản → chỉ cấu hình mặc định
+            log.debug("mcp.list: không đọc được tài khoản claude", exc_info=True)
+            items = []
+        for a in items:
+            aid = a.get("id")
+            if not aid or aid in (MACHINE, CUSTOM):
+                continue
+            try:
+                cdir = acc.config_dir(aid)
+            except Exception:  # best-effort: tài khoản lỗi → bỏ qua
+                log.debug("mcp.list: không có thư mục cấu hình của tài khoản", exc_info=True)
+                continue
+            if cdir is None:
+                continue
+            rows.append((str(aid), str(a.get("label") or aid), Path(cdir)))
+    out = []
+    for aid, label, cdir in rows:
+        servers, err = raw_servers(cdir)
+        out.append({"id": aid, "label": label, "config_path": str(claude_json_path(cdir)), "servers": servers, "error": err})
+    return {"accounts": out}
+
+
+def add_hint(config_dir: Path | str | None) -> str:
+    """Một dòng hướng dẫn thêm server bằng `claude mcp add` (tài khoản không mặc định: kèm CLAUDE_CONFIG_DIR=<thư mục>)."""
+    base = "claude mcp add -s user <tên> -- <lệnh> [đối số…]   |   claude mcp add -s user --transport http <tên> <URL>"
+    return base if config_dir is None else f"CLAUDE_CONFIG_DIR={config_dir} {base}"
+
+
+__all__ = ["DEFAULT_LABEL", "account_config_dir", "account_label", "add_hint", "all_servers", "claude_json_path", "default_claude_json",
+           "cached_all_servers", "config_port", "hub_servers", "is_hub_name", "list_accounts", "managed_servers", "playwright_servers", "raw_servers", "read_servers", "remote_settings_path",
+           "stdio_target", "tool_server_name"]

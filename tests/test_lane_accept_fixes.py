@@ -176,7 +176,8 @@ async def test_health_default_60s_and_checked_time_on_card(env):
 
 
 # ============================================================================ 4
-async def test_hub_self_read_tools_not_audited_as_write(env):
+async def test_mcp_tool_calls_not_audited_as_write(env):
+    """PR7: không còn audit `tool.write` theo annotations MCP (hub bỏ lớp chính sách MCP) — kể cả tool ghi của hub-self."""
     from cfharness.events import make_event
 
     d, s, lane = env
@@ -186,7 +187,7 @@ async def test_hub_self_read_tools_not_audited_as_write(env):
     d.hub.publish(make_event("tool.start", "boss", {"name": "mcp__hub-self__task_create", "tool_id": "tu_w", "input": {}}, run_id="r_x"))
     await asyncio.sleep(0.1)
     rows = d.hub.store.conn.execute("SELECT target FROM audit_log WHERE kind='tool.write'").fetchall()[before:]
-    assert [r[0] for r in rows] == ["hub-self/task_create"]
+    assert [r[0] for r in rows] == []
 
 
 # ============================================================================ 5

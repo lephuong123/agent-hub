@@ -148,8 +148,8 @@ def _claude_home_for_transfer(tmp_path_factory):
 
 @pytest.fixture
 def claude_mcp():
-    """MCP bên thứ ba do claude giữ (v0.2.32): ghi server vào `.claude.json` của cấu hình claude MẶC ĐỊNH của test
-    (`CFHARNESS_TEST_CLAUDE_HOME`) — run của agent gán server đó mới chạy được. `claude_mcp("docs")` (stdio giả) hoặc
+    """MCP bên thứ ba do claude giữ: ghi server vào `.claude.json` của cấu hình claude MẶC ĐỊNH của test
+    (`CFHARNESS_TEST_CLAUDE_HOME`) — mọi run làm việc nạp server này (plan-mcp-claude-native PR7). `claude_mcp("docs")` (stdio giả) hoặc
     `claude_mcp("web", {"type": "http", "url": "https://x/mcp"})`. Khôi phục file sau test."""
     import json
     import os

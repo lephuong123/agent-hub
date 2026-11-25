@@ -304,14 +304,15 @@ async def test_chrome_actions_not_set_unchanged(hub):
 @pytest.mark.parametrize("browser", ["auto", "none", "playwright", None])
 async def test_playwright_dropped_when_set(hub, browser, claude_mcp):
     claude_mcp("pw", {"command": "npx", "args": ["@playwright/mcp@latest"]})  # nhận Playwright theo lệnh trong cấu hình claude
-    hub.mcp.add({"name": "pw", "transport": "stdio", "trust": "trusted"})
+    claude_mcp("docs", {"type": "http", "url": "https://docs.example/mcp"})
     tp = {"browser": browser} if browser else {}
-    hub.agents.create({"id": "p", "name": "p", "mcp_servers": ["pw"], "tool_policy": {**tp, "web_allow_domains": ALLOW}})
-    hub.agents.create({"id": "q", "name": "q", "mcp_servers": ["pw"], "tool_policy": tp})
+    hub.agents.create({"id": "p", "name": "p", "tool_policy": {**tp, "web_allow_domains": ALLOW}})
+    hub.agents.create({"id": "q", "name": "q", "tool_policy": tp})
     sp, sq = _spec_for(hub, "p"), _spec_for(hub, "q")
-    # Playwright không áp được luật URL → gỡ khỏi ngữ cảnh (server do claude nạp vẫn connect, guard chặn gọi)
-    assert "mcp__pw__*" in sp.tool_policy["disallowed_tools"] and "pw" not in sp.allowed_mcp_servers
-    assert "mcp__pw__*" not in (sq.tool_policy.get("disallowed_tools") or []) and "pw" in sq.allowed_mcp_servers  # chưa đặt = như cũ
+    # mọi agent nạp MCP của cấu hình claude (PR7); allowlist domain: Playwright không áp được luật URL → gỡ khỏi ngữ cảnh
+    assert "mcp__pw__*" in sp.tool_policy["disallowed_tools"] and "mcp__docs__*" not in sp.tool_policy["disallowed_tools"]
+    assert sp.isolation_overrides == {"strict_mcp_config": False} and sp.allowed_mcp_servers is None
+    assert not [x for x in sq.tool_policy.get("disallowed_tools") or [] if x.startswith("mcp__pw")]  # chưa đặt allowlist = giữ Playwright
 
 
 async def test_playwright_tool_refused(hub):
@@ -367,7 +368,7 @@ async def test_guard_off_disables_chrome_when_set(hub):
     hub.agents.create({"id": "d", "name": "d", "tool_policy": {"browser": "chrome"}})
     sc, sd = _spec_for(hub, "c"), _spec_for(hub, "d")
     assert sc.tool_policy["browser"] == "none" and "mcp__claude-in-chrome" in sc.tool_policy["disallowed_tools"]
-    assert "claude-in-chrome" not in sc.allowed_mcp_servers
+    assert sc.allowed_mcp_servers is None  # run nạp MCP của tài khoản (PR7): không kiểm tên server
     assert sd.tool_policy["browser"] == "chrome" and "mcp__claude-in-chrome" not in sd.tool_policy["disallowed_tools"]  # chưa đặt = như cũ
 
 

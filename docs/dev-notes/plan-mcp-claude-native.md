@@ -1,7 +1,7 @@
 # Plan: chuyển xử lý MCP bên thứ ba sang `claude` (MCP do claude quản lý theo tài khoản)
 
 Trạng thái: PLAN (2026-11-20). PR1 (#171), PR2, PR3, PR4 giai đoạn A + B (gỡ code OAuth/proxy, 2026-11-21) đã làm; PR5 một phần;
-PR6 (gỡ hẳn đường nguồn hub, 2026-11-24, v0.2.32) đã làm. Phụ thuộc nhánh connector theo tài khoản (`accounts/claude_config.py`, v0.2.27).
+PR6 (gỡ hẳn đường nguồn hub, 2026-11-24, v0.2.32) đã làm; PR7 (bỏ hẳn lớp chính sách MCP — mọi agent dùng chung MCP của tài khoản, 2026-11-25) đã làm. Phụ thuộc nhánh connector theo tài khoản (`accounts/claude_config.py`, v0.2.27).
 
 ## 1. Kết luận phân tích
 
@@ -251,6 +251,32 @@ cấu hình claude của tài khoản `machine`) rồi gỡ toàn bộ code + UI
 - `cfharness doctor <agent>`: MCP gán có trong cấu hình claude của tài khoản đang dùng + trạng thái lần kiểm gần nhất (thay probe).
 - Lệch: web chưa có form thêm server stdio (CLI `mcp claude add <tên> -- <lệnh>`); `transfer_os.mark_mcp` (đánh dấu lệnh thiếu khi nhập
   gói cũ) giữ — vô hại với dòng mới (không có lệnh).
+
+### PR7 — Bỏ hẳn lớp chính sách MCP (2026-11-25, nhánh `chore/mcp-raw-list`)
+Người dùng chốt: MCP bên thứ ba do claude tự quản lý hoàn toàn; MỌI agent dùng mọi server + connector của tài khoản Claude đang dùng.
+- Gỡ `mcp_client/registry.py|config.py|schema.py|claude_admin.py`, `ToolWriteWatcher` (audit `tool.write`), `agents.mcp_servers` (field +
+  `--mcp` + `_check_mcp`; nhận rồi bỏ qua — `agents.IGNORED_FIELDS`), RPC `mcp.add|update|remove|restore|show|assign|agent_config|claude_*`,
+  CLI `mcp add|edit|show|rm|restore|assign|unassign|agent-config|claude-servers|claude …`, tool điều phối viên `mcp_registry_list`, khung
+  `manager.capabilities.mcp` (`read_only_trusted`, `mcp_run_disallowed`), `mcp.claude_seen`, event `mcp.unavailable`, sandbox `mcp_domains`,
+  `transfer_os.mcp_missing|mark_mcp`. Migration v35: `DROP TABLE mcp_servers` + `agents.mcp_servers='[]'` (cột giữ cho dòng/gói cũ); v34
+  thành no-op (module đã gỡ).
+- Giữ: server MCP của CHÍNH hub (`mcp_server/`, hub-guard `guard/mcp_guard.py` = permission-prompt-tool, `mcp.json` chỉ chứa hub-guard/
+  hub-self), `claude_redact` + `secret_values` (che giá trị secret của cấu hình claude — nay mọi run nạp server có secret), `mcp annotate
+  claude-in-chrome`.
+- Run: `RunManager._open_mcp` — mọi run làm việc `isolation_overrides.strict_mcp_config=False` (giữ `--setting-sources ""`; kiểm thật 2.1.332:
+  vẫn nạp user-scope + connector claude.ai), run kỹ thuật (review/eval/curator/graph_extract, bản sao eval) giữ strict. `allowed_mcp_servers=None`
+  (không `isolation.violation` theo tên server). `--disallowedTools` MCP chỉ còn: server trỏ về hub (`claude_source.hub_servers`, H-18) và
+  Playwright ở chế độ Chrome / allowlist domain (`playwright_servers` của cấu hình đang dùng). CLAUDE_CONFIG_DIR = `claude-config/<id>/` của
+  tài khoản token khi thư mục ĐÃ có và dựng được dạng dùng chung (`_account_mcp_dir`), không thì cấu hình mặc định + cảnh báo (không làm hỏng run).
+- Quyền: guard KHÔNG còn bắt buộc vì MCP (không còn gì lọc). Guard bật: `classify_mcp` → `mcp_third_party` (safe) cho mọi server ngoài
+  hub-guard/hub-self/Chrome/server của hub; tool tự duyệt/chỉ-người của hub (`hub_*`, server trỏ về hub) vẫn forbidden. Guard tắt: kiểm
+  thật 2.1.332 — claude `-p` không có kênh hỏi thì TỪ CHỐI tool MCP chưa cho phép, `--allowedTools mcp__*` không khớp, `mcp__<server>` khớp →
+  run thêm `mcp__<server>` của mọi server trong cấu hình (connector claude.ai không biết trước tên → cần guard bật).
+- Liệt kê thô: RPC `mcp.list {}` (không HUMAN_ONLY, như `mcp.list` cũ) → `{accounts:[{id|null, label, config_path, servers:[{name, transport,
+  target}], error}]}` — cấu hình mặc định + mỗi tài khoản token; chỉ đọc `.claude.json` `mcpServers` (user-scope); target = host URL (http/sse)
+  hoặc lệnh + đối số đã che (`***`); JSON hỏng → `error`. CLI `cfharness mcp list [--json]` + dòng gợi ý `claude mcp add` (kèm
+  `CLAUDE_CONFIG_DIR=<thư mục>` cho tài khoản không mặc định).
+- Test: `tests/test_mcp_claude_native.py`; gỡ `test_mcp_registry|source_claude|claude_login|tool_write.py`, `fake_claude_mcp.py`.
 
 ### PR5 — Điều phối viên + doctor
 - `mcp_registry_list` hiện cả `source`; khung `read_only_trusted` áp như server hub (dựa annotation thủ công).

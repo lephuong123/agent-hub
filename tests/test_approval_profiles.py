@@ -188,61 +188,19 @@ async def test_profile_tamper_in_config_yaml_restored(tmp_path):
         await h.stop()
 
 
-# ============================================================================ MCP: ghi đè annotations của người + luật mcp_tool
-def _probe_cache(hub, name, tools):
-    hub.mcp.add({"name": name, "transport": "stdio", "command": "npx", "args": ["x"], "trust": "trusted"})
-    hub.store.conn.execute("UPDATE mcp_servers SET annotations_cache=?, last_probe_at='2026-01-01' WHERE name=?", (json.dumps(tools), name))
-
-
-def test_mcp_annotation_override_set_by_human(hub):
-    _probe_cache(hub, "playwright", {"browser_navigate": {"destructiveHint": True, "description": "Navigate to a URL"},
-                                     "browser_close": {"destructiveHint": True, "description": "Close the page"},
-                                     "browser_delete_cookies": {"destructiveHint": True}, "browser_run": {"destructiveHint": True}})
-    hub.mcp.update("playwright", {"tools": {"require_approval": ["browser_run"]}})
-    ctx = hub.guard.context_for(None)
-    assert classify("mcp__playwright__browser_navigate", {"url": "https://x"}, ctx).rule == "mcp_destructive_hint"
-    hub.mcp.update("playwright", {"tools": {"annotations": {"browser_*": {"destructiveHint": False}}}})
-    ann = hub.mcp.tool_annotations("playwright", "browser_navigate")
-    assert ann["destructiveHint"] is False and ann["human_override"] == {"destructiveHint": False}
-    for t in ("browser_navigate", "browser_close"):
-        v = classify(f"mcp__playwright__{t}", {}, ctx)
-        assert v.verdict == "write" and not v.hold, (t, v)
-    # ghi đè KHÔNG gỡ luật tên-xoá và require_approval của người
-    assert classify("mcp__playwright__browser_delete_cookies", {}, ctx).rule == "mcp_delete_name"
-    assert classify("mcp__playwright__browser_run", {}, ctx).rule == "mcp_require_approval"
-    rules = hub.mcp.tool_rules_for_servers(["playwright"])
-    assert "mcp__playwright__browser_navigate" in rules["allowed"] and "mcp__playwright__browser_run" not in rules["allowed"]
-    with pytest.raises(HubError):
-        hub.mcp.update("playwright", {"tools": {"annotations": {"x": {"trust": "trusted"}}}})
-
-
-async def test_always_allow_mcp_tool_for_one_agent(hub):
+# ============================================================================ MCP bên thứ ba (PR7): không hỏi duyệt ở mọi hồ sơ
+async def test_third_party_mcp_never_asks_even_strict(hub):
+    """MCP do claude quản lý theo tài khoản, mọi agent dùng chung: không annotations/trust/require_approval → hồ sơ strict vẫn cho phép
+    ngay (kể cả tên dạng xoá); tool tự duyệt của hub vẫn bị chặn."""
     hub.config.set("approval.profile", "strict")
-    _probe_cache(hub, "pw", {"browser_navigate": {"destructiveHint": True}, "browser_delete_all": {"destructiveHint": True}})
     run = await _run(hub, "w")
-    task = asyncio.create_task(hub.guard.check({"run_id": run["id"], "tool_name": "mcp__pw__browser_navigate", "tool_input": {"url": "https://a"}, "channel": "hook"}))
-    for _ in range(100):
-        aps = hub.approvals.list("pending", run_id=run["id"])
-        if aps:
-            break
-        await asyncio.sleep(0.01)
-    offer = hub.guard.always_offer(aps[0])
-    assert offer and offer["kind"] == "mcp_tool" and offer["confirm"] == "mcp__pw__browser_navigate" and offer["agent_id"] == "w"
-    spec = hub.guard.always_prepare(aps[0]["id"])
-    hub.approvals.resolve(aps[0]["id"], "allowed")
-    hub.guard.always_commit(spec)
-    assert (await task)["decision"] == "allow"
-    res = await hub.guard.check({"run_id": run["id"], "tool_name": "mcp__pw__browser_navigate", "tool_input": {"url": "https://other"}, "channel": "hook"})
-    assert res["decision"] == "allow"  # tham số khác vẫn không hỏi lại
-    # agent khác / tool tên xoá → vẫn hỏi
-    other = await _run(hub, "w2")
-    v = classify("mcp__pw__browser_navigate", {}, hub.guard.context_for(other))
-    assert v.rule == "mcp_destructive_hint"
-    assert classify("mcp__pw__browser_delete_all", {}, hub.guard.context_for(run)).verdict == "destructive"  # luật chỉ cho ĐÚNG tool đó
-    _probe_cache(hub, "pw2", {"remove_page": {}})  # tên xoá → không bao giờ có lựa chọn mcp_tool
-    from cfharness.guard.classifier import mcp_tool_always_eligible
-
-    assert not mcp_tool_always_eligible("mcp__pw2__remove_page", classify("mcp__pw2__remove_page", {}, hub.guard.context_for(run)))
+    for tool in ("mcp__pw__browser_navigate", "mcp__pw__browser_delete_all", "mcp__docs__remove_page"):
+        res = await hub.guard.check({"run_id": run["id"], "tool_name": tool, "tool_input": {"url": "https://a"}, "channel": "hook"})
+        assert res["decision"] == "allow", (tool, res)
+        assert classify(tool, {}, hub.guard.context_for(run)).rule == "mcp_third_party"
+    assert not hub.approvals.list("pending", run_id=run["id"])
+    res = await hub.guard.check({"run_id": run["id"], "tool_name": "mcp__x__hub_approve", "tool_input": {}, "channel": "hook"})
+    assert res["decision"] != "allow"
 
 
 # ============================================================================ worktree do task tạo + extra_write_roots
@@ -607,5 +565,5 @@ def test_cli_rewrites_approvals_stats_and_profile():
     assert rewrite_argv(["--json", "approvals", "profile"]) == ["--json", "approvals-profile"]
     a = build_parser().parse_args(rewrite_argv(["approvals", "stats", "--days", "7"]))
     assert a.days == 7
-    a = build_parser().parse_args(["mcp", "annotate", "playwright", "browser_*", "--not-destructive"])
+    a = build_parser().parse_args(["mcp", "annotate", "claude-in-chrome", "browser_*", "--not-destructive"])
     assert a.not_destructive and a.tool == "browser_*"

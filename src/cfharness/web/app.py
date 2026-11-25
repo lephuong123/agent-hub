@@ -863,7 +863,6 @@ async def agents_page(request: Request) -> Response:
 
 async def _agent_form_ctx(request: Request, agent: dict[str, Any] | None, values: dict[str, Any] | None = None, error: str | None = None) -> dict[str, Any]:
     templates_ = await rpc(request, "template.list")
-    mcp = [m for m in (await rpc(request, "mcp.list") or [])]
     v: dict[str, Any] = values or {}
     if agent and not values:
         tp = agent.get("tool_policy") or {}
@@ -872,14 +871,13 @@ async def _agent_form_ctx(request: Request, agent: dict[str, Any] | None, values
             "id": agent["id"], "name": agent.get("name"), "role": agent.get("role"), "description": agent.get("description"),
             "model": agent.get("model"), "effort": agent.get("effort") or "", "permission_mode": tp.get("permission_mode") or "",
             "browser": tp.get("browser") or "",
-            "tools": ", ".join(tp.get("tools") or []), "mcp": list(agent.get("mcp_servers") or []),
+            "tools": ", ".join(tp.get("tools") or []),
             "web_allow_domains": ", ".join(tp.get("web_allow_domains") or []),
             "connector_slugs": list(tp.get("connectors") or []),
             "max_budget_usd_per_run": lim.get("max_budget_usd_per_run") or "", "budget_usd_per_day": lim.get("budget_usd_per_day") or "",
             "max_runtime_s": lim.get("max_runtime_s") or "", "max_concurrent_runs": lim.get("max_concurrent_runs") or "",
             "workspace_default": agent.get("workspace_default") or "", "soul": agent.get("soul") or "",
         }
-    v.setdefault("mcp", [])
     conn = await _connector_hints(request, agent)
     from ..manager.permissions import connector_slug
     if values is not None:  # form gửi lại sau lỗi → giữ đúng lựa chọn của người
@@ -888,7 +886,7 @@ async def _agent_form_ctx(request: Request, agent: dict[str, Any] | None, values
     opt_slugs = {o["slug"] for o in conn["connector_options"]}
     if values is None or "connectors_extra" not in v:
         v["connectors_extra"] = ", ".join(x for x in v["connector_slugs"] if x not in opt_slugs)
-    return {"nav": "agents", "agent": agent, "templates": templates_, "mcp": mcp, "v": v, "error": error, "models": MODELS, "efforts": EFFORTS,
+    return {"nav": "agents", "agent": agent, "templates": templates_, "v": v, "error": error, "models": MODELS, "efforts": EFFORTS,
             "modes": PERMISSION_MODES, "browsers": BROWSERS, **conn}
 
 
@@ -944,7 +942,7 @@ def _form_connectors_raw(form: Any) -> list[str]:
 
 
 async def agent_new(request: Request) -> Response:
-    ctx = await _agent_form_ctx(request, None, {"template": request.query_params.get("template") or "researcher", "mcp": []})
+    ctx = await _agent_form_ctx(request, None, {"template": request.query_params.get("template") or "researcher"})
     return await render(request, "agent_form.html", ctx)
 
 
@@ -1006,7 +1004,6 @@ def agent_changes(form: FormData, *, creating: bool, from_template: bool) -> dic
             tp["connectors"] = names or None
     if tp:
         ch["tool_policy"] = tp
-    ch["mcp_servers"] = [str(x) for x in form.getlist("mcp") if str(x).strip()]
     lim: dict[str, Any] = {}
     for k, kind, label in (("max_budget_usd_per_run", float, "Ngân sách mỗi run"), ("budget_usd_per_day", float, "Ngân sách mỗi ngày"),
                            ("max_runtime_s", int, "Thời gian chạy tối đa"), ("max_concurrent_runs", int, "Số run đồng thời")):
@@ -1023,7 +1020,6 @@ async def agent_create(request: Request) -> Response:
     aid = str(form.get("id") or "").strip()
     tpl = str(form.get("template") or "").strip()
     values = {k: form.get(k) for k in form.keys()}
-    values["mcp"] = form.getlist("mcp")
     values["connector"] = form.getlist("connector")
     try:
         ch = agent_changes(form, creating=True, from_template=bool(tpl))
@@ -1032,7 +1028,6 @@ async def agent_create(request: Request) -> Response:
             tp = ch.get("tool_policy") or {}
             msg = (f"Tạo agent {aid or '?'}" + (f" từ mẫu {tpl}" if tpl else "") + "?"
                    + f"\nChế độ quyền: {tp.get('permission_mode') or '(theo mẫu)'} · Tool: {', '.join(tp.get('tools') or []) or '(theo mẫu)'}"
-                   + f"\nMCP: {', '.join(ch.get('mcp_servers') or []) or '(không)'}"
                    + (f"\nConnector claude.ai: {', '.join(tp['connectors'])} (run nạp cấu hình user ~/.claude)" if tp.get("connectors") else ""))
             return await render(request, "confirm.html", {"message": msg, "fields": carry(form), "action": "/agents/create", "danger": False,
                                                           "back": "/agents/new", "note": None})
@@ -1053,7 +1048,6 @@ async def agent_update(request: Request) -> Response:
     _, form = await post_guard(request)
     aid = request.path_params["id"]
     values = {k: form.get(k) for k in form.keys()}
-    values["mcp"] = form.getlist("mcp")
     values["connector"] = form.getlist("connector")
     try:
         cur = await rpc(request, "agent.get", {"id": aid})
@@ -1080,8 +1074,6 @@ async def agent_update(request: Request) -> Response:
                 tp_new.pop("connectors")  # không đổi → không ghi lại
         if (tp_new.get("tools") or None) != (tp_old.get("tools") or None):
             risky.append(f"tool: {', '.join(tp_old.get('tools') or []) or 'mặc định'} → {', '.join(tp_new.get('tools') or []) or 'mặc định'}")
-        if sorted(ch.get("mcp_servers") or []) != sorted(cur.get("mcp_servers") or []):
-            risky.append(f"MCP: {', '.join(cur.get('mcp_servers') or []) or '(không)'} → {', '.join(ch.get('mcp_servers') or []) or '(không)'}")
         if risky and form.get("confirm") != "yes":
             return await render(request, "confirm.html", {"message": f"Đổi quyền của agent {aid}?\n" + "\n".join(risky), "fields": carry(form),
                                                           "action": f"/agents/{aid}/save", "danger": True, "back": f"/agents/{aid}/edit", "note": None})
@@ -1368,16 +1360,6 @@ async def learnings_page(request: Request) -> Response:
 async def ledger_entry(request: Request) -> Response:
     e = await rpc(request, "learn.show", {"id": request.path_params["id"]})
     return await render(request, "ledger.html", {"nav": "learnings", "e": e})
-
-
-async def mcp_page(request: Request) -> Response:
-    servers = await rpc(request, "mcp.list", {"deleted": True})
-    agents = await rpc(request, "agent.list", {})
-    used: dict[str, list[str]] = {}
-    for a in agents:
-        for s in a.get("mcp_servers") or []:
-            used.setdefault(s, []).append(a["id"])
-    return await render(request, "mcp.html", {"nav": "mcp", "servers": servers, "used": used})
 
 
 async def costs_page(request: Request) -> Response:
@@ -1786,11 +1768,6 @@ ACTIONS: dict[str, Action] = {
                                         lambda r, f: f"Đã tạo golden task {(r or {}).get('golden_task_id')} từ đề xuất {f.get('id')}"),
     "golden_suggestion_reject": Action("golden.suggestion_reject", lambda f: {"id": _req(f, "id")}, lambda r, f: f"Đã bỏ đề xuất {f.get('id')}"),
     "digest_run": Action("digest.run", lambda f: {"no_send": True}, "Đã tạo bản tin học"),
-    # ---- MCP
-    "mcp_remove": Action("mcp.remove", lambda f: {"name": _req(f, "name"), "force": f.get("force") == "1"}, lambda r, f: f"Đã xoá MCP {f.get('name')} (khôi phục được)",
-                         confirm=lambda f: f"Xoá MCP server {f.get('name')}? Agent đang dùng sẽ mất các tool này.", danger=True, goto=lambda r, f: "/mcp"),
-    "mcp_restore": Action("mcp.restore", lambda f: {"name": _req(f, "name")}, lambda r, f: f"Đã khôi phục MCP {f.get('name')}",
-                          confirm=lambda f: f"Khôi phục MCP server {f.get('name')}? Server MCP chạy NGOÀI sandbox của agent."),
     # ---- an toàn & cài đặt
     "estop": Action("estop.set", lambda f: {"on": f.get("on") == "1", "stop_running": f.get("stop_running") == "1", "reason": f.get("note") or "web"},
                     lambda r, f: "ESTOP đã BẬT — không run mới nào được chạy" if f.get("on") == "1" else "ESTOP đã tắt",
@@ -2321,8 +2298,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/teams", teams_page),
         Route("/learnings", learnings_page),
         Route("/learnings/{id}", ledger_entry),
-        Route("/mcp", mcp_page),
-        *_mcp_routes(),  # /mcp/agent/{id}, /mcp/{name} (+ /tool) — web/mcp_pages.py
+        *_mcp_routes(),  # /mcp: danh sách MCP chỉ đọc theo tài khoản claude; URL cũ /mcp/... → /mcp (web/mcp_pages.py)
         Route("/costs", costs_page),
         Route("/audit", audit_page),
         *_debug_routes(),  # /logs "Nhật ký hệ thống" + /trace/{id} — chỉ đọc (web/debug_pages.py, L6)
@@ -2364,10 +2340,6 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
 from . import manager as _mgr  # noqa: E402
 
 _mgr.register_actions(ACTIONS, Action, _req)
-# Trang MCP mở rộng (sửa chính sách server, tool): thao tác `mcp_edit`
-from . import mcp_pages as _mcpp  # noqa: E402
-
-_mcpp.register_actions(ACTIONS, Action, _req)
 
 # Wizard Slack 2 chiều (P5): slack2_setup / pair / allow / revoke / test / disable + khối ở Cài đặt
 from . import slack_pages as _slack_pages  # noqa: E402

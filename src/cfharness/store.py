@@ -1006,12 +1006,22 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS file_leases_session ON file_leases(session_id);
     """,
-    # v34: MCP bên thứ ba chỉ còn nguồn claude — dòng nguồn hub đổi tại chỗ (mcp_client/schema.py)
-    "mcp_client.schema.to_claude_source",
+    # v34: (v0.2.32) đổi dòng MCP nguồn hub sang nguồn claude tại chỗ (`mcp_client.schema.to_claude_source`). Từ v35 bảng registry bị
+    # bỏ hẳn nên bước này thành no-op (module đã gỡ); DB cũ đi qua v34 rồi v35 như thường.
+    """
+    SELECT 1;
+    """,
+    # v35 — plan-mcp-claude-native PR7: hub bỏ lớp chính sách MCP (registry, gán theo agent, trust, include/exclude, annotations).
+    # MCP bên thứ ba do claude quản lý theo tài khoản, MỌI agent dùng chung → xoá bảng registry + gỡ server gán theo agent (cột
+    # `agents.mcp_servers` giữ lại cho tương thích đọc/ghi dòng cũ, luôn '[]'; gói chuyển hub / YAML cũ có trường này bị bỏ qua).
+    """
+    DROP TABLE IF EXISTS mcp_servers;
+    UPDATE agents SET mcp_servers='[]' WHERE mcp_servers IS NULL OR mcp_servers <> '[]';
+    """,
 ]
 
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.
-PY_MIGRATION_PREFIXES = ("session_search.", "knowledge.graph.schema.", "mcp_client.schema.")
+PY_MIGRATION_PREFIXES = ("session_search.", "knowledge.graph.schema.")
 
 
 def is_py_migration(sql: str) -> bool:

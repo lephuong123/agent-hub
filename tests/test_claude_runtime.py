@@ -37,7 +37,8 @@ async def test_real_subprocess_stream_json_run(hub):
     assert final["cost_usd"] == 0.001 and final["summary"] == "ok"
     assert final["exit_code"] == 0  # stdin được đóng sau result → CLI thoát
     argv = final["argv_redacted"]
-    assert "--setting-sources" in argv and "--strict-mcp-config" in argv and "--input-format" in argv
+    # run làm việc nạp MCP của tài khoản Claude (PR7): không --strict-mcp-config
+    assert "--setting-sources" in argv and "--strict-mcp-config" not in argv and "--input-format" in argv
     assert not final["isolation_violations"]
     msgs = [e for e in hub.store.query_events(run_id=run["id"]) if e.type == "message.complete"]
     assert msgs[0].payload["text"] == "echo: xin chào"  # prompt đã đi qua stdin

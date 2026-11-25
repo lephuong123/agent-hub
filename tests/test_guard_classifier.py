@@ -267,14 +267,9 @@ DESTRUCTIVE_OTHER = [
     ("Write", {"file_path": ".env", "content": "A=1"}),
     ("Edit", {"file_path": "HOMEDIR/.ssh/config", "old_string": "a", "new_string": "b"}),
     ("Write", {"file_path": "HOMEDIR/.zshrc", "content": "x"}),
-    ("mcp__tasks__xoa_nhiem_vu", {"id": 1}),
-    ("mcp__tasks__delete_task", {"id": 1}),
-    ("mcp__tasks__purgeAll", {}),
-    ("mcp__tasks__go_bo_nguoi_dung", {"id": 1}),
-    ("mcp__tasks__archive_project", {"id": 1}),
-    ("mcp__tasks__close_ticket", {"id": 1}),
-    ("mcp__crm__update_contact", {"id": 1}),
+    # (PR7) tool MCP bên thứ ba không còn phân loại phá huỷ — claude quản lý; chỉ tool tự duyệt của hub
     ("mcp__hub-self__hub_approve", {"id": "ap_1"}),
+    ("mcp__anyname__hub_approve", {"id": "ap_1"}),
 ]
 
 # --------------------------------------------------------------------------- tập THƯỜNG (báo nhầm ≤ 5%)
@@ -392,8 +387,8 @@ def test_brd_acceptance_examples(env):
     # FR-SG-05: sed -i vào policy → phá huỷ
     v = bash(env, f"sed -i 's/a/b/' {env['hub']}/policy/destructive.yaml")
     assert v.verdict == "destructive" and v.protected_id == "hub-policy"
-    # FR-SG-01 MCP: xoa_nhiem_vu của server trusted → phá huỷ
-    assert classify("mcp__qlcv__xoa_nhiem_vu", {}, env["ctx"]).verdict == "destructive"
+    # FR-SG-01 MCP (PR7): MCP bên thứ ba do claude quản lý — guard không hỏi duyệt, kể cả tên dạng xoá
+    assert classify("mcp__qlcv__xoa_nhiem_vu", {}, env["ctx"]).verdict == "safe"
 
 
 def test_forbidden_self_approval(env):
