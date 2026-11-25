@@ -51,6 +51,7 @@ CUSTOM_LABEL = "Token tự đặt"
 TOKEN_VALID_DAYS = 365  # token `claude setup-token` có hạn 1 năm
 EXPIRING_DAYS = 14
 LOGIN_TTL_S = 600.0
+CLAUDEAI_TTL_S = LOGIN_TTL_S  # `account.claudeai_status {cached}`: cache phiên claude.ai cũ hơn mức này → probe lại (nền)
 LABEL_MAX = 80
 
 
@@ -110,6 +111,8 @@ class AccountService:
         self.hub = hub
         self.login_ttl_s = LOGIN_TTL_S
         self._logins: dict[str, _Login] = {}  # RAM daemon: phiên `claude setup-token` đang chờ code (tối đa 1)
+        self._cai_bg: dict[str, asyncio.Task[Any]] = {}  # probe nền `claude auth status` theo tài khoản (singleflight)
+        self.claudeai_ttl_s = CLAUDEAI_TTL_S
 
     # ------------------------------------------------------------------ hạ tầng
     @property
@@ -486,13 +489,48 @@ class AccountService:
 
     def _cai_cache_set(self, account_id: str, logged_in: bool | None, email: str | None) -> None:
         c = self._cai_cache()
-        c[account_id] = {"logged_in": logged_in, "email": email, "checked_at": iso()}
+        c[account_id] = {"logged_in": logged_in, "email": email, "checked_at": iso(), "ts": time.time()}
         self.store.state_set(CLAUDEAI_KEY, c)
 
+    def _cai_bg_cancel(self, account_id: str) -> None:
+        """Huỷ probe nền đang chạy (đăng nhập/đăng xuất/xoá): kết quả cũ của nó không được ghi đè trạng thái vừa đổi."""
+        t = self._cai_bg.pop(account_id, None)
+        if t is not None and not t.done():
+            t.cancel()
+
     def _cai_cache_drop(self, account_id: str) -> None:
+        self._cai_bg_cancel(account_id)
         c = self._cai_cache()
         if c.pop(account_id, None) is not None:
             self.store.state_set(CLAUDEAI_KEY, c)
+
+    def _cai_fresh(self, entry: Any) -> bool:
+        """Mục cache còn mới (probe trong `claudeai_ttl_s`)? Mục bản cũ (không có `ts`) → cũ."""
+        try:
+            ts = float(entry.get("ts")) if isinstance(entry, dict) else None
+        except (TypeError, ValueError):
+            ts = None
+        return ts is not None and 0 <= time.time() - ts < self.claudeai_ttl_s
+
+    def _cai_refresh_bg(self, account_id: str) -> None:
+        """Probe lại phiên claude.ai ở nền (không chặn trang web); đã có lượt đang chạy cho tài khoản này → thôi."""
+        t = self._cai_bg.get(account_id)
+        if t is not None and not t.done():
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:  # pragma: no cover - luôn gọi từ RPC trong loop
+            return
+
+        async def run() -> None:
+            try:
+                await self._cai_probe(account_id)
+            finally:
+                if self._cai_bg.get(account_id) is task:
+                    self._cai_bg.pop(account_id, None)
+
+        task = spawn(run(), name=f"account-claudeai-probe:{account_id}")
+        self._cai_bg[account_id] = task
 
     def claudeai_brief(self, account_id: str) -> dict[str, Any] | None:
         """`{logged_in, email}` từ cache (KHÔNG chạy claude) — cho `account.list`. custom → None."""
@@ -525,17 +563,30 @@ class AccountService:
             err = ""
         else:
             info, err = await self._auth_info(env, "status", "--json")
-        if info is not None:
+        if info is not None and (account_id == MACHINE or self._row(account_id) is not None):  # tài khoản vừa bị xoá → không ghi lại
             ok = bool(info.get("loggedIn") and info.get("authMethod") == "claude.ai")
             self._cai_cache_set(account_id, ok, (str(info.get("email") or "")[:200] or None) if ok else None)
         return info, err
 
-    async def claudeai_status(self, account_id: Any = None) -> dict[str, Any]:
+    async def claudeai_status(self, account_id: Any = None, *, cached: bool = False) -> dict[str, Any]:
         """Phiên `claude auth login --claudeai` của một tài khoản — connector claude.ai (Google Drive…) chỉ nạp với phiên này,
         không với token setup-token. Không có id → `machine` (cấu hình mặc định của user OS) + `accounts` (cache mọi tài khoản).
-        Trả `{id, logged_in, email, org, plan, connectors_auto, connectors_auth, login}` (KHÔNG token)."""
+        Trả `{id, logged_in, email, org, plan, connectors_auto, connectors_auth, login}` (KHÔNG token).
+        `cached` (trang Cài đặt): trả bản trong cache, KHÔNG chạy `claude auth status` (~1-3 s); cache cũ hơn `claudeai_ttl_s` →
+        probe lại ở nền (lần tải sau thấy kết quả mới); chưa có cache → probe ngay như thường. Có thêm `cached: true` và `org`/`plan`
+        = None (cache không giữ). Đăng nhập/đăng xuất/«Kiểm tra» luôn probe thật (ghi lại cache)."""
         aid = self._cai_id(account_id)
-        info, err = await self._cai_probe(aid)
+        entry = self._cai_cache().get(aid) if cached else None
+        if isinstance(entry, dict) and "logged_in" in entry:
+            if not self._cai_fresh(entry):
+                self._cai_refresh_bg(aid)
+            ok = entry.get("logged_in")
+            info: dict[str, Any] | None = None if ok is None else \
+                {"loggedIn": bool(ok), "authMethod": "claude.ai" if ok else None, "email": entry.get("email")}
+            err = ""
+        else:
+            entry = None
+            info, err = await self._cai_probe(aid)
         ok = bool(info and info.get("loggedIn") and info.get("authMethod") == "claude.ai")
         cfg = self.hub.config
         out: dict[str, Any] = {"id": aid, "logged_in": ok if info is not None else None, "error": None if info is not None else err[:300],
@@ -545,6 +596,8 @@ class AccountService:
         if ok and info:
             out.update(email=str(info.get("email") or "")[:200] or None, org=str(info.get("orgName") or "")[:200] or None,
                        plan=str(info.get("subscriptionType") or "")[:40] or None)
+        if entry is not None:
+            out["cached"] = True
         if account_id in (None, ""):
             out["accounts"] = {k: {"logged_in": v.get("logged_in"), "email": v.get("email")}
                                for k, v in self._cai_cache().items() if isinstance(v, dict)}
@@ -584,6 +637,7 @@ class AccountService:
         if s is None:
             raise NotFound("phiên đăng nhập không tồn tại hoặc đã hết hạn (10 phút) — bấm đăng nhập lại")
         aid = s.account_id or MACHINE
+        self._cai_bg_cancel(aid)
         try:
             await s.handle.submit_signin(code)
         finally:
@@ -600,6 +654,7 @@ class AccountService:
     async def claudeai_logout(self, account_id: Any = None) -> dict[str, Any]:
         aid = self._cai_id(account_id)
         self.require_session_idle(aid, "gỡ connector")
+        self._cai_bg_cancel(aid)
         env = self._cai_env(aid)
         err = ""
         if env is not None:
@@ -739,3 +794,5 @@ class AccountService:
     async def close_all_logins(self) -> None:
         for lid in list(self._logins):
             await self._close_login(lid)
+        for aid in list(self._cai_bg):  # probe nền `claude auth status` (trang Cài đặt) — không để sót khi daemon dừng
+            self._cai_bg_cancel(aid)

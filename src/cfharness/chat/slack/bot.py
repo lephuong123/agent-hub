@@ -36,6 +36,7 @@ import logging
 import re
 import secrets as _secrets
 import time
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
 from ...trace import traced
@@ -103,6 +104,10 @@ SEND_RETRIES = 2  # chat.postMessage bị 429 → thử lại tối đa N lần 
 SEND_RETRY_MAX_S = 60.0  # `retry_after` dài hơn → không chờ, báo lỗi ngay
 CTX_MAX_CHARS = 6000  # trần chữ ngữ cảnh thread (giữ tin MỚI nhất)
 CTX_MSG_CHARS = 800  # trần mỗi tin
+NAMES_MAX = 500  # cache users.info (LRU) — tên người cho ngữ cảnh thread / ghép nối
+NAMES_TTL_S = 24 * 3600.0  # tên đổi hiếm; hết hạn thì hỏi lại
+NAMES_ERR_TTL_S = 300.0  # users.info lỗi → nhớ uid làm tên 5 phút rồi thử lại
+NAMES_CONCURRENCY = 8  # users.info song song tối đa khi dựng ngữ cảnh thread
 # subtype tin của NGƯỜI được nhận: thường, có tệp, trả lời thread "gửi cả vào kênh" (thread_broadcast)
 MSG_SUBTYPES = (None, "file_share", "thread_broadcast")
 SHARE_MAX = 5  # tin chuyển tiếp (`attachments[].is_share`) tối đa mỗi tin
@@ -218,7 +223,8 @@ class SlackBot(ChatBot):
         self._roots: dict[str, str] = {}   # ts tin bot gửi → ts gốc của thread
         self._thread: dict[str, list[str]] = {}  # ts gốc → các ts bot đã gửi trong thread (mới nhất cuối)
         self._chan_threads: dict[str, list[str]] | None = None  # bản RAM của `slack.threads` (nạp lười)
-        self._names: dict[str, str] = {}  # user_id → tên hiển thị (users.info, cho ngữ cảnh thread)
+        # user_id → (hạn monotonic, {name, username, real_name}) từ users.info — LRU, TTL 24 h (lỗi: 5 phút)
+        self._names: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
         self._sleep = asyncio.sleep  # chờ `retry_after` khi gửi bị 429 (test thay để chạy nhanh)
         self._inbox: asyncio.Queue[tuple[str, dict[str, Any]]] | None = None
         self.modals = SlackModals(self)  # P2: ô nhập giao việc / trả lời câu hỏi bằng chữ
@@ -257,7 +263,8 @@ class SlackBot(ChatBot):
         if not t:
             return None
         c = self.cfg()
-        return SlackApi(str(c.get("api_base") or "https://slack.com/api"), t, self.app_token(), timeout=float(c.get("timeout_s") or 15))
+        base, at, timeout = str(c.get("api_base") or "https://slack.com/api"), self.app_token(), float(c.get("timeout_s") or 15)
+        return self._cached_api((base, t, at, timeout), lambda: SlackApi(base, t, at, timeout=timeout))
 
     def active(self) -> bool:
         """Bot 2 chiều đang thay kênh webhook (có token + có người trong allowlist) → `SlackNotifier` nhường."""
@@ -818,21 +825,41 @@ class SlackBot(ChatBot):
         await self.manager.new_conversation(cid, api)  # thread có bot nhưng chưa gắn cuộc nào (vd tin lịch giao vào kênh)
         await self.manager.handle_text(cid, untagged(text), api, message_id=self._own(cid, root, ts))
 
-    async def _user_name(self, api: SlackApi, uid: str) -> str:
-        """Tên hiển thị (users.info, nhớ RAM) — lỗi/thiếu → user id."""
-        if uid in self._names:
-            return self._names[uid]
-        name = uid
+    def _cached_user(self, uid: str) -> dict[str, Any] | None:
+        hit = self._names.get(uid)
+        if hit is None:
+            return None
+        if hit[0] < time.monotonic():
+            self._names.pop(uid, None)
+            return None
+        self._names.move_to_end(uid)
+        return hit[1]
+
+    async def _user_info(self, api: SlackApi, uid: str) -> dict[str, Any]:
+        """`{name, username, real_name}` của người Slack (users.info, nhớ RAM: LRU `NAMES_MAX` mục, TTL `NAMES_TTL_S`; lỗi nhớ
+        `NAMES_ERR_TTL_S` để không gọi lại liên tục). Lỗi/thiếu → name = user id, username/real_name = None."""
+        got = self._cached_user(uid)
+        if got is not None:
+            return got
+        info: dict[str, Any] = {"name": uid, "username": None, "real_name": None}
+        ttl = NAMES_TTL_S
         try:
             u = (await api.call("users.info", {"user": uid})).get("user") or {}
             p = u.get("profile") or {}
-            name = str(p.get("display_name") or p.get("real_name") or u.get("real_name") or u.get("name") or uid)
+            info = {"name": str(p.get("display_name") or p.get("real_name") or u.get("real_name") or u.get("name") or uid),
+                    "username": u.get("name"), "real_name": p.get("real_name") or u.get("real_name")}
         except Exception as e:  # best-effort: đã log debug; dùng uid làm tên
             log.debug("users.info lỗi: %s", clip(e))
-        if len(self._names) > 500:
-            self._names.clear()
-        self._names[uid] = name
-        return name
+            ttl = NAMES_ERR_TTL_S
+        self._names[uid] = (time.monotonic() + ttl, info)
+        self._names.move_to_end(uid)
+        while len(self._names) > NAMES_MAX:
+            self._names.popitem(last=False)
+        return info
+
+    async def _user_name(self, api: SlackApi, uid: str) -> str:
+        """Tên hiển thị (users.info, nhớ RAM) — lỗi/thiếu → user id."""
+        return str((await self._user_info(api, uid)).get("name") or uid)
 
     async def _shared_context(self, api: SlackApi, ev: dict[str, Any]) -> str:
         """Tin Slack được chuyển tiếp / dán link (`attachments[]` có `is_share` hoặc `is_msg_unfurl`) → khối DỮ LIỆU không tin cậy
@@ -918,6 +945,15 @@ class SlackBot(ChatBot):
             t = " ↵ ".join(s.strip() for s in strip_mention(str(x.get("text") or ""), me).splitlines() if s.strip())
             if t:
                 msgs.append((u, clip(redact_str(t), CTX_MSG_CHARS)))  # tin người khác có thể dán token/mật khẩu — che trước khi tới LLM
+        todo = list(dict.fromkeys(u for u, _ in msgs if self._cached_user(u) is None))
+        if todo:  # users.info song song cho người chưa có trong cache (trước đây tuần tự từng người)
+            sem = asyncio.Semaphore(NAMES_CONCURRENCY)
+
+            async def one(u: str) -> None:
+                async with sem:
+                    await self._user_info(api, u)
+
+            await asyncio.gather(*(one(u) for u in todo))
         lines: list[str] = []
         used = 0
         for u, t in reversed(msgs):  # mới nhất trước — tin cũ bị lược khi quá trần
@@ -1065,14 +1101,11 @@ class SlackBot(ChatBot):
         return True
 
     async def _fill_name(self, api: SlackApi, cid: str, uid: str) -> None:
-        try:
-            u = (await api.call("users.info", {"user": uid})).get("user") or {}
-        except Exception:  # best-effort: tên người chỉ để hiển thị khi ghép nối
-            return
+        u = await self._user_info(api, uid)  # dùng chung cache users.info; lỗi → username/real_name None (chỉ để hiển thị)
         rec = (self.pairing or {}).get("pending", {}).get(cid)
-        if rec is not None:
-            rec["username"] = u.get("name")
-            rec["name"] = (u.get("profile") or {}).get("real_name") or u.get("real_name")
+        if rec is not None and (u.get("username") or u.get("real_name")):
+            rec["username"] = u.get("username")
+            rec["name"] = u.get("real_name")
 
     # ------------------------------------------------------------------ trạng thái
     def status(self) -> dict[str, Any]:

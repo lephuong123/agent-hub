@@ -102,7 +102,7 @@ def _login(request: Request) -> dict[str, Any] | None:
 
 async def accounts_ctx(request: Request, status: dict[str, Any] | None) -> dict[str, Any]:
     """Ngữ cảnh khối "Tài khoản Claude" cho settings.html. Daemon chưa có `account.*` → `accounts=None` (khối hiện hướng dẫn)."""
-    cai = await claudeai_ctx(request)  # TRƯỚC account.list: kiểm phiên của `machine` → cache mới cho dòng "Đăng nhập của máy"
+    cai = await claudeai_ctx(request)  # TRƯỚC account.list: chưa có cache của `machine` → daemon kiểm ngay cho dòng "Đăng nhập của máy"
     try:
         res = await rpc(request, "account.list", {}) or {}
     except (RpcError, DaemonUnavailable, OSError):
@@ -131,9 +131,11 @@ async def _chain_claudeai(request: Request, r: Any) -> bool:
 
 
 async def claudeai_ctx(request: Request) -> dict[str, Any] | None:
-    """Khối "Connector claude.ai" (Google Drive…): phiên `claude auth login` của user OS chạy hub. Daemon cũ → None (ẩn khối)."""
+    """Khối "Connector claude.ai" (Google Drive…): phiên `claude auth login` của user OS chạy hub. Daemon cũ → None (ẩn khối).
+    `cached`: không chạy `claude auth status` mỗi lần tải trang — daemon trả cache, cũ thì tự kiểm lại ở nền; nút «Kiểm tra»
+    (`account.check`) và đăng nhập/đăng xuất luôn kiểm thật."""
     try:
-        st = await rpc(request, "account.claudeai_status", {}) or {}
+        st = await rpc(request, "account.claudeai_status", {"cached": True}) or {}
     except (RpcError, DaemonUnavailable, OSError):
         return None
     lg = st.get("login") if isinstance(st.get("login"), dict) else None

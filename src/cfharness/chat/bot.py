@@ -119,7 +119,8 @@ class TelegramBot(ChatBot):
         if not t:
             return None
         c = self.cfg()
-        return TelegramApi(str(c.get("api_base") or "https://api.telegram.org"), t, timeout=float(c.get("timeout_s") or 15))
+        base, timeout = str(c.get("api_base") or "https://api.telegram.org"), float(c.get("timeout_s") or 15)
+        return self._cached_api((base, t, timeout), lambda: TelegramApi(base, t, timeout=timeout))
 
     def caller(self, chat_id: Any, user_id: Any = None) -> "_auth.Caller":
         return _auth.telegram_caller(self.hub, chat_id, user_id)

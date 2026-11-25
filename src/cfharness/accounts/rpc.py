@@ -3,8 +3,8 @@
 - `account.list {}` → `{active, accounts: [Account]}` (đọc)
 - `account.login_start {label}` → `{login_id, url, expires_at}` · `account.login_finish {login_id, code}` → `{account}` ·
   `account.login_cancel {login_id}` → `{ok}`
-- `account.claudeai_status {id?}` → `{id, logged_in, email, org, plan, connectors_auto, connectors_auth, login}` (đọc, HUMAN_ONLY;
-  không id = `machine` + `accounts: {<id>: {logged_in, email}}` từ cache) · `account.claudeai_login_start {id?}` →
+- `account.claudeai_status {id?, cached?}` → `{id, logged_in, email, org, plan, connectors_auto, connectors_auth, login}` (đọc, HUMAN_ONLY;
+  không id = `machine` + `accounts: {<id>: {logged_in, email}}` từ cache; `cached` = không chạy claude khi cache còn mới — trang Cài đặt) · `account.claudeai_login_start {id?}` →
   `{login_id, url, expires_at, account_id, account_label}` · `account.claudeai_login_finish {login_id, code}` → status ·
   `account.claudeai_logout {id?}` → status — phiên `claude auth login --claudeai` RIÊNG của từng tài khoản (connector claude.ai;
   tài khoản token: `HUB_HOME/claude-config/<id>/`, `machine` = cấu hình mặc định — id mặc định `machine`), không tạo tài khoản token
@@ -76,7 +76,7 @@ def register_rpc(daemon: "Daemon") -> None:
         "account.rm": lambda p: s.remove_account(str(_req(p, "id"))),
         "account.check": _check,
         # phiên claude.ai (`claude auth login`) cho connector — docs/dev-notes/manager-connectors.md
-        "account.claudeai_status": lambda p: s.claudeai_status(p.get("id")),
+        "account.claudeai_status": lambda p: s.claudeai_status(p.get("id"), cached=bool(p.get("cached"))),
         "account.claudeai_login_start": lambda p: s.claudeai_login_start(p.get("id")),
         "account.claudeai_login_finish": _cai_finish,
         "account.claudeai_logout": lambda p: s.claudeai_logout(p.get("id")),

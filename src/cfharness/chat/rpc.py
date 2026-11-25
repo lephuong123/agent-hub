@@ -62,6 +62,9 @@ def register_rpc(d: "Daemon") -> None:
             me = await api.call("getMe")
         except TelegramError as e:
             raise HubError(f"Telegram từ chối token / không kết nối được: {clip(e, 300)}") from None
+        finally:
+            if token:  # đối tượng tạm (token mới dán) — đóng client; đối tượng của bot giữ kết nối dùng tiếp
+                await api.aclose()
         if token:
             hub.secrets.set(_name(), token)  # type: ignore[attr-defined]  # 0600 + đăng ký che theo giá trị
         bot._callback_key()  # sinh khoá ký nút nếu chưa có
