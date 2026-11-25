@@ -143,3 +143,17 @@
 .team-n { flex-wrap: nowrap; }
 .team-n > a { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .team-n > .pill { flex: none; }
+
+/* khay "Cần bạn" một dòng gọn (nhường chỗ cho nội dung trả lời) */
+.ctray { margin: 2px max(16px, calc((100% - var(--read-w)) / 2)) 4px; }
+.ctray > summary { min-height: 32px; padding: 3px 10px; font-size: var(--fs-xs); }
+.ctray > summary .pill { padding-top: 1px; padding-bottom: 1px; }
+
+/* nhịp giữa các tin gọn hơn (trước: 22px + thanh nút ẩn 24px dưới MỖI tin ≈ 92px trắng cho mỗi cặp hỏi–đáp).
+   Thanh nút tin của bạn (giờ, sửa, chép) nằm bên trái bong bóng, hiện khi rê chuột — không chiếm dòng riêng. */
+.coord-flow { gap: 12px; }
+.coord .mm.user { position: relative; }
+.coord .mm.user > .mm-foot { position: absolute; right: 100%; bottom: 2px; margin: 0 6px 0 0; min-height: 0; flex-direction: row-reverse; white-space: nowrap; }
+.coord .mm.mgr { position: relative; }
+.coord .mm.mgr > .mm-foot { margin-top: 0; }
+.coord .mm.mgr:not(.last) > .mm-foot { position: absolute; left: -6px; top: 100%; z-index: 2; min-height: 0; padding-right: 4px; border-radius: 8px; background: var(--bg); }

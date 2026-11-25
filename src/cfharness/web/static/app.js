@@ -170,7 +170,7 @@
     if (wide && wide.matches) {
       var closed = open === undefined ? !root.classList.contains("mgr-info-closed") : !open;
       root.classList.toggle("mgr-info-closed", closed);
-      try { localStorage.setItem("cfh_mgr_info", closed ? "closed" : ""); } catch (_) {}
+      try { localStorage.setItem("cfh_mgr_info", closed ? "closed" : "open"); } catch (_) {}
     } else {
       root.classList.toggle("mgr-info-open", open === undefined ? !root.classList.contains("mgr-info-open") : open);
     }
