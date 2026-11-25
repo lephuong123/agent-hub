@@ -1104,6 +1104,7 @@ class Store:
         self._ro_conns: list[sqlite3.Connection] = []
         self._read_pool: ThreadPoolExecutor | None = None
         self._closed = False
+        self._event_changes = 0  # dòng do `insert_event` ghi (trừ khỏi `write_changes`)
         self.migrate()
 
     @property
@@ -1121,9 +1122,10 @@ class Store:
 
     @property
     def write_changes(self) -> int:
-        """Tổng số dòng kết nối GHI đã INSERT/UPDATE/DELETE từ lúc mở (`sqlite3_total_changes`) — bộ đếm rẻ để biết "DB đã đổi chưa"
-        (khoá cache `tui.snapshot`). Daemon là writer duy nhất nên mọi ghi của hub đều qua kết nối này."""
-        return int(self._wconn.total_changes)
+        """Số dòng TRẠNG THÁI kết nối GHI đã INSERT/UPDATE/DELETE từ lúc mở (`sqlite3_total_changes`) TRỪ dòng do `insert_event` ghi —
+        bộ đếm rẻ để biết "trạng thái hub (runs/approvals/questions/tasks/agents/hub_state…) đã đổi chưa" (khoá cache `tui.snapshot`):
+        stream event (message.delta…) không làm nó tăng. Daemon là writer duy nhất nên mọi ghi của hub đều qua kết nối này."""
+        return int(self._wconn.total_changes) - getattr(self, "_event_changes", 0)
 
     def count_agents(self, *, include_archived: bool = False) -> int:
         """Số agent (`COUNT(*)`, không nạp dòng)."""
@@ -1264,6 +1266,13 @@ class Store:
 
     # ------------------------------------------------------------------ events
     def insert_event(self, ev: HubEvent) -> None:
+        before = self._wconn.total_changes
+        try:
+            self._insert_event(ev)
+        finally:  # dòng ghi của event (kể cả chỉ mục hội thoại) KHÔNG tính vào `write_changes`
+            self._event_changes = getattr(self, "_event_changes", 0) + (self._wconn.total_changes - before)
+
+    def _insert_event(self, ev: HubEvent) -> None:
         self.conn.execute(
             "INSERT INTO events (epoch, seq, ts, type, level, source, agent_id, team_id, task_id, run_id, "
             "session_id, subagent_id, payload, req_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",

@@ -45,7 +45,7 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - `cfharness update` (và nút "Cập nhật hệ thống" trên web) không còn báo `TimeoutError` khi hub lớn: bản sao lưu trước khi cập nhật mất hơn 60 s nên lệnh hết thời gian chờ dù việc cập nhật vẫn chạy tiếp — nay chờ tới 30 phút.
 
 ### Hiệu năng
-- **Bảng agent (TUI, web, điều phối viên) nhẹ hơn cho daemon**: `tui.snapshot` không còn truy vấn riêng cho từng agent và cộng token hôm nay ngay trong SQLite (~60 → ~22 ms với 40 agent, 20.000 run); các màn gọi gần nhau dùng chung một ảnh chụp (cũ tối đa 1 s, tính lại ngay khi có event hay thay đổi). Thêm index cho dọn task kẹt của dispatcher, chi phí theo loại run trong ngày và backfill event theo agent.
+- **Bảng agent (TUI, web, điều phối viên) nhẹ hơn cho daemon**: `tui.snapshot` không còn truy vấn riêng cho từng agent và cộng token hôm nay ngay trong SQLite (~60 → ~22 ms với 40 agent, 20.000 run); các màn gọi gần nhau dùng chung một ảnh chụp, kể cả lúc agent đang chạy (cũ tối đa 1 s; duyệt, trả lời, dừng, run mới thì tính lại ngay). Thêm index cho dọn task kẹt của dispatcher, chi phí theo loại run trong ngày và backfill event theo agent.
 
 ### Lưu ý khi cập nhật
 - Migration DB v36 chỉ thêm index (`tasks(current_run_id)`, `runs(kind, queued_at)`, `events(agent_id, epoch, seq)`); lần mở đầu tiên trên hub.db lớn có thể mất vài giây để dựng index `events`.

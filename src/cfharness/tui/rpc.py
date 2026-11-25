@@ -8,7 +8,7 @@ Chữ ký:
   last_tool, last_tool_preview, last_tool_at, run_tokens, run_cost_usd, tokens_today, cost_today_usd,
   pending_approvals, waiting_human, last_run_id, last_run_status, session_id}`.
   `status` hiển thị ∈ working | waiting | waiting_human | idle | error | paused.
-  RPC đi qua `SnapshotCache` (TUI, web, REPL dùng chung một lần tính; cũ tối đa `SNAPSHOT_TTL_S`, tính lại ngay khi có event/ghi DB).
+  RPC đi qua `SnapshotCache` (TUI, web, REPL dùng chung một lần tính; cũ tối đa `SNAPSHOT_TTL_S`, tính lại ngay khi trạng thái DB đổi).
   Dữ liệu từng agent nạp theo lô (`_prefetch`) — không truy vấn trong vòng lặp agent.
 - `tui.agent_state {id}` → `{agent: row|None}`: một dòng như trên, chỉ truy vấn của agent đó (trang Điều phối). Chỉ đọc, ai gọi cũng được
   như `tui.snapshot` (không nhạy cảm, không phụ thuộc người gọi).
@@ -362,9 +362,11 @@ SNAPSHOT_TTL_S = 1.0
 class SnapshotCache:
     """Cache `tui.snapshot` đầy đủ ở daemon: TUI (mỗi 1 s), web (mỗi trang + poll) và REPL điều phối dùng chung MỘT lần tính.
 
-    Trúng khi CẢ HAI: tuổi < `ttl` VÀ khoá không đổi. Khoá = (epoch, `bus.last_seq`, số dòng kết nối GHI đã đổi — `Store.write_changes`,
-    số run đang chạy/chờ, mtime config). Daemon là writer duy nhất của hub.db nên mọi ghi (approval, câu hỏi, task, run, agent…) đều đổi
-    khoá → lần gọi sau tính lại ngay; thứ ghi NGOÀI daemon (CLI `hub_freeze`…) hay trạng thái chỉ trong RAM chỉ cũ tối đa `ttl`.
+    Trúng khi CẢ HAI: tuổi < `ttl` VÀ khoá không đổi. Khoá = (epoch, số dòng TRẠNG THÁI kết nối GHI đã đổi — `Store.write_changes`,
+    không tính dòng event —, số run đang chạy/chờ, mtime config). KHÔNG có `bus.last_seq`: stream event (message.delta, tool.*…) chỉ
+    đổi phần sống (token/chi phí run đang chạy, last_tool) → được cũ tối đa `ttl` (đã chốt: snapshot cũ 1–3 s), các client đang poll
+    dùng chung một lần tính. Daemon là writer duy nhất của hub.db nên mọi ghi trạng thái (approval, câu hỏi, task, run, agent, hub_state…)
+    đổi khoá → lần gọi sau tính lại ngay (duyệt/trả lời/dừng thấy liền); thứ ghi NGOÀI daemon (CLI `hub_freeze`…) chỉ cũ tối đa `ttl`.
     Khoá đọc SAU khi tính (nếu chính lúc tính có ghi thì lần sau vẫn trúng). Trả bản sao sâu — người gọi sửa thoải mái, cache không đổi.
     Hàm `snapshot()` vẫn không cache (test/đường gọi trực tiếp)."""
 
@@ -380,7 +382,7 @@ class SnapshotCache:
 
     def _key_now(self) -> tuple[Any, ...]:
         h = self.hub
-        return (h.bus.epoch, h.bus.last_seq, h.store.write_changes, len(h.runs.active), len(h.runs.queue), getattr(h.config, "_mtime", None))
+        return (h.bus.epoch, h.store.write_changes, len(h.runs.active), len(h.runs.queue), getattr(h.config, "_mtime", None))
 
     def invalidate(self) -> None:
         self._val = None

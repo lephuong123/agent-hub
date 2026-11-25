@@ -278,20 +278,46 @@ async def test_snapshot_cache_shares_and_invalidates(denv):
     assert c.get()["agents"] and c.hits == 2
     assert {r["id"] for r in s1["agents"]} == {r["id"] for r in snapshot(hub)["agents"]}  # đúng như bản không cache
 
-    hub.publish(make_event("tool.start", "w1", {"name": "Read"}))  # event mới → tính lại, last_seq mới
-    s3 = c.get()
-    assert c.misses == 2 and s3["last_seq"] == hub.bus.last_seq > s1["last_seq"]
-
     t = iso(datetime.now(timezone.utc))
-    _run(hub.store, "r_c1", "w1", queued=t, ended=t, cost=0.5)  # ghi DB thẳng (không event) → vẫn tính lại
+    _run(hub.store, "r_c1", "w1", queued=t, ended=t, cost=0.5)  # ghi trạng thái thẳng vào DB (không event) → tính lại ngay
     row = next(r for r in c.get()["agents"] if r["id"] == "w1")
-    assert c.misses == 3 and row["cost_today_usd"] == 0.5 and row["last_run_id"] == "r_c1"
+    assert c.misses == 2 and row["cost_today_usd"] == 0.5 and row["last_run_id"] == "r_c1"
 
     c.get()
-    assert c.misses == 3
+    assert c.misses == 2
     clock[0] += 1.5  # quá TTL → tính lại dù khoá không đổi
     c.get()
-    assert c.misses == 4
+    assert c.misses == 3
+
+
+async def test_snapshot_cache_shared_while_streaming_but_fresh_on_approval(denv):
+    """(a) đang stream message.delta (event được lưu, last_seq tăng): các lần gọi trong TTL dùng cache; (b) approval mới → tính lại NGAY."""
+    from cfharness.tui.rpc import SnapshotCache
+
+    hub = denv.hub
+    clock = [100.0]
+    c = SnapshotCache(hub, ttl=1.0, clock=lambda: clock[0])
+    t = iso(datetime.now(timezone.utc))
+    _run(hub.store, "r_s", "w1", queued=t, status="running", started_at=t)
+    s0 = c.get()
+    assert c.misses == 1
+    for i in range(20):  # stream: mỗi lần gọi xen giữa các event, vẫn trong TTL
+        hub.publish(make_event("message.delta", "w1", {"text": f"chữ {i} "}, run_id="r_s"))  # không lưu DB
+        hub.publish(make_event("tool.start", "w1", {"name": "Read"}, run_id="r_s"))  # CÓ lưu DB (insert_event không tính)
+        clock[0] += 0.04
+        assert c.get()["last_seq"] == s0["last_seq"]
+    assert c.misses == 1 and c.hits == 20
+    assert hub.bus.last_seq > s0["last_seq"] and len(hub.store.query_events(run_id="r_s", types=["tool.start"])) == 20
+
+    ap = hub.approvals.open(hub.store.get_run("r_s"), tool_name="Bash", tool_input={"command": "rm -rf build"}, tool_use_id="tu1",
+                            fingerprint="fp1", verdict={"klass": "fs_delete", "rule": "rm_recursive", "verdict": "destructive", "reason": "xoá"},
+                            channel="hook")
+    s1 = c.get()  # vẫn trong TTL nhưng trạng thái đổi
+    assert c.misses == 2 and ap["id"] in [a["id"] for a in s1["approvals"]]
+    assert next(r for r in s1["agents"] if r["id"] == "w1")["pending_approvals"] == [ap["id"]]
+    assert s1["last_seq"] == hub.bus.last_seq
+    hub.approvals.resolve(ap["id"], "allow", by="user", channel="cli")  # duyệt → cũng thấy ngay
+    assert c.get()["approvals"] == [] and c.misses == 3
 
 
 async def test_snapshot_rpc_uses_cache_and_hub_status_counts(denv):
