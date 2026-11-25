@@ -1513,3 +1513,8 @@ a.outcome-denied { color: var(--danger); font-weight: 600; }
 .q-more > summary { list-style: none; display: inline-flex; width: auto; }
 .q-more > summary::-webkit-details-marker { display: none; }
 .q-more[open] > summary { margin-bottom: var(--s2); }
+
+/* Dữ liệu dài (tên agent dài trong bộ lọc): select không được đẩy trang tràn ngang trên điện thoại */
+select { max-width: 100%; text-overflow: ellipsis; }
+.filters form.row, .page-head form.row, .search-form label { min-width: 0; max-width: 100%; }
+.filters form.row select, .page-head form.row select { flex: 1 1 auto; min-width: 0; }

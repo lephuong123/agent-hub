@@ -76,6 +76,7 @@ WAIT_REASON = {
     "workspace_locked": "thư mục đang bị run khác giữ", "budget": "hết ngân sách", "estop": "ESTOP đang bật", "team_estop": "ESTOP team",
     "concurrency": "hết slot chạy", "agent_busy": "agent đang bận", "agent_paused": "agent tạm dừng", "rate_limit": "giới hạn tốc độ",
     "backoff": "chờ thử lại", "rate_limit_reset": "chờ hạn mức reset", "no_assignee": "chưa có người nhận", "member_limit": "thành viên đủ việc",
+    "no_lead": "team chưa có trưởng nhóm",
 }
 
 
@@ -1086,6 +1087,7 @@ _SYS_TITLES: tuple[tuple[Any, str], ...] = tuple((_re.compile(p, _re.I), lbl) fo
     (r"^\[cfharness heartbeat", "Điều phối viên · kiểm tra định kỳ"),
     (r"^\[cfharness (?:curation|curator|cross-agent merge)", "Tự học · tổng hợp kinh nghiệm"),
     (r"^\[cfharness eval", "Đánh giá chất lượng"),
+    (r"^Review the conversation above", "Tự học · rà soát hội thoại"),
 ))
 _TASK_LINE = _re.compile(r"^## Task: *(.+)$", _re.M)
 # loại run → chữ cho người (run "adhoc" = giao trực tiếp, không cần nhãn)
