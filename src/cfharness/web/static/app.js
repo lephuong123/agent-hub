@@ -639,3 +639,96 @@
     window.addEventListener("pagehide", function () { if (es) es.close(); });
   })();
 })();
+
+/* Thanh bên: đường chia Luồng việc | Hội thoại kéo lên/xuống (chuột, chạm, phím ↑/↓, Home/End; nhấp đúp = về mặc định) và gập nhóm
+   "Luồng đang mở" / "Gần đây". Nhớ theo người xem (localStorage — tiện ích, mất thì về mặc định); early.js áp lại trước khi vẽ. */
+(function () {
+  "use strict";
+  var d = document.documentElement, sp = document.getElementById("side-split"), nav = document.getElementById("side-nav"), K = "cfh_side_nav_h";
+  function save(k, v) { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (_) {} }
+  function bounds() {
+    var g = nav.querySelector(".nav-group"), top = nav.getBoundingClientRect().top - nav.scrollTop;
+    return [g ? Math.ceil(g.getBoundingClientRect().bottom - top) : 26, nav.scrollHeight];
+  }
+  function aria() {
+    var b = bounds();
+    sp.setAttribute("aria-valuemin", b[0]); sp.setAttribute("aria-valuemax", b[1]);
+    sp.setAttribute("aria-valuenow", Math.round(nav.getBoundingClientRect().height));
+  }
+  function set(h, persist) {
+    var b = bounds();
+    h = Math.round(Math.max(b[0], Math.min(b[1], h)));
+    if (h >= b[1] - 1) { d.classList.remove("side-nav-sized"); d.style.removeProperty("--side-nav-h"); if (persist) save(K, null); }
+    else { d.style.setProperty("--side-nav-h", h + "px"); d.classList.add("side-nav-sized"); if (persist) save(K, String(h)); }
+    aria();
+  }
+  if (sp && nav) {
+    sp.addEventListener("pointerdown", function (e) {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      var y0 = e.clientY, h0 = nav.getBoundingClientRect().height;
+      sp.setPointerCapture(e.pointerId); sp.classList.add("drag"); d.classList.add("dragging-split");
+      function mv(ev) { set(h0 + ev.clientY - y0, false); }
+      function up() {
+        sp.removeEventListener("pointermove", mv); sp.removeEventListener("pointerup", up); sp.removeEventListener("pointercancel", up);
+        sp.classList.remove("drag"); d.classList.remove("dragging-split"); set(nav.getBoundingClientRect().height, true);
+      }
+      sp.addEventListener("pointermove", mv); sp.addEventListener("pointerup", up); sp.addEventListener("pointercancel", up);
+    });
+    sp.addEventListener("dblclick", function () { set(1e6, true); });
+    sp.addEventListener("keydown", function (e) {
+      var h = nav.getBoundingClientRect().height, step = e.shiftKey ? 68 : 34;
+      if (e.key === "ArrowUp") h -= step; else if (e.key === "ArrowDown") h += step;
+      else if (e.key === "Home") h = 0; else if (e.key === "End" || e.key === "Enter") h = 1e6; else return;
+      e.preventDefault(); set(h, true);
+    });
+    aria();
+  }
+  function syncFold() {
+    document.querySelectorAll("[data-fold]").forEach(function (b) {
+      b.setAttribute("aria-expanded", d.classList.contains("sf-" + b.getAttribute("data-fold")) ? "false" : "true");
+    });
+  }
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest && e.target.closest("[data-fold]");
+    if (!b) return;
+    var k = b.getAttribute("data-fold"), on = d.classList.toggle("sf-" + k);
+    save("cfh_sf_" + k, on ? "1" : null); syncFold();
+  });
+  document.body.addEventListener("htmx:afterSwap", syncFold);
+  syncFold();
+})();
+
+/* Hàng tab Luồng (trang Điều phối): lăn chuột dọc = cuộn ngang, mờ mép theo vị trí cuộn, tab đang xem luôn trong tầm nhìn. */
+(function () {
+  "use strict";
+  var last = null;
+  function edges(t) {
+    t.classList.toggle("scrolled", t.scrollLeft > 2);
+    t.classList.toggle("at-end", t.scrollLeft + t.clientWidth >= t.scrollWidth - 2);
+  }
+  function sync() {
+    var t = document.getElementById("ws-tabs");
+    if (!t) return;
+    if (t !== last) {
+      last = t;
+      t.addEventListener("scroll", function () { edges(t); }, { passive: true });
+      t.addEventListener("wheel", function (e) {
+        if (Math.abs(e.deltaY) <= Math.abs(e.deltaX) || t.scrollWidth <= t.clientWidth) return;
+        e.preventDefault(); t.scrollLeft += e.deltaY;
+      }, { passive: false });
+    }
+    var on = t.querySelector(".ws-tab.on");
+    if (on && t.scrollWidth > t.clientWidth) {
+      var a = on.offsetLeft - t.offsetLeft, b = a + on.offsetWidth;
+      if (a < t.scrollLeft || b > t.scrollLeft + t.clientWidth) t.scrollLeft = Math.max(0, a - 24);
+    }
+    edges(t);
+  }
+  var root = document.getElementById("coord");
+  if (!root) return;
+  var q = false;
+  new MutationObserver(function () { if (q) return; q = true; requestAnimationFrame(function () { q = false; sync(); }); }).observe(root, { childList: true, subtree: true });
+  window.addEventListener("resize", sync);
+  sync();
+})();

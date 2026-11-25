@@ -60,12 +60,13 @@
     </div>
     <a class="side-new" href="/manager?new=1" title="Cuộc trò chuyện mới với điều phối viên"><span class="side-new-ic">{{ _m.icon('plus') }}</span><span class="lbl">Cuộc trò chuyện mới</span></a>
     <form method="get" action="/search" class="side-search" role="search"><label class="sr-only" for="side-q">Tìm trong hội thoại</label>{{ _m.icon('search') }}<input id="side-q" name="q" placeholder="Tìm trong hội thoại…" value="{{ request.query_params.get('q', '') if nav == 'search' else '' }}" autocomplete="off" spellcheck="false"></form>
-    <nav class="nav" aria-label="Điều hướng chính">
+    <nav class="nav" id="side-nav" aria-label="Điều hướng chính">
       <div class="nav-group">Luồng việc</div>
       {% for key, href, ic, label in N.APP_NAV %}
       <a href="{{ href }}" class="{{ 'on' if navkey == key }}" title="{{ label }}"{% if navkey == key %} aria-current="page"{% endif %}>{{ _m.icon(ic) }}<span class="lbl">{{ label }}</span>{% if key == 'inbox' and need %}<span class="badge {{ need_tone }}">{{ need }}</span>{% endif %}</a>
       {% endfor %}
     </nav>
+    <div class="side-split" id="side-split" role="separator" aria-orientation="horizontal" aria-controls="side-nav" tabindex="0" aria-label="Chia chỗ giữa Luồng việc và Hội thoại — kéo hoặc dùng phím mũi tên lên/xuống; nhấp đúp để về mặc định" title="Kéo lên/xuống để chia chỗ · nhấp đúp: về mặc định"></div>
     {% block side_extra %}<section class="side-recents" id="side-convs" aria-label="Hội thoại" hx-get="/partials/manager/side" hx-trigger="load" hx-swap="innerHTML"><div class="nav-group ws-head"><span>Hội thoại</span><a class="ws-add" href="/manager?new=1" title="Hội thoại mới" aria-label="Hội thoại mới">＋</a></div><p class="muted small side-none">Đang tải…</p></section>{% endblock %}
     <div class="side-foot">
       {{ estop_ctl() }}

@@ -9,7 +9,7 @@ from test_web import env  # noqa: F401  (fixture)
 
 
 def _nav(html: str) -> str:
-    m = re.search(r'<nav class="nav" aria-label="Điều hướng chính">(.*?)</nav>', html, re.S)
+    m = re.search(r'<nav class="nav"[^>]*aria-label="Điều hướng chính">(.*?)</nav>', html, re.S)
     assert m, "thiếu thanh bên chính"
     return m.group(1)
 
@@ -146,3 +146,22 @@ async def test_update_flag_never_waits_for_network(monkeypatch):
     await st._upd_task
     assert calls == ["update.check"]
     assert await M.update_flag(None) is True
+
+
+async def test_sidebar_split_and_folds(env):  # noqa: F811
+    """Đường chia Luồng việc | Hội thoại kéo được (separator có nhãn, điều khiển #side-nav) + nhóm Luồng đang mở / Gần đây gập được."""
+    await env.login()
+    html = (await env.client.get("/inbox")).text
+    assert re.search(r'<div class="side-split" id="side-split" role="separator" aria-orientation="horizontal" aria-controls="side-nav" tabindex="0"', html)
+    assert 'id="side-nav"' in html
+    side = (await env.client.get("/partials/manager/side")).text
+    assert 'data-fold="recent"' in side and 'data-fold-body="recent"' in side
+
+
+def test_ws_tabs_contain_absolute_labels():
+    """Nhãn sr-only (position:absolute) trong tab luồng từng thoát vùng cuộn → trang cuộn ngang ~430px. #ws-tabs phải là khối chứa."""
+    from pathlib import Path
+
+    css = (Path(__file__).resolve().parents[1] / "src" / "cfharness" / "web" / "static" / "app.css").read_text(encoding="utf-8")
+    assert re.search(r"\.ws-tabs \{ position: relative;", css)
+    assert "html { overflow-x: clip; }" in css

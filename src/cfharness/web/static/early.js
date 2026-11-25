@@ -6,6 +6,9 @@
   d.classList.add("js");
   try { if (localStorage.getItem("cfh_side") === "min") d.classList.add("side-min"); } catch (_) {}
   try { if (localStorage.getItem("cfh_mgr_info") === "closed") d.classList.add("mgr-info-closed"); } catch (_) {}
+  // thanh bên: chiều cao phần Luồng việc (đường chia kéo được) + nhóm hội thoại đang gập — áp trước khi vẽ để không nhảy
+  try { var nh = parseInt(localStorage.getItem("cfh_side_nav_h"), 10); if (nh > 0) { d.style.setProperty("--side-nav-h", nh + "px"); d.classList.add("side-nav-sized"); } } catch (_) {}
+  try { ["ws", "recent"].forEach(function (k) { if (localStorage.getItem("cfh_sf_" + k) === "1") d.classList.add("sf-" + k); }); } catch (_) {}
   // link cũ /settings#<id> (thẻ của trang Cài đặt dài trước đây) → tab /settings/<tab>, giữ #id (id cũ vẫn là neo trong tab mới)
   try {
     var sh = location.pathname === "/settings" ? (location.hash || "").slice(1) : "";
