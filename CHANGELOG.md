@@ -12,6 +12,19 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ---
 
+## v0.2.34 — 2026-11-25
+
+### Sửa lỗi
+- **Cập nhật lên bản mới không còn tự quay về bản cũ vì daemon khởi động chậm.** Ngay sau khi cài, lần chạy đầu phải biên dịch lại mã Python (và Windows Defender quét file mới) nên daemon có thể mất 30 giây trở lên mới sẵn sàng; trước đây `cfharness daemon start` chỉ chờ 15 giây, bộ cập nhật tưởng daemon hỏng nên khôi phục DB và cài lại bản cũ (lần cập nhật lên v0.2.33 trên Windows gặp đúng lỗi này). Nay `daemon start` chờ tối đa 120 giây (trả về ngay khi daemon sẵn sàng) và bộ cập nhật cài sẵn mã đã biên dịch (`uv tool install --compile-bytecode`) để daemon bản mới lên nhanh hơn.
+
+### Hiệu năng (#225)
+- Ảnh chụp trạng thái hub cho TUI/web (`tui.snapshot`) không còn tính lại theo từng sự kiện khi agent đang trả lời (chạy chữ, tool) — chỉ tính lại khi trạng thái thật đổi (run, duyệt, câu hỏi, task, agent…) hoặc sau 1 giây; duyệt/trả lời/dừng vẫn cập nhật ngay.
+
+### Lưu ý khi cập nhật
+- Hub đang ở v0.2.32 cập nhật thẳng lên v0.2.34 (gồm toàn bộ thay đổi của v0.2.33, kể cả migration DB v35 — xem "Lưu ý khi cập nhật" của v0.2.33).
+
+---
+
 ## v0.2.33 — 2026-11-25
 
 ### Hiệu năng (#222, #223)

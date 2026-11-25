@@ -26,7 +26,7 @@ MCP="${4:-8722}"
 DOMAIN="${DOMAIN:-trungtamdhs.com}"   # miền gốc (zone Cloudflare): https://$SUB.$DOMAIN
 SUB="${SUB:-$U}"        # tên miền con: https://$SUB.$DOMAIN
 HOST="$SUB.$DOMAIN"
-VER="${VER:-v0.2.33}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
+VER="${VER:-v0.2.34}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
 CONNECTORS="${CONNECTORS:-}"              # connector claude.ai, phân cách dấu phẩy (vd "Google Drive,Claude Docs"); "auto" = config
                                           # connectors.auto: mọi agent tự nạp mọi connector tài khoản đã Connect; trống = bỏ qua
 CONNECTOR_AGENTS="${CONNECTOR_AGENTS:-}"  # agent bật connector, cách nhau dấu cách, hoặc "all" = mọi agent; GỘP với connector sẵn có; điều phối viên → manager capabilities (cần --mcp trusted)
