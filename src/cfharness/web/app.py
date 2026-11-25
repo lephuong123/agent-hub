@@ -2264,13 +2264,23 @@ def _mcp_routes() -> list[Any]:
     return _r()
 
 
+_STATIC_V: dict[str, tuple[float, str]] = {}
+STATIC_V_TTL_S = 2.0  # macro icon() gọi cho MỖI icon (~30/trang, ~70 µs/stat trên Windows) → nhớ ngắn; sửa tệp thấy sau ≤ 2 s
+
+
 def static_url(name: str) -> str:
     """`/static/<name>?v=<mtime>` — đổi tệp là đổi URL, trình duyệt không dùng lại bản cũ trong cache."""
+    now = time.monotonic()
+    hit = _STATIC_V.get(name)
+    if hit and now - hit[0] < STATIC_V_TTL_S:
+        return hit[1]
     try:
         v = format(int((HERE / "static" / name).stat().st_mtime), "x")
+        url = f"/static/{name}?v={v}"
     except OSError:
-        return f"/static/{name}"
-    return f"/static/{name}?v={v}"
+        url = f"/static/{name}"
+    _STATIC_V[name] = (now, url)
+    return url
 
 
 class TimedTemplates(Jinja2Templates):
