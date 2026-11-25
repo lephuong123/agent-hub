@@ -212,7 +212,7 @@ async def test_connectors_auto_needs_login(d, user_home, monkeypatch):
     monkeypatch.delenv("CFHARNESS_CONNECTORS_AUTO")
     spec, fb = await _run(d, None, monkeypatch, False)
     # không /login → không phiên claude.ai, không nguồn setting user (MCP của tài khoản vẫn nạp — PR7)
-    assert spec.connectors is None and spec.isolation_overrides == {"strict_mcp_config": False} and not fb
+    assert spec.connectors is None and spec.isolation_overrides == {"setting_sources": "user", "strict_mcp_config": False} and not fb
 
 
 async def test_connectors_auto_on_by_default_can_turn_off(d, user_home, monkeypatch):

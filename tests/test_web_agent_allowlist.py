@@ -311,7 +311,7 @@ async def test_playwright_dropped_when_set(hub, browser, claude_mcp):
     sp, sq = _spec_for(hub, "p"), _spec_for(hub, "q")
     # mọi agent nạp MCP của cấu hình claude (PR7); allowlist domain: Playwright không áp được luật URL → gỡ khỏi ngữ cảnh
     assert "mcp__pw__*" in sp.tool_policy["disallowed_tools"] and "mcp__docs__*" not in sp.tool_policy["disallowed_tools"]
-    assert sp.isolation_overrides == {"strict_mcp_config": False} and sp.allowed_mcp_servers is None
+    assert sp.isolation_overrides == {"setting_sources": "user", "strict_mcp_config": False} and sp.allowed_mcp_servers is None
     assert not [x for x in sq.tool_policy.get("disallowed_tools") or [] if x.startswith("mcp__pw")]  # chưa đặt allowlist = giữ Playwright
 
 
