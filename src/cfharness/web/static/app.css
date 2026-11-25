@@ -1606,3 +1606,10 @@ html { overflow-x: clip; }
 .mm-md .md { line-height: 1.6; }
 .composer-wrap { padding-bottom: 6px; }
 .mgr-chat:not(:has(#mgr-empty)) .chat-disclaimer { display: none; }
+
+/* Chữ câu trả lời (khung chat + diễn biến lượt chạy) và câu hỏi của agent: chữ không chân (sans) 14.5px — nhiều chữ hơn mỗi dòng, đọc nhanh hơn trên màn hình. */
+.mm-md .md, .ti.msg .md { font-family: var(--sans); font-size: 14.5px; line-height: 1.6; }
+.mm-md .md h1, .mm-md .md h2, .mm-md .md h3, .ti.msg .md h1, .ti.msg .md h2, .ti.msg .md h3 { font-size: 15px; font-weight: 650; }
+.q-text { font-family: var(--sans); font-size: 14.5px; }
+/* Popup trong hàng tab luồng (+ Luồng, Đã đóng, ⚙ Luồng này) nằm ở mép phải → neo theo mép phải, không tràn ra ngoài màn hình. */
+@media (min-width: 721px) { .ws-bar > .ws-pop-wrap > .ws-pop { left: auto; right: 0; } }
