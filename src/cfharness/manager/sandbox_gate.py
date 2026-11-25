@@ -54,6 +54,7 @@ def gate(caps: dict[str, Any], manager_cfg: Any) -> dict[str, Any]:
     strict = resolve_capabilities({"profile": "strict"})
     strict["warnings"] = list(caps.get("warnings") or []) + [f"khung '{caps.get('profile')}' bị hạ về strict: {BLOCK_MSG}"]
     strict["sandbox_blocked"] = True
+    strict["connectors_auto"] = False  # khung bị hạ: không tự bật connector (fail-closed)
     return strict
 
 

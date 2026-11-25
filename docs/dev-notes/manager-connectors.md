@@ -102,7 +102,7 @@ Các bước bật Google Drive cho hub dùng token chung (vd `cchcadmin`, admin
   connectors.auto false`, chỉ người, nhánh `connectors` ∈ `integrity.SECURITY_KEYS`). Bộ test chung tắt bằng env
   `CFHARNESS_CONNECTORS_AUTO=off` (conftest — claude giả không hiểu `auth status`). Run LÀM VIỆC của agent
   CHƯA đặt `tool_policy.connectors` tự bật connector `*` = mọi server `claude.ai *` CLI nạp — tức mọi connector tài khoản `/login`
-  của user OS đã Connect. Không áp cho điều phối viên (vẫn `manager.capabilities.connectors`, nhận `all`), run kỹ thuật
+  của user OS đã Connect. Điều phối viên: áp khi `manager.capabilities.connectors` CHƯA đặt (null — mặc định, xem mục 2026-11-25), run kỹ thuật
   (`review.NON_WORK_KINDS`), guard tắt, hay `runtime.claude.connectors_auth=token`.
 - Chỉ bật khi `login_available()` = True (`RunManager._auto_connectors`, TRƯỚC `_prepare_spec`); không có phiên → run như cũ
   (không nạp `~/.claude`, không event).
@@ -193,3 +193,17 @@ Test: `tests/test_account_connectors.py` (`tests/fake_claude_auth.py` đọc `CL
   hub không biết trước tên connector của tài khoản.
 
 Test: `tests/test_manager_connectors.py`.
+
+## Điều phối viên mặc định dùng mọi connector (2026-11-25)
+
+Chủ repo chốt: người dùng không phải cấu hình gì — điều phối viên có connector claude.ai như agent thường. Sự cố gốc: hub
+`cchcadmin` (admin.cchchn.com) đã Connect connector trên claude.ai + gắn phiên cho tài khoản đang dùng, nhưng điều phối viên không
+thấy connector vì `manager.capabilities.connectors` = null nghĩa là TẮT và web không có chỗ bật (khoá thuộc `READONLY`).
+
+- `manager.capabilities.connectors`: `null` (mặc định) = TỰ ĐỘNG — như `connectors.auto` của agent (cần `connectors.auto` + guard
+  bật + phiên claude.ai của tài khoản đang dùng, không có phiên → không bật, không event). Danh sách người đặt thắng; `[]` = tắt hẳn.
+- `resolve_capabilities` trả thêm `connectors_auto` (chỉ True khi khoá là null; sai kiểu → False); khung bị hạ về strict vì không có
+  sandbox OS (`sandbox_gate.gate`) → `connectors_auto=False` (fail-closed).
+- `RunManager._auto_connectors` cho run `hub_self=manager` khi `connectors_auto`; `_prepare_spec` bỏ điều kiện `not is_mgr`.
+- CLI `cfharness manager capabilities set --connectors none` giờ ghi `[]` (tắt hẳn), `--connectors auto` ghi null; `reset` về null.
+- Test: `tests/test_manager_connectors.py` (`test_manager_connectors_auto_*`, `test_resolve_connectors_auto_flag`).
