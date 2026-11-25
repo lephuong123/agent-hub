@@ -296,7 +296,7 @@ class Updater:
         if not TAG_RE.match(str(tag)):  # repo cố định + tag chỉ vX.Y.Z: không bao giờ cài nguồn/nhánh tuỳ ý
             raise HubError(f"tag '{tag}' không hợp lệ — dạng vX.Y.Z", code=-32602)
         pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
-        return [str(self.uv()), "tool", "install", "--force", "--python", pyver, f"git+{GIT_URL}@{tag}"]
+        return [str(self.uv()), "tool", "install", "--force", "--compile-bytecode", "--python", pyver, f"git+{GIT_URL}@{tag}"]
 
     def plan(self, tag: str, supervised: bool = False) -> dict[str, list[str]]:
         restart = [self.python, "-m", "cfharness", "daemon", "start"]
