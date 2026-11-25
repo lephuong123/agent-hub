@@ -11,7 +11,7 @@
       <h3>{{ m.icon('power') }} Dừng khẩn cấp (ESTOP)</h3>
       {% if estop.on %}
       <p><span class="pill danger strong">{{ m.icon('stop') }}ĐANG BẬT</span> {% if estop.reason %}— {{ estop.reason }}{% endif %} Không run mới nào được chạy.</p>
-      {% if estop.admin %}<p class="muted small">Hub đang tạm dừng bởi quản trị máy — liên hệ quản trị.</p>{% endif %}
+      {% if estop.admin %}<p class="muted small">Hub đang tạm dừng — liên hệ quản trị.</p>{% endif %}
       {% else %}
       <p class="muted small">Dùng khi cần dừng toàn bộ hub ngay (agent làm sai, chi phí tăng bất thường…). Nút <b>Dừng khẩn cấp</b> ở chân thanh bên làm cùng việc với lựa chọn đầu.</p>
       {% endif %}

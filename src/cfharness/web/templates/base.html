@@ -96,7 +96,7 @@
       <a class="brand" href="/manager">{{ _m.icon('logo') }}<span class="wordmark">cfharness</span></a>
       <div class="mtop-right">
         <a class="btn ghost sm icon" href="/manager?new=1" title="Cuộc trò chuyện mới" aria-label="Cuộc trò chuyện mới">{{ _m.icon('pen-new') }}</a>
-        {% if badge.admin_estop %}<{{ 'a href="/machine"' if badge.machine else 'span' }} class="pill danger strong" title="Hub đang tạm dừng bởi quản trị máy">{{ _m.icon('stop') }}Hub đang tạm dừng</{{ 'a' if badge.machine else 'span' }}>
+        {% if badge.admin_estop %}<{{ 'a href="/machine"' if badge.machine else 'span' }} class="pill danger strong" title="Hub đang tạm dừng — liên hệ quản trị">{{ _m.icon('stop') }}Hub đang tạm dừng</{{ 'a' if badge.machine else 'span' }}>
         {% elif badge.estop %}<a href="/settings/safety#estop" class="pill danger strong">{{ _m.icon('stop') }}ESTOP</a>{% endif %}
         {% if badge.down %}<span class="pill danger">daemon tắt</span>{% endif %}
       </div>
