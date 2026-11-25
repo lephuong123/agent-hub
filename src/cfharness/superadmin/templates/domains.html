@@ -19,8 +19,8 @@
   <td>{% if d.os_user %}<a href="/users/{{ d.hub_user_id }}">{{ d.os_user }}</a>{% else %}—{% endif %}</td><td>{{ d.web_port or "—" }}</td>
   <td>{% if "domain_dns" in (h.codes or []) %}<span class="pill bad">lệch</span>{% elif h.dns %}<span class="pill ok">ok</span>{% else %}—{% endif %}</td>
   <td>{% if "domain_tunnel" in (h.codes or []) %}<span class="pill bad">lệch</span>{% elif h.ingress %}<span class="pill ok">ok</span>{% else %}—{% endif %}</td>
-  <td>{{ h.http if h.http is not none else "—" }}</td>
-  <td>{% if h.cert_days is not none %}{{ h.cert_days }} ngày{% else %}—{% endif %}</td>
+  <td>{{ h.http if h.http is number else "—" }}</td>
+  <td>{% if h.cert_days is number %}{{ h.cert_days }} ngày{% else %}—{% endif %}</td>
   <td>{{ pill(d.state) }}</td><td>{{ d.checked_at | ago }}</td>
   <td class="actions">
     {{ op_form("domain.check_now", "Kiểm", {"id": d.id}, next="/domains") }}

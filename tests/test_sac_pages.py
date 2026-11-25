@@ -43,9 +43,19 @@ def test_pages_render(env, client):
     for path in ("/", "/users", "/users/new", f"/users/{uid}/logs", "/users/import", "/groups", f"/users/{uid}", "/domains", "/alerts", "/alerts?all=1", "/estop"):
         r = client.get(path, headers=H(s))
         assert r.status_code == 200, (path, r.text[:300])
+        # macro op_form/form_open (import trong base.html) phải thấy csrf — thiếu `with context` → ô rỗng → "Bad CSRF"
+        assert 'name="csrf" value=""' not in r.text, path
     for tab in ("overview", "access", "agents", "activity", "policy", "reports", "history"):
         r = client.get(f"/users/{uid}?tab={tab}", headers=H(s))
         assert r.status_code == 200, (tab, r.text[:400])
+    # user chưa có file trạng thái (vừa tạo qua SAC, hub chưa xuất số liệu) → hồ sơ vẫn dựng được, chi phí hiện "—"
+    env.fakes[0].group.append("moi")
+    env.ok("user.import", {"os_user": "moi", "full_name": "Mới"}, as_="boss")
+    collect(env.state)
+    nid = env.state.db.one("SELECT id FROM hub_users WHERE os_user='moi'")["id"]
+    for tab in ("overview", "access", "agents", "activity", "policy", "reports", "history"):
+        r = client.get(f"/users/{nid}?tab={tab}", headers=H(s))
+        assert r.status_code == 200, ("moi", tab, r.text[:400])
     html = client.get("/users", headers=H(s)).text
     assert "<script>alert(1)</script>" not in html and "&lt;script&gt;" in html  # escape
     assert "lamlinh.example.com" in html
@@ -100,3 +110,26 @@ def test_policy_claude_pages(env, client):
     html = client.get("/policy?scope=default&sim=1&c.budget.usd_per_day=5", headers=H(s)).text
     assert "Mô phỏng" in html and 'name="p.content:json"' in html
     assert "q" * 90 not in client.get("/claude", headers=H(s)).text
+
+
+def test_csv_import_reports_rows_in_ui(env, client):
+    """Báo cáo theo dòng của user.import_csv phải tới người: dòng lỗi (kể cả khi bỏ chọn chạy thử — không tạo gì) và số dòng hợp lệ."""
+    s = client.signer
+    acct = env.ok("claude.account_add", {"name": "Max 1", "token": "sk-ant-oat01-" + "q" * 90}, as_="boss")
+    aid = acct.get("id") or env.state.db.one("SELECT id FROM claude_accounts")["id"]
+    tok = csrf_of(client.get("/users/bulk", headers=H(s)).text)
+    head = "os_user,full_name,email,group,team,sub\n"
+
+    def send(csv: str, dry: str) -> str:
+        r = client.post("/op/user.import_csv", data={"csrf": tok, "next": "/users/bulk", "p.csv": csv, "p.claude_account_id": aid,
+                                                     "p.dry_run:bool": dry}, headers=H(s))
+        assert r.status_code == 200, r.text[:300]
+        return r.text
+
+    html = send(head + "an,An,an@ex.com,,,\n<b>x y</b>,X,,,,\n", "false")
+    assert "1 dòng lỗi" in html and "chưa tạo user nào" in html and "dòng 3" in html
+    assert "&lt;b&gt;x y&lt;/b&gt;" in html and "<b>x y</b>" not in html  # dữ liệu CSV escape
+    assert ": xong" not in html
+    html = send(head + "an,An,an@ex.com,,,\n", "true")
+    assert "Chạy thử: 1 dòng hợp lệ" in html
+    assert not env.state.db.one("SELECT 1 FROM hub_users WHERE os_user='an'")

@@ -10,6 +10,7 @@ import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+from jinja2.exceptions import UndefinedError
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
 
@@ -55,11 +56,28 @@ def nav_for(role: str) -> list[tuple[str, str]]:
     return [(label, href) for label, href, g in NAV if rbac.allowed(role, g, "read")]
 
 
-def after_op(s: "Sess", name: str, result: Any) -> None:
+def after_op(s: "Sess", name: str, result: Any) -> bool:
+    """Xử lý kết quả cần hiện cho người. Trả True khi đã tự báo kết quả (bên gọi không thêm "xong")."""
     if isinstance(result, dict):
         for k, label in REVEAL_KEYS.items():
             if result.get(k):
                 s.reveal.append({"label": label, "value": result[k]})
+        if name == "user.import_csv" and isinstance(result.get("rows"), list):
+            return _csv_report(s, result)
+    return False
+
+
+def _csv_report(s: "Sess", result: dict[str, Any]) -> bool:
+    """user.import_csv trả báo cáo theo dòng; có dòng lỗi thì KHÔNG tạo gì (kể cả khi bỏ chọn chạy thử) — phải nói rõ."""
+    bad = [x for x in result["rows"] if isinstance(x, dict) and x.get("errors")]
+    if bad:
+        lines = "; ".join(f"dòng {x.get('line')} ({x.get('os_user') or '?'}): {', '.join(str(e) for e in x['errors'])}" for x in bad[:10])
+        s.flash("err", f"CSV có {len(bad)} dòng lỗi — chưa tạo user nào. {lines}{' …' if len(bad) > 10 else ''}")
+    elif result.get("dry_run"):
+        s.flash("ok", f"Chạy thử: {result.get('valid', 0)} dòng hợp lệ, chưa tạo gì — chọn \"Tạo thật\" rồi gửi lại để tạo.")
+    else:
+        s.flash("ok", f"Đã tạo {len(result.get('jobs') or [])} job tạo user — theo dõi ở trang Job.")
+    return True
 
 
 # ============================================================================ bộ lọc
@@ -73,7 +91,7 @@ def ts(v: Any, fmt: str = "%d/%m %H:%M") -> str:
 def ago(v: Any) -> str:
     try:
         d = time.time() - float(v)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, UndefinedError):  # khoá thiếu trong số liệu hub (hub mới chưa xuất trạng thái) → Undefined
         return "—"
     if d < 90:
         return "vừa xong"
@@ -87,7 +105,7 @@ def ago(v: Any) -> str:
 def money(v: Any) -> str:
     try:
         return f"${float(v):,.2f}"
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, UndefinedError):  # vd `p.cost.usd.today` khi hub chưa xuất số liệu
         return "—"
 
 

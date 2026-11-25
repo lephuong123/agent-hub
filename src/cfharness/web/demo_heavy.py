@@ -48,7 +48,7 @@ def step(name):
                     r = await r
                 print(f"HEAVY {name}: {r}", flush=True)
                 return r
-            except Exception:
+            except Exception:  # best-effort: hub demo nạp dữ liệu, lỗi một mục không dừng cả lượt
                 print(f"HEAVY {name} FAILED\n{traceback.format_exc()}", flush=True)
         return run
     return deco
@@ -102,7 +102,7 @@ async def seed_heavy(d) -> None:
                 data["workstream"] = ws_ids[i % len(ws_ids)]
             try:
                 t = hub.tasks.create(data)
-            except Exception:
+            except Exception:  # best-effort: hub demo nạp dữ liệu, lỗi một mục không dừng cả lượt
                 data.pop("workstream", None)
                 t = hub.tasks.create(data)
             try:
@@ -110,7 +110,7 @@ async def seed_heavy(d) -> None:
                     hub.tasks.block(t["id"], "Chờ quyền truy cập kho dữ liệu production")
                 elif s != t.get("status"):
                     hub.tasks.set_status(t["id"], s)
-            except Exception as e:
+            except Exception as e:  # best-effort: hub demo nạp dữ liệu, lỗi một mục không dừng cả lượt
                 print("task status", s, e, flush=True)
             n += 1
         return n
@@ -126,7 +126,7 @@ async def seed_heavy(d) -> None:
         for r in rs:
             try:
                 await hub.runs.wait(r["id"], 60)
-            except Exception:
+            except Exception:  # best-effort: hub demo nạp dữ liệu, lỗi một mục không dừng cả lượt
                 pass
         return len(rs)
     await runs_done()
@@ -195,7 +195,7 @@ async def seed_heavy(d) -> None:
             if ws_ids and i % 3 == 0:
                 try:
                     hub.manager.ws.attach_conversation(cid, ws_ids[(i // 3) % len(ws_ids)], by="user")
-                except Exception as e:
+                except Exception as e:  # best-effort: hub demo nạp dữ liệu, lỗi một mục không dừng cả lượt
                     print("attach", e, flush=True)
         # một hội thoại rất dài (80 tin)
         cid = made[1]
