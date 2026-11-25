@@ -10,7 +10,11 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
-### Điều phối viên tự dùng connector claude.ai
+---
+
+## v0.2.37 — 2026-11-25
+
+### Điều phối viên tự dùng connector claude.ai (#232)
 - **Điều phối viên giờ tự có mọi connector claude.ai (Google Drive, Claude Docs, Atlassian…) mà tài khoản Claude đang dùng đã Connect** — như agent thường, không phải cấu hình gì. Trước đây phải chạy `cfharness manager capabilities set --connectors …` trong terminal (web không có chỗ bật), nên điều phối viên "không thấy MCP" dù tài khoản đã có. Vẫn cần tài khoản đã gắn phiên claude.ai (Cài đặt › Tài khoản Claude › Gắn connector) và guard bật.
 - Muốn tắt riêng cho điều phối viên: `cfharness manager capabilities set --connectors none`; chỉ cho vài connector: `--connectors "Google Drive,Claude Docs"`; về mặc định: `--connectors auto`. Tắt cho cả hub: `cfharness config set connectors.auto false`.
 
