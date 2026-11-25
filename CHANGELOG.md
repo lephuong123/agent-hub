@@ -10,9 +10,17 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
-### Sửa lỗi
+---
+
+## v0.2.35 — 2026-11-25
+
+### MCP: sửa lỗi agent mất MCP của tài khoản (#230)
 - **Agent mất toàn bộ MCP trong `~/.claude.json` khi run không đi qua đường connector claude.ai** (guard tắt, `connectors.auto` tắt, xác thực bằng token, điều phối viên…). Cờ cô lập `--setting-sources ""` của hub khiến claude bỏ cả server MCP user-scope; v0.2.33/v0.2.34 chỉ chạy đúng khi guard bật + `connectors.auto` (đường connector tình cờ bật nguồn `user`). Nay mọi run làm việc nạp nguồn setting `user` của tài khoản đang dùng (thư mục cấu hình riêng của tài khoản nếu có) nên luôn thấy MCP của tài khoản; plugin cá nhân vẫn bị tắt trong run, hook cá nhân được coi là đã biết (không báo "vi phạm cô lập"). Run kỹ thuật (review, eval, curator) vẫn cô lập hoàn toàn.
 - Guard: server MCP trỏ về chính hub trong cấu hình claude bị chặn MỌI tool, kể cả tool chỉ đọc (`hub_status`, `hub_golden_list`) — agent đọc trạng thái hub qua `hub-self` của run.
+
+### Hiệu năng (#228, #229)
+- **OTel không còn kéo chậm khi collector chết**: gửi lỗi một lần thì tạm ngừng gửi tới endpoint đó 60 giây (`telemetry.otel.circuit_s`, 0 = tắt) thay vì mỗi lô lại chờ hết timeout; span trong lúc ngắt bị bỏ và đếm vào `dropped`/`circuit_skipped`. Đổi endpoint thì thử lại ngay.
+- **Daemon xử lý luồng chữ của agent nhẹ hơn ~50 lần**: đọc cấu hình không còn gộp lại toàn bộ giá trị mặc định ở mỗi lần đọc (trước ~1,6 ms/lần, bị gọi nhiều lần cho mỗi mẩu chữ agent trả về); notifier/OTel/điều phối viên bỏ qua sớm các event không liên quan. Mỗi `message.delta` từ ~6,8 ms CPU xuống ~0,13 ms (`scripts/bench_publish.py`) — nhiều run song song không còn làm chậm web/Slack. Sửa tay `config.yaml` vẫn có hiệu lực ngay (đường nóng trễ tối đa 0,1 s).
 
 ---
 
