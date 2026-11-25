@@ -19,6 +19,7 @@ from starlette.routing import Route
 
 from .. import __version__
 from ..rpc import DaemonUnavailable, RpcError
+from ..updater import START_TIMEOUT_S
 from .app import render, rpc, session_of, ws
 
 PHASES = {"starting": "Chuẩn bị", "waiting_daemon": "Chờ daemon dừng", "installing": "Đang tải và cài bản mới",
@@ -67,8 +68,11 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
     def ok(r: Any, f: Any) -> str:
         return f"Đang cập nhật lên {(r or {}).get('tag')} — daemon dừng khoảng 1 phút rồi tự chạy lại; trang này tự cập nhật trạng thái"
 
+    async def _start(request: Any, p: dict[str, Any]) -> Any:  # bản sao lưu pre-update chạy trước khi daemon trả lời → chờ lâu hơn mặc định
+        return await rpc(request, "update.start", p, audit=True, timeout=START_TIMEOUT_S)
+
     actions["update_start"] = Action("update.start", lambda f: {"force": f.get("force") == "1", "tag": str(f.get("tag") or "").strip() or None}, ok, confirm=_start_confirm,
-                                     danger=True, goto=lambda r, f: "/update")
+                                     danger=True, goto=lambda r, f: "/update", call=_start)
 
 
 def routes() -> list[Any]:

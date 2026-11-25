@@ -52,6 +52,8 @@ API = f"https://api.github.com/repos/{REPO}"
 TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 CHECK_TTL_S = 600.0
 SUPERVISOR_WAIT_S = 75  # < RESTART_TIMEOUT_S (90) của helper: launchd chạy lại sau ≤ ThrottleInterval (30 s) + thời gian khởi động
+# update.start/rollback tạo bản sao lưu pre-update (vài phút với hub lớn) TRƯỚC khi trả lời → client chờ tới mức này thay cho 60 s mặc định
+START_TIMEOUT_S = 1800.0
 MUTATING_UPDATE = ("update.start", "update.rollback")
 
 Fetcher = Callable[[float], dict[str, Any]]
