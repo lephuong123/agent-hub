@@ -67,6 +67,8 @@ def _du(p: Path) -> tuple[int, int]:
                 for e in it:
                     try:
                         st = e.stat(follow_symlinks=False)
+                        if e.is_junction():  # Windows: junction (vd claude-config/<id>/projects → ~/.claude/projects) — không đi theo
+                            continue
                     except OSError:
                         continue
                     if stat.S_ISDIR(st.st_mode):

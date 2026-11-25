@@ -216,8 +216,8 @@ async def test_run_loads_account_mcp_without_strict(d, tmp_path):
     if shared:
         assert spec.claude_config_dir == cdir and d.hub.runs.active[run_id].claude_session == a
         assert env["CLAUDE_CONFIG_DIR"] == str(cdir)
-    else:  # không dựng được thư mục dùng chung session → cảnh báo, chạy bằng cấu hình mặc định (không hỏng run)
-        assert spec.claude_config_dir is None and "CLAUDE_CONFIG_DIR" not in env
+    else:  # không liên kết được cây session chung → MCP vẫn theo thư mục của tài khoản (chỉ mất resume chéo tài khoản)
+        assert spec.claude_config_dir == cdir and env["CLAUDE_CONFIG_DIR"] == str(cdir)
     init = {"type": "system", "subtype": "init", "session_id": "s", "tools": [], "plugins": [],
             "mcp_servers": [{"name": "jira", "status": "needs-auth"}, {"name": "claude.ai Slack", "status": "connected"},
                             {"name": "evil", "status": "connected"}, {"name": "hub-guard", "status": "connected"}]}
@@ -475,3 +475,17 @@ async def test_managed_playwright_removed_and_guard_forbids_in_chrome_mode(d, tm
     assert "mcp__orgbrowser__*" not in (sn.tool_policy.get("disallowed_tools") or [])
     assert classify("mcp__orgbrowser__browser_navigate", {}, d.hub.guard.context_for(d.hub.store.get_run(rn))).verdict == "safe"
     assert "@playwright" not in json.dumps(await rpc(d, "mcp.list", {}))
+
+
+async def test_account_mcp_dir_used_even_when_session_tree_unshared(d, tmp_path, monkeypatch):
+    """Đổi tài khoản → MCP đổi theo: thư mục của tài khoản được dùng cho MCP cả khi `projects` không liên kết được (mất resume chéo)."""
+    a, _, cdir = _acct(d)
+    _write_cj(tmp_path / "claude-home")
+    (cdir / ".claude.json").write_text(json.dumps({"mcpServers": {"acct-only": {"type": "http", "url": "https://acct.example/mcp"}}}),
+                                       encoding="utf-8")
+    monkeypatch.setattr(claude_config, "shared", lambda _d: False)
+    d.hub.agents.create({"id": "w1", "name": "w1", "model": "haiku", "tool_policy": {"tools": TOOLS}})
+    _, spec, _ = await _run(d)
+    assert spec.claude_config_dir == cdir
+    env = ClaudeCliRuntime(dict(DEFAULTS["runtime"]["claude"]), secrets=d.hub.secrets)._run_env(spec)
+    assert env["CLAUDE_CONFIG_DIR"] == str(cdir)

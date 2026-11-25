@@ -368,9 +368,11 @@ def scan_files(home: Path, pm: PathMap, *, rewrite_globs: tuple[str, ...] = REWR
     if not pm:
         return rewrite, review
     needles = [o.encode() for o in pm.needles()]
-    for dirpath, _dirnames, filenames in os.walk(home, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(home, followlinks=False):
         rel_dir = os.path.relpath(dirpath, home).replace(os.sep, "/")  # rel luôn dạng `/` (khớp REWRITE_FILES, baseline)
         rel_dir = "" if rel_dir == "." else rel_dir
+        # os.walk(followlinks=False) VẪN đi vào junction trên Windows (claude-config/<id>/projects → ~/.claude/projects) → tỉa
+        dirnames[:] = [d for d in dirnames if not (Path(dirpath) / d).is_junction()]
         for fn in filenames:
             rel = f"{rel_dir}/{fn}" if rel_dir else fn
             full = Path(dirpath) / fn
