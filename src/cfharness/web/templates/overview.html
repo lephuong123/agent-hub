@@ -13,7 +13,7 @@
     agent, team, task, tri thức, lịch, lịch sử và session Claude đi theo. Hoặc bắt đầu mới: tạo agent ở trang <a href="/agents">Agent</a>.</p>
 </section>
 {% endif %}
-<div id="overview" hx-get="/partials/overview" hx-trigger="every 3s" hx-swap="innerHTML">
+<div id="overview" hx-get="/partials/overview" hx-trigger="ov-dirty, every 30s" hx-swap="innerHTML">
 {% include "_overview.html" %}
 </div>
 <div class="grid-main">

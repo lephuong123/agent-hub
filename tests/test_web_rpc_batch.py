@@ -284,3 +284,59 @@ async def test_daemon_stop_closes_pooled_connections(hub_home):
     await asyncio.sleep(0.05)
     with pytest.raises(DaemonUnavailable):  # không gửi vào daemon đã dừng qua kết nối cũ
         await c.call("hub.status")
+
+
+# ============================================================================ plan-api-caching PR4/PR5: trang run + Hoạt động
+@pytest.fixture
+async def held(hub_home):
+    """Như `test_web.held`: FakeRuntime giữ run ở trạng thái đang chạy."""
+    from test_web import ISOLATED, _start, _stop
+
+    from cfharness.runtime import FakeRuntime
+
+    e = await _start(hub_home, FakeRuntime(ISOLATED, line_delay_s=0.01, hold=True))
+    yield e
+    await _stop(e)
+
+
+async def test_run_page_gets_run_once_and_uses_agent_state(held, monkeypatch):
+    from test_web import running_run
+
+    env = held
+    await env.login()
+    run = await running_run(env)
+    seen = _count_calls(env, monkeypatch)
+    r = await env.client.get(f"/runs/{run['id']}")
+    assert r.status_code == 200 and f"/sse/run/{run['id']}" in r.text
+    assert seen.get("run.get") == 1  # _run_ctx dùng lại bản trang đã có
+    assert seen.get("tui.agent_state") == 1 and "tui.snapshot" not in seen  # chỉ dòng của agent này, không cả snapshot
+    assert 'hx-trigger="every 15s"' in r.text  # run-bar: SSE `refresh` là chính, poll chỉ dự phòng
+
+    seen.clear()
+    r = await env.client.get(f"/partials/run/{run['id']}", headers={"hx-request": "true"})
+    assert r.status_code == 200 and seen.get("run.get") == 1 and "tui.snapshot" not in seen
+
+
+async def test_run_ctx_falls_back_to_snapshot_on_old_daemon(held, monkeypatch):
+    from test_web import running_run
+
+    env = held
+    await env.login()
+    run = await running_run(env)
+    seen = _count_calls(env, monkeypatch, fail={"tui.agent_state": RpcError(-32601, "không có method")})
+    r = await env.client.get(f"/partials/run/{run['id']}")
+    assert r.status_code == 200 and seen.get("tui.snapshot") == 1
+
+
+def test_overview_dirty_filter():
+    d = web_app.overview_dirty
+    for t in ("run.started", "run.completed", "approval.open", "question.opened", "task.status", "agent.paused", "hub.estop"):
+        assert d({"type": t}), t
+    for t in ("message.delta", "tool.start", "task.background", "learning.digest", ""):
+        assert not d({"type": t}), t
+
+
+async def test_overview_polls_slowly_and_firehose_marks_dirty(env):
+    await env.login()
+    r = await env.client.get("/activity")
+    assert r.status_code == 200 and 'hx-trigger="ov-dirty, every 30s"' in r.text and "every 3s" not in r.text

@@ -1171,24 +1171,49 @@ def replay_items(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return replay_tx(events).items
 
 
-async def _run_ctx(request: Request, rid: str) -> dict[str, Any]:
-    run = await rpc(request, "run.get", {"id": rid})
-    pend = with_wait(await rpc(request, "approval.list", {"run_id": run["id"]}))
-    if run.get("task_id"):
-        try:
-            run["task_title"] = (await rpc(request, "task.get", {"id": run["task_id"]}) or {}).get("title")
-        except RpcError:
-            pass
+async def _task_title(request: Request, tid: str | None) -> str | None:
+    if not tid:
+        return None
+    try:
+        return (await rpc(request, "task.get", {"id": tid}) or {}).get("title")
+    except RpcError:
+        return None
+
+
+async def _agent_live(request: Request, aid: str) -> dict[str, Any] | None:
+    """Dòng live của MỘT agent (`tui.agent_state`, chỉ truy vấn của agent đó) — daemon cũ chưa có thì rơi về `tui.snapshot`."""
+    try:
+        return ((await rpc(request, "tui.agent_state", {"id": aid})) or {}).get("agent")
+    except RpcError as e:
+        if e.code != METHOD_NOT_FOUND:
+            raise
+    snap = await rpc(request, "tui.snapshot")
+    return next((r for r in snap.get("agents") or [] if r["id"] == aid), None)
+
+
+async def _none() -> None:
+    return None
+
+
+async def _run_ctx(request: Request, rid: str, run: dict[str, Any] | None = None) -> dict[str, Any]:
+    """`run` = bản `run.get` người gọi đã có (trang run) → không hỏi lại. Các lời gọi độc lập chạy đồng thời (plan-api-caching PR4)."""
+    if run is None:
+        run = await rpc(request, "run.get", {"id": rid})
+    live_run = P.is_live_run(run)
+    pend, title, live, rqs = await gather_ordered(
+        rpc(request, "approval.list", {"run_id": run["id"]}),
+        _task_title(request, run.get("task_id")),
+        _agent_live(request, run["agent_id"]) if live_run else _none(),
+        questions(request, "pending", run_id=run["id"]) if live_run else _none(),
+    )
+    pend = with_wait(pend)
+    if title is not None:
+        run["task_title"] = title
     tokens = P.tokens_of(run.get("usage"))
-    live = None
-    if P.is_live_run(run):
-        snap = await rpc(request, "tui.snapshot")
-        live = next((r for r in snap.get("agents") or [] if r["id"] == run["agent_id"]), None)
-        if live and live.get("current_run_id") == run["id"]:
-            tokens = live.get("run_tokens") or tokens
+    if live and live.get("current_run_id") == run["id"]:
+        tokens = live.get("run_tokens") or tokens
     # trạng thái hiển thị thống nhất: run đang chạy mà có thao tác chờ duyệt / câu hỏi chờ → "Chờ duyệt" / "Chờ bạn trả lời" (như /runs)
-    rqs = await questions(request, "pending", run_id=run["id"]) if P.is_live_run(run) else []
-    state = P.run_state(run, P.need_index(pend, rqs))
+    state = P.run_state(run, P.need_index(pend, rqs or []))
     return {"run": run, "pend": pend, "tokens": tokens, "live": live, "run_disp": state}
 
 
@@ -1196,11 +1221,17 @@ async def run_page(request: Request) -> Response:
     rid = request.path_params["id"]
     run = await rpc(request, "run.get", {"id": rid, "events": True})
     events = run.pop("events", []) or []
-    status = await rpc(request, "hub.status")
+    panel = request.query_params.get("panel") == "1"
+    # plan-api-caching PR4: không hỏi lại run.get trong _run_ctx; các lời gọi độc lập chạy đồng thời
+    status, ctx, runs, qs = await gather_ordered(
+        rpc(request, "hub.status"),
+        _run_ctx(request, run["id"], dict(run)),
+        _none() if panel else rpc(request, "run.list", {"agent": run["agent_id"], "limit": 50}),
+        _none() if panel else questions(request, "all", run_id=run["id"]),
+    )
     epoch = status["epoch"]
     since = max([int(e.get("seq") or 0) for e in events if e.get("epoch") == epoch] or [0])
-    ctx = await _run_ctx(request, run["id"])
-    if request.query_params.get("panel") == "1":
+    if panel:
         # panel trượt bên phải của trang Điều phối (static/files.js, nút "Xem" của thẻ việc / "Đội đang làm gì"): chỉ phần diễn biến gần
         # nhất, không khung trang. Cùng bộ gộp + macro với trang run (chữ agent autoescape, chỉ md() đã cứng hoá là |safe).
         tx = replay_tx(events)
@@ -1208,8 +1239,8 @@ async def run_page(request: Request) -> Response:
         blocks, _, hidden = P.page_blocks(tx.blocks())
         return ws(request).templates.TemplateResponse(request, "_run_panel.html", {**ctx, "items": blocks, "hidden": hidden},
                                                       headers={"Cache-Control": "no-store"})
-    children = [r for r in (await rpc(request, "run.list", {"agent": run["agent_id"], "limit": 50}) or []) if r.get("parent_run_id") == run["id"]]
-    qs = await questions(request, "all", run_id=run["id"])
+    children = [r for r in (runs or []) if r.get("parent_run_id") == run["id"]]
+    qs = qs or []
     tx = replay_tx(events)
     final_text = P.mark_final(tx.items)
     blocks, before, hidden = P.page_blocks(tx.blocks())  # P2: run dài → chỉ vẽ phần cuối + nút "Hiện các mục trước"
@@ -2095,12 +2126,25 @@ async def sse_run(request: Request) -> Response:
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
+OVERVIEW_DIRTY_PREFIXES = ("run.", "approval.", "question.", "task.", "agent.", "team.", "hub.", "estop.", "manager.")
+
+
+def overview_dirty(ev: dict[str, Any]) -> bool:
+    """Event (mức summary) có thể đổi bảng Hoạt động (trạng thái agent, việc chờ, chi phí) không — hàm thuần. Rộng tay: thừa chỉ tốn
+    một lần tải lại đã gom loạt; thiếu thì poll dự phòng 30 s bù."""
+    t = ev.get("type") or ""
+    return t.startswith(OVERVIEW_DIRTY_PREFIXES) and t != "task.background"
+
+
 async def sse_firehose(request: Request) -> Response:
     mod = ws(request).templates.env.get_template("_items.html").module
 
     def conv(ev: dict[str, Any]) -> list[dict[str, Any]]:
         it = P.activity_item(ev)
-        return [{"t": "line", "html": str(mod.line(it))}] if it else []
+        out = [{"t": "line", "html": str(mod.line(it))}] if it else []
+        if overview_dirty(ev):
+            out.append({"t": "dirty"})  # app.js gom loạt rồi tải lại #overview (thay poll 3 s — plan-api-caching PR5)
+        return out
 
     st = await rpc(request, "hub.status")
     params = {"level": "summary", "since_seq": max(0, int(st.get("last_seq") or 0) - 300), "epoch": st.get("epoch")}

@@ -10,6 +10,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Hiệu năng
+- **Web hỏi daemon ít hơn khi để mở trang**: trang *Hoạt động* tải lại bảng khi có thay đổi thật (theo luồng sự kiện, gom loạt 1 giây) thay vì hỏi mỗi 3 giây — để yên thì gần như không gọi; thanh trên cùng của trang lượt chạy cập nhật theo luồng trực tiếp, chỉ hỏi lại mỗi 15 giây để dự phòng (trước 2 giây). Trang lượt chạy mở nhanh hơn: không lấy lại lượt chạy hai lần, các lời gọi độc lập chạy đồng thời, chỉ lấy trạng thái của đúng agent đó thay vì ảnh chụp cả hub.
+
 ### Luồng việc ngay trong trò chuyện
 - **Theo dõi và duyệt việc của cả đội mà không rời khung chat**: khay **"N việc cần bạn"** ghim ngay trên ô nhập (cả ở hội thoại mới) liệt kê thao tác phá huỷ chờ duyệt và câu hỏi chờ bạn của mọi agent — cho phép/từ chối/trả lời tại chỗ với cùng bước xác nhận như trang Duyệt (thao tác nặng vẫn sang trang Duyệt). Khi điều phối viên giao task/chạy việc, dưới khối "Đã làm N việc" có **thẻ việc tự cập nhật**: agent, trạng thái, bước đang làm, kết quả khi xong, nút **Xem** (diễn biến trong panel trượt bên phải), **Nhắn thêm**, **Dừng**. Panel phải đổi thành **"Đội đang làm gì"** (việc cần bạn, agent đang làm, chi phí hôm nay); "Kiểm tra ngay"/"Huỷ chỉ định" gọn vào mục "Điều phối viên". Hội thoại mới cho biết bao nhiêu agent đang có việc/việc cần bạn và lại hiện các gợi ý câu hỏi; gợi ý phím tắt chỉ hiện khi đang gõ. **Tìm kiếm** nhóm kết quả theo hội thoại và mở đúng hội thoại (tô sáng tin tìm được); kết quả của lượt chạy thường vẫn mở lượt chạy. Bộ lọc **Lượt chạy → Chờ duyệt** giờ gồm cả lượt đang chạy có thao tác chờ duyệt.
 - **Dữ liệu nhiều / tên dài**: bộ lọc agent ở Lượt chạy và Tìm kiếm không còn làm trang tràn ngang trên điện thoại khi có agent tên dài; công việc chờ team chưa có trưởng nhóm ghi "team chưa có trưởng nhóm" thay vì mã `no_lead`; lượt tự học rà soát hội thoại có tiêu đề tiếng Việt thay vì prompt tiếng Anh.
