@@ -181,3 +181,57 @@ async def test_guard_non_connector_run_unchanged(d, user_home):
     assert classify("mcp__claude_ai_Gmail__send_message", {}, ctx).rule == "mcp_third_party"
     other = dataclasses.replace(ctx, manager_run=False)
     assert classify("mcp__claude_ai_Gmail__send_message", {}, other).verdict == "safe"
+
+
+# ------------------------------------------------------------------ mặc định: điều phối viên tự dùng mọi connector (connectors.auto)
+def test_resolve_connectors_auto_flag():
+    assert resolve_capabilities({"profile": "hermes"})["connectors_auto"] is True  # chưa đặt = tự động
+    assert resolve_capabilities({"profile": "hermes", "connectors": None})["connectors_auto"] is True
+    assert resolve_capabilities({"profile": "hermes", "connectors": []})["connectors_auto"] is False  # [] = tắt hẳn
+    assert resolve_capabilities({"profile": "hermes", "connectors": ["Claude Docs"]})["connectors_auto"] is False
+    assert resolve_capabilities({"profile": "hermes", "connectors": "x"})["connectors_auto"] is False  # sửa tay sai kiểu → fail-closed
+
+
+def test_sandbox_blocked_disables_auto():
+    from cfharness.manager.sandbox_gate import gate
+
+    caps = gate(resolve_capabilities({"profile": "hermes"}), {})
+    if caps.get("sandbox_blocked"):
+        assert caps["connectors_auto"] is False
+
+
+async def _auto_manager(d, monkeypatch, connectors, login=True):
+    monkeypatch.delenv("CFHARNESS_CONNECTORS_AUTO", raising=False)
+
+    async def login_available(self, config_dir=None):
+        return login
+    monkeypatch.setattr(type(d.hub.runs.runtime()), "login_available", login_available, raising=False)
+    return await _connector_manager(d, connectors)
+
+
+async def test_manager_connectors_auto_by_default(d, user_home, monkeypatch):
+    spec, _ = await _auto_manager(d, monkeypatch, None)
+    assert spec.connectors == ["*"] and spec.auth_mode == "login"
+    assert spec.isolation_overrides == {"setting_sources": "user", "strict_mcp_config": False}
+
+
+async def test_manager_connectors_auto_needs_login(d, user_home, monkeypatch):
+    spec, _ = await _auto_manager(d, monkeypatch, None, login=False)
+    assert not spec.connectors and spec.auth_mode == "token"
+
+
+async def test_manager_connectors_explicit_off_and_list(d, user_home, monkeypatch):
+    spec, _ = await _auto_manager(d, monkeypatch, [])
+    assert not spec.connectors  # [] = người tắt hẳn → không tự bật
+    d.hub.config.set("manager.capabilities.connectors", ["Claude Docs"])
+    res = await rpc(d, "manager.chat", {"channel": "web", "text": "again"})
+    await wait_status(d, res["run_id"])
+    spec = [s for s in d.script.specs if s.run_id == res["run_id"]][-1]
+    assert spec.connectors == ["Claude_Docs"]
+
+
+async def test_manager_connectors_auto_respects_global_off(d, user_home, monkeypatch):
+    monkeypatch.delenv("CFHARNESS_CONNECTORS_AUTO", raising=False)
+    d.hub.config.set("connectors.auto", False)
+    spec, _ = await _auto_manager(d, monkeypatch, None)
+    assert not spec.connectors

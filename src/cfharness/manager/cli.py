@@ -39,7 +39,8 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     cap.add_argument("--tools", help="danh sách tool phân cách bằng dấu phẩy (ghi đè profile); 'profile' = theo profile")
     cap.add_argument("--web", choices=["on", "off", "profile"])
     cap.add_argument("--connectors", help="connector claude.ai cho phép, phân cách dấu phẩy (vd \"Claude Docs,Atlassian\"); "
-                     "'none' = tắt. Bật = run dùng phiên claude.ai + cấu hình user ~/.claude (docs/dev-notes/manager-connectors.md)")
+                     "'none' = tắt; 'auto' = mặc định (mọi connector tài khoản đã Connect). Bật = run dùng phiên claude.ai + cấu hình user ~/.claude "
+                     "(docs/dev-notes/manager-connectors.md)")
     cap.add_argument("--sync-agent", action="store_true", help="đặt luôn tool_policy.tools của agent điều phối viên = tool của khung mới")
     mg.set_defaults(fn=cmd_manager)
     ch = sub.add_parser("chat", help="chat qua lại với điều phối viên trên terminal (kênh cli, dùng chung với TUI `top` → m)", parents=[common])
@@ -244,6 +245,10 @@ def _print_caps(info: dict[str, Any]) -> None:
     print(f"  web: {'bật' if e.get('web') else 'tắt'} · MCP: mọi MCP của tài khoản Claude (cfharness mcp list)")
     if e.get("connectors"):
         print(f"  connector claude.ai: {', '.join(e['connectors'])}  (run dùng phiên claude.ai + cấu hình user ~/.claude)")
+    elif e.get("connectors_auto"):
+        print("  connector claude.ai: tự động — mọi connector tài khoản đã Connect (cần phiên claude.ai + connectors.auto)")
+    else:
+        print("  connector claude.ai: tắt")
     for w in e.get("warnings") or []:
         print(f"  ! {w}")
     if info.get("manager"):
@@ -276,7 +281,12 @@ def _cmd_capabilities(ctx: Any) -> int:
             new["web"] = None if a.web == "profile" else a.web == "on"
         if a.connectors is not None:
             names = [c.strip() for c in a.connectors.split(",") if c.strip()]
-            new["connectors"] = None if names in ([], ["none"]) else names
+            if names in ([], ["none"]):
+                new["connectors"] = []  # tắt hẳn (null = tự động: mọi connector tài khoản đã Connect)
+            elif names == ["auto"]:
+                new["connectors"] = None
+            else:
+                new["connectors"] = names
     ctx.call("config.set", {"key": "manager.capabilities", "value": new})
     info = ctx.call("manager.capabilities")
     if a.sync_agent and info.get("manager"):
