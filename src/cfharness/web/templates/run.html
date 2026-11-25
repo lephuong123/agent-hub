@@ -11,7 +11,7 @@
 <div class="run-scroll" id="run-scroll" data-tx-scroll>
 <div class="run-read">
 <nav class="crumbs"><a href="/runs">Lượt chạy</a>{{ m.icon('chev-right') }}<span>{{ run_title(run, {run.task_id: run.task_title} if run.task_title else None, 60) }}</span>{% if run.parent_run_id %}<span>· tiếp nối <a href="/runs/{{ run.parent_run_id }}" title="Mã lượt chạy: {{ run.parent_run_id }}">lượt trước</a></span>{% endif %}<span>· <a href="/trace/{{ run.id }}" title="audit + log + event + guard của run">Dòng thời gian</a></span></nav>
-<header class="run-bar" id="runbar"{% if live_run %} hx-get="/partials/run/{{ run.id }}" hx-trigger="every 2s" hx-swap="innerHTML"{% endif %}>
+<header class="run-bar" id="runbar"{% if live_run %} hx-get="/partials/run/{{ run.id }}" hx-trigger="every 15s" hx-swap="innerHTML"{% endif %}>
 {% include "_run_bar.html" %}
 </header>
 {% if run_questions %}<div class="need">{% for q in run_questions %}{{ m.question_card(q, "/runs/" ~ run.id) }}{% endfor %}</div>{% endif %}

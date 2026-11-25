@@ -557,9 +557,21 @@
     var src = new EventSource(fh.getAttribute("data-sse-firehose"));
     src.onopen = function () { if (st) { st.textContent = "trực tiếp"; st.className = "pill ok"; } };
     src.onerror = function () { if (st) { st.textContent = "đang nối lại…"; st.className = "pill warn"; } };
+    // Bảng #overview tải lại theo SSE (`{"t":"dirty"}`), gom loạt 1 s, thay poll 3 s (plan-api-caching PR5). Lần nối ĐẦU server phát
+    // lại ~300 event cũ → bỏ qua "dirty" 2 s đầu (trang vừa vẽ xong); nối lại sau khi rớt thì tải lại (có thể đã lỡ thay đổi).
+    // Tab ẩn: không tải — poll dự phòng `every 30s` bị chặn và đánh dấu "cũ", tab hiện lại tải đúng một lần (khối polling ở trên).
+    var ov = document.getElementById("overview"), ovTimer = null, ovMuteUntil = Date.now() + 2000;
+    function ovDirty() {
+      if (!ov || !window.htmx || document.hidden || Date.now() < ovMuteUntil || ovTimer) return;
+      ovTimer = setTimeout(function () { ovTimer = null; if (!document.hidden && ov.isConnected) window.htmx.trigger(ov, "ov-dirty"); }, 1000);
+    }
+    var fhOpened = false;
+    var fhOpen = src.onopen;
+    src.onopen = function () { if (fhOpened) { ovMuteUntil = 0; ovDirty(); } fhOpened = true; fhOpen(); };
     src.onmessage = function (ev) {
       var m;
       try { m = JSON.parse(ev.data); } catch (_) { return; }
+      if (m.t === "dirty") { ovDirty(); return; }
       if (m.t !== "line") return;
       var li = fromHTML(m.html);
       if (!li) return;

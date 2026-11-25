@@ -454,3 +454,30 @@ async def test_settings_page_files_group_and_public_can_only_tighten(env):
     assert env.hub.config.get("files.open_extensions") == [".txt", ".pdf", ".stl"]
     await put("files.open_extensions", ".txt\n.exe")
     assert ".exe" not in env.hub.config.get("files.open_extensions")
+
+
+def test_view_image_reads_only_head(monkeypatch):
+    """plan-api-caching PR9: xem ảnh/PDF chỉ đọc 4 KB (nội dung đi qua /files/raw); văn bản vẫn đọc tới VIEW_MAX."""
+    import asyncio
+
+    from starlette.requests import Request
+
+    from cfharness.fileview import VIEW_MAX
+    from cfharness.web import app as A
+    from cfharness.web import file_pages as F
+
+    seen: list[int] = []
+
+    async def fake_rpc(request, method, params=None, **kw):
+        seen.append(params["max_bytes"])
+        raise RuntimeError("dừng sau khi ghi nhận tham số")
+
+    monkeypatch.setattr(A, "rpc", fake_rpc)
+    for path, want in (("a/b.png", 4096), ("x.PDF", 4096), ("notes.md", VIEW_MAX)):
+        req = Request({"type": "http", "method": "GET", "path": "/files/view", "headers": [],
+                       "query_string": f"run=r_1&path={path}".encode()})
+        try:
+            asyncio.run(F.file_view(req))
+        except RuntimeError:
+            pass
+        assert seen[-1] == want, path

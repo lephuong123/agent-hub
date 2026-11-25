@@ -338,15 +338,30 @@ def issue_token(sock_path: str | os.PathLike[str], kind: str = "human") -> str:
     return tok
 
 
+_TOKEN_CACHE: dict[str, tuple[tuple[int, int, int], str | None]] = {}
+
+
 def load_token(sock_path: str | os.PathLike[str] | None, kind: str = "human") -> str | None:
+    """Token của client (file 0600, của chính user, không symlink). Mỗi lần vẫn `lstat`; nội dung nhớ theo (mtime_ns, size, ino) —
+    xoay token = ghi lại file → đổi dấu → đọc lại. Đọc file trên Windows ~0,3 ms (quét AV) ở MỌI RPC (plan-api-caching PR7)."""
+    import stat as _stat
+
     if not sock_path:
         return None
     try:
         p = token_path(sock_path, kind)
         st = os.lstat(p)
-        if not os.path.isfile(p) or os.path.islink(p) or not owned_by_me(st):
+        if not _stat.S_ISREG(st.st_mode) or not owned_by_me(st):  # lstat: symlink KHÔNG phải S_ISREG
             return None
-        return p.read_text(encoding="utf-8").strip() or None
+        key, stamp = str(p), (st.st_mtime_ns, st.st_size, st.st_ino)
+        hit = _TOKEN_CACHE.get(key)
+        if hit and hit[0] == stamp:
+            return hit[1]
+        tok = p.read_text(encoding="utf-8").strip() or None
+        if len(_TOKEN_CACHE) > 64:
+            _TOKEN_CACHE.clear()
+        _TOKEN_CACHE[key] = (stamp, tok)
+        return tok
     except OSError:
         return None
 
