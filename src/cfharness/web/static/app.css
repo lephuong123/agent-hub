@@ -1590,3 +1590,19 @@ html { overflow-x: clip; }
 .btn.send { width: 30px; height: 30px; }
 .btn.send .ic { width: 16px; height: 16px; }
 .chat-disclaimer { margin-top: 4px; font-size: 11px; }
+
+/* ============================================================ khung chat: nhiều chỗ hơn cho nội dung trả lời
+   Trước (1440×900): vùng đọc 632px cao (~70%), cột chữ 764px; đầu trang 56 + tab luồng 44 + khay 46 + ô nhập 110 + panel phải 320px.
+   Sau: đầu trang + tab gọn, khay một dòng, ô nhập thấp, cột đọc rộng hơn, panel phải mặc định đóng dưới 1700px (early.js). */
+.mgr-chat { --read-w: 880px; }
+.chat-head { min-height: 44px; padding: 4px 16px; }
+.chat-head::after { height: 10px; }
+.ws-bar { padding: 2px 16px 4px; }
+.ws-tab { padding: 3px 10px; }
+.mgr-log { gap: 14px; padding-top: 12px; padding-bottom: 16px; }
+.mm-who { margin-bottom: 2px; }
+.mm-foot { min-height: 24px; margin-top: 2px; }
+.mm-btn { width: 24px; height: 24px; }
+.mm-md .md { line-height: 1.6; }
+.composer-wrap { padding-bottom: 6px; }
+.mgr-chat:not(:has(#mgr-empty)) .chat-disclaimer { display: none; }
