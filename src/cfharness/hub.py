@@ -328,7 +328,7 @@ class Hub:
             "teams_estop": [r[0] for r in self.store.conn.execute("SELECT id FROM teams WHERE estop=1 AND archived_at IS NULL")],  # M3
             "auth_block": self.runs.auth_block,
             "account": self._account_brief(),  # tài khoản Claude đang dùng {id, label} | None (accounts/)
-            "agents": len(self.store.list_agents()),
+            "agents": self.store.count_agents(),  # COUNT(*) — không nạp + giải mã JSON mọi dòng agent
             "cost_today_usd": round(self.store.cost_today(), 8),
             "epoch_usage": self.aggregator.snapshot(),
             "subscribers": self.bus.subscriber_count,

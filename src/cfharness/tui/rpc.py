@@ -8,6 +8,8 @@ Chữ ký:
   last_tool, last_tool_preview, last_tool_at, run_tokens, run_cost_usd, tokens_today, cost_today_usd,
   pending_approvals, waiting_human, last_run_id, last_run_status, session_id}`.
   `status` hiển thị ∈ working | waiting | waiting_human | idle | error | paused.
+  RPC đi qua `SnapshotCache` (TUI, web, REPL dùng chung một lần tính; cũ tối đa `SNAPSHOT_TTL_S`, tính lại ngay khi trạng thái DB đổi).
+  Dữ liệu từng agent nạp theo lô (`_prefetch`) — không truy vấn trong vòng lặp agent.
 - `tui.agent_state {id}` → `{agent: row|None}`: một dòng như trên, chỉ truy vấn của agent đó (trang Điều phối). Chỉ đọc, ai gọi cũng được
   như `tui.snapshot` (không nhạy cảm, không phụ thuộc người gọi).
 - `run.steer {id (run hoặc agent), text, by?, channel?}` → `{run_id, sent, seq, steer_count}` (FR-RT-06).
@@ -18,6 +20,7 @@ Chữ ký:
 
 from __future__ import annotations
 
+import copy
 import json
 import time
 from datetime import datetime, timezone
@@ -73,14 +76,65 @@ def _teams_by_agent(hub: "Hub") -> dict[str, str]:
     return out
 
 
-def _task_title(hub: "Hub", task_id: str | None) -> str | None:
-    if not task_id:
-        return None
+def _task_titles(hub: "Hub", task_ids: list[str | None]) -> dict[str, str]:
+    """task_id → tiêu đề cho cả danh sách trong MỘT truy vấn (thay `_task_title` gọi từng agent)."""
+    ids = sorted({t for t in task_ids if t})
+    if not ids:
+        return {}
     try:
-        r = hub.store.conn.execute("SELECT title FROM tasks WHERE id=?", (task_id,)).fetchone()
+        rows = hub.store.conn.execute("SELECT id, title FROM tasks WHERE id IN (SELECT value FROM json_each(?))", (json.dumps(ids),))
+        return {r["id"]: r["title"] for r in rows}
     except Exception:  # best-effort: bảng tasks chưa có (DB cũ) → không tiêu đề
-        return None
-    return r["title"] if r else None
+        return {}
+
+
+def _runs_by_id(hub: "Hub", run_ids: list[str | None]) -> dict[str, dict[str, Any]]:
+    """run_id → dòng run (KHÔNG cột `diff`) cho cả danh sách trong MỘT truy vấn (thay `get_run` từng agent — `get_run` kéo cả diff)."""
+    ids = sorted({r for r in run_ids if r})
+    if not ids:
+        return {}
+    store = hub.store
+    sql = f"SELECT {store._runs_list_cols()} FROM runs WHERE id IN (SELECT value FROM json_each(?))"
+    return {r["id"]: r for r in (store._row("runs", x) for x in store.conn.execute(sql, (json.dumps(ids),))) if r}
+
+
+LAST_RUNS_SQL = ("SELECT {cols} FROM runs WHERE rowid IN "
+                 "(SELECT (SELECT rowid FROM runs WHERE agent_id=j.value ORDER BY queued_at DESC LIMIT 1) FROM json_each(?) j)")
+"""Run mới nhất (theo `queued_at`) của TỪNG agent trong danh sách — MỘT truy vấn; truy vấn con tương quan đi theo index
+`runs_agent(agent_id, queued_at)` (giống `list_runs(agent_id=…, limit=1)`, cùng thứ tự khi trùng `queued_at`)."""
+
+
+def _last_runs(hub: "Hub", agent_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """agent_id → run mới nhất (không cột `diff`), thay N lần `list_runs(agent_id=…, limit=1)`."""
+    ids = list(dict.fromkeys(agent_ids))
+    if not ids:
+        return {}
+    store = hub.store
+    rows = store.conn.execute(LAST_RUNS_SQL.format(cols=store._runs_list_cols()), (json.dumps(ids),))
+    return {r["agent_id"]: r for r in (store._row("runs", x) for x in rows) if r}
+
+
+TODAY_USAGE_SQL = (
+    "SELECT agent_id, COALESCE(SUM(cost_usd), 0) AS cost, COALESCE(SUM(CASE WHEN json_valid(usage) THEN "
+    + " + ".join(f"CAST(COALESCE(json_extract(usage, '$.{k}'), 0) AS INTEGER)" for k in USAGE_KEYS)
+    + " END), 0) AS tok FROM runs WHERE ended_at >= ?{agent} GROUP BY +agent_id"
+)
+"""Token + chi phí theo agent của các run kết thúc từ một mốc — cộng NGAY TRONG SQLite (trước đây kéo từng dòng `usage` về
+`json.loads` trong Python). `+agent_id`: giữ khoảng `ended_at` trên index `runs_ended` (như `Store.cost_since_by_agent`)."""
+
+
+def _today_usage(hub: "Hub", since: str, agent_id: str | None = None) -> tuple[dict[str, int], dict[str, float]]:
+    """(token, chi phí) hôm nay theo agent. Cùng kết quả với cách cũ (`_tokens` từng dòng): usage hỏng/không phải object → 0 token."""
+    if agent_id is None:
+        rows = hub.store.conn.execute(TODAY_USAGE_SQL.format(agent=""), (since,))
+    else:
+        rows = hub.store.conn.execute(TODAY_USAGE_SQL.format(agent=" AND agent_id=?"), (since, agent_id))
+    tok: dict[str, int] = {}
+    cost: dict[str, float] = {}
+    for r in rows:
+        tok[r["agent_id"]] = int(r["tok"] or 0)
+        cost[r["agent_id"]] = float(r["cost"] or 0.0)
+    return tok, cost
 
 
 def _first_line(s: str | None, n: int = 120) -> str:
@@ -102,15 +156,33 @@ LEARN_COUNT_SQL = "SELECT COUNT(*) FROM events WHERE type >= 'learning.' AND typ
 `events_type_ts(type, ts)` — LIKE không dùng index (quét ~157 ms trên DB thật)."""
 
 
+def _row_run_id(a: dict[str, Any], active: list[str]) -> str | None:
+    return a.get("current_run_id") or (active or [None])[0]
+
+
+def _prefetch(hub: "Hub", agents: list[dict[str, Any]], active_by_agent: dict[str, list[str]],
+              waiting_runs: dict[str, dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, str]]:
+    """Nạp trước, theo lô, dữ liệu mà `_agent_row` cần cho mọi agent: (run hiện tại theo id, run mới nhất theo agent — chỉ agent
+    không có run hiện tại, tiêu đề task). Ba truy vấn cho cả bảng thay vì tới 3 truy vấn MỖI agent (N+1)."""
+    runs = _runs_by_id(hub, [_row_run_id(a, active_by_agent.get(a["id"]) or []) for a in agents])
+    no_run = [a["id"] for a in agents if _row_run_id(a, active_by_agent.get(a["id"]) or []) not in runs]
+    last = _last_runs(hub, no_run)
+    task_ids: list[str | None] = []
+    for a in agents:
+        src = runs.get(_row_run_id(a, active_by_agent.get(a["id"]) or []) or "") or waiting_runs.get(a["id"])
+        task_ids.append((src or {}).get("task_id"))
+    return runs, last, _task_titles(hub, task_ids)
+
+
 def _agent_row(hub: "Hub", a: dict[str, Any], *, now: float, pend: list[dict[str, Any]], wh: dict[str, Any] | None, active: list[str],
-               team: str | None, tokens_today: int, cost_today: float, sbx: dict[str, Any], trust: Any) -> dict[str, Any]:
-    """Một dòng agent của `tui.snapshot` / `tui.agent_state` (cùng định dạng)."""
-    store = hub.store
+               team: str | None, tokens_today: int, cost_today: float, sbx: dict[str, Any], trust: Any,
+               runs: dict[str, dict[str, Any]], last_runs: dict[str, dict[str, Any]], titles: dict[str, str]) -> dict[str, Any]:
+    """Một dòng agent của `tui.snapshot` / `tui.agent_state` (cùng định dạng). `runs`/`last_runs`/`titles` từ `_prefetch` (không truy vấn ở đây)."""
     aid = a["id"]
     live = hub.aggregator.agents.get(aid)
-    run_id = a.get("current_run_id") or (active or [None])[0]
-    run = store.get_run(run_id) if run_id else None
-    last = run or (store.list_runs(agent_id=aid, limit=1) or [None])[0]
+    run_id = _row_run_id(a, active)
+    run = runs.get(run_id) if run_id else None
+    last = run or last_runs.get(aid)
     raw = a["status"]
     if raw == "paused":
         disp = "paused"
@@ -125,7 +197,7 @@ def _agent_row(hub: "Hub", a: dict[str, Any], *, now: float, pend: list[dict[str
     task_src = run or wh
     task = None
     if task_src:
-        task = _task_title(hub, task_src.get("task_id")) or _first_line(task_src.get("prompt"))
+        task = titles.get(task_src.get("task_id") or "") or _first_line(task_src.get("prompt"))
     is_running = bool(run and run["status"] == "running")
     run_tokens = int(live.run_tokens) if (live and is_running) else 0
     run_cost = float(live.run_cost_est) if (live and is_running) else 0.0
@@ -174,13 +246,32 @@ def agent_state(hub: "Hub", p: dict[str, Any] | None = None) -> dict[str, Any]:
         x["wait_s"] = round(_age_s(x.get("opened_at"), now) or 0.0, 1)
     whs = store.list_runs(agent_id=aid, status="waiting_human", limit=1)
     active = [ar.run_id for ar in hub.runs.active.values() if ar.agent_id == aid]
-    tok, cost = 0, 0.0
-    for r in store.conn.execute("SELECT usage, cost_usd FROM runs WHERE agent_id=? AND ended_at >= ?", (aid, _today_start_utc())):
-        tok += _tokens(r["usage"])
-        cost += float(r["cost_usd"] or 0.0)
-    row = _agent_row(hub, a, now=now, pend=pend, wh=whs[0] if whs else None, active=active, team=_teams_by_agent(hub).get(aid),
-                     tokens_today=tok, cost_today=cost, sbx=hub.guard.sandbox_overrides().get(aid) or {}, trust=hub.guard.trust_all().get(aid))
+    tok, cost = _today_usage(hub, _today_start_utc(), aid)
+    wh = whs[0] if whs else None
+    runs, last, titles = _prefetch(hub, [a], {aid: active}, {aid: wh} if wh else {})
+    row = _agent_row(hub, a, now=now, pend=pend, wh=wh, active=active, team=_teams_by_agent(hub).get(aid),
+                     tokens_today=tok.get(aid, 0), cost_today=cost.get(aid, 0.0), sbx=hub.guard.sandbox_overrides().get(aid) or {},
+                     trust=hub.guard.trust_all().get(aid), runs=runs, last_runs=last, titles=titles)
     return {"agent": row}
+
+
+def _status_lite(hub: "Hub", cfg: dict[str, Any]) -> dict[str, Any]:
+    """Phần của `hub.status()` mà header snapshot dùng — bỏ các phần nặng snapshot không cần (đếm agent, `cost_today` — snapshot đã tự
+    tính —, bộ đếm lỗi log, usage theo epoch, tài khoản) và đọc config MỘT lần (`cfg`)."""
+    from .. import __version__
+
+    runs = hub.runs
+    return {
+        "version": __version__,
+        "runtime": cfg["runtime"]["kind"],
+        "max_concurrent_runs": cfg["hub"]["max_concurrent_runs"],
+        "running": len(runs.active),
+        "queued": len(runs.queue),
+        "estop": runs.estop,
+        "auth_block": runs.auth_block,
+        "subscribers": hub.bus.subscriber_count,
+        "migrated_to": runs.frozen,
+    }
 
 
 def snapshot(hub: "Hub", p: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -194,17 +285,14 @@ def snapshot(hub: "Hub", p: dict[str, Any] | None = None) -> dict[str, Any]:
         appr_by_agent.setdefault(a["agent_id"], []).append(a)
     teams = _teams_by_agent(hub)
     since = _today_start_utc()
-    tok_today: dict[str, int] = {}
-    cost_today: dict[str, float] = {}
-    for r in store.conn.execute("SELECT agent_id, usage, cost_usd FROM runs WHERE ended_at >= ?", (since,)):
-        tok_today[r["agent_id"]] = tok_today.get(r["agent_id"], 0) + _tokens(r["usage"])
-        cost_today[r["agent_id"]] = cost_today.get(r["agent_id"], 0.0) + float(r["cost_usd"] or 0.0)
+    tok_today, cost_today = _today_usage(hub, since)
     waiting_runs: dict[str, dict[str, Any]] = {}
     for r in store.list_runs(status="waiting_human", limit=500):
         waiting_runs.setdefault(r["agent_id"], r)
     active_by_agent: dict[str, list[str]] = {}
     for ar in hub.runs.active.values():
         active_by_agent.setdefault(ar.agent_id, []).append(ar.run_id)
+    runs, last_runs, titles = _prefetch(hub, agents, active_by_agent, waiting_runs)
 
     rows = []
     running_tokens = 0
@@ -214,14 +302,15 @@ def snapshot(hub: "Hub", p: dict[str, Any] | None = None) -> dict[str, Any]:
         aid = a["id"]
         row = _agent_row(hub, a, now=now, pend=appr_by_agent.get(aid, []), wh=waiting_runs.get(aid), active=active_by_agent.get(aid) or [],
                          team=teams.get(aid), tokens_today=tok_today.get(aid, 0), cost_today=cost_today.get(aid, 0.0),
-                         sbx=sbx.get(aid) or {}, trust=trusts.get(aid))
+                         sbx=sbx.get(aid) or {}, trust=trusts.get(aid), runs=runs, last_runs=last_runs, titles=titles)
         running_tokens += row["run_tokens"]
         rows.append(row)
 
-    st = hub.status()
+    cfg = hub.config.data  # đọc config MỘT lần (mỗi lần đọc là một bản trộn DEFAULTS mới)
+    st = _status_lite(hub, cfg)
     cli = store.conn.execute("SELECT cli_version FROM runs WHERE cli_version IS NOT NULL ORDER BY queued_at DESC LIMIT 1").fetchone()
     cli_version = cli["cli_version"] if cli else None
-    tested = hub.config.get("runtime.claude.tested_versions") or []
+    tested = ((cfg.get("runtime") or {}).get("claude") or {}).get("tested_versions") or []
     compat = store.state_get("cli_compat") or {}  # H-10: kiểm phiên bản lúc daemon khởi động (runtime/compat.py)
     if compat.get("version"):
         cli_version = compat["version"]
@@ -266,8 +355,51 @@ def snapshot(hub: "Hub", p: dict[str, Any] | None = None) -> dict[str, Any]:
             "last_seq": hub.bus.last_seq, "server_ts": iso()}
 
 
+SNAPSHOT_TTL_S = 1.0
+"""Tuổi tối đa của ảnh chụp dùng chung (plan-api-caching PR3; quyết định đã chốt: snapshot được phép cũ 1–3 s)."""
+
+
+class SnapshotCache:
+    """Cache `tui.snapshot` đầy đủ ở daemon: TUI (mỗi 1 s), web (mỗi trang + poll) và REPL điều phối dùng chung MỘT lần tính.
+
+    Trúng khi CẢ HAI: tuổi < `ttl` VÀ khoá không đổi. Khoá = (epoch, số dòng TRẠNG THÁI kết nối GHI đã đổi — `Store.write_changes`,
+    không tính dòng event —, số run đang chạy/chờ, mtime config). KHÔNG có `bus.last_seq`: stream event (message.delta, tool.*…) chỉ
+    đổi phần sống (token/chi phí run đang chạy, last_tool) → được cũ tối đa `ttl` (đã chốt: snapshot cũ 1–3 s), các client đang poll
+    dùng chung một lần tính. Daemon là writer duy nhất của hub.db nên mọi ghi trạng thái (approval, câu hỏi, task, run, agent, hub_state…)
+    đổi khoá → lần gọi sau tính lại ngay (duyệt/trả lời/dừng thấy liền); thứ ghi NGOÀI daemon (CLI `hub_freeze`…) chỉ cũ tối đa `ttl`.
+    Khoá đọc SAU khi tính (nếu chính lúc tính có ghi thì lần sau vẫn trúng). Trả bản sao sâu — người gọi sửa thoải mái, cache không đổi.
+    Hàm `snapshot()` vẫn không cache (test/đường gọi trực tiếp)."""
+
+    def __init__(self, hub: "Hub", *, ttl: float = SNAPSHOT_TTL_S, clock: Any = time.monotonic) -> None:
+        self.hub = hub
+        self.ttl = ttl
+        self._clock = clock
+        self._key: tuple[Any, ...] | None = None
+        self._at = 0.0
+        self._val: dict[str, Any] | None = None
+        self.hits = 0
+        self.misses = 0
+
+    def _key_now(self) -> tuple[Any, ...]:
+        h = self.hub
+        return (h.bus.epoch, h.store.write_changes, len(h.runs.active), len(h.runs.queue), getattr(h.config, "_mtime", None))
+
+    def invalidate(self) -> None:
+        self._val = None
+
+    def get(self) -> dict[str, Any]:
+        if self._val is not None and self._clock() - self._at < self.ttl and self._key_now() == self._key:
+            self.hits += 1
+            return copy.deepcopy(self._val)
+        self.misses += 1
+        val = snapshot(self.hub)
+        self._val, self._key, self._at = val, self._key_now(), self._clock()
+        return copy.deepcopy(val)
+
+
 def register_rpc(d: "Daemon") -> None:
     hub = d.hub
+    cache = d.snapshot_cache = SnapshotCache(hub)
 
     async def run_steer(p: dict[str, Any]) -> dict[str, Any]:
         return await steer(hub, str(_req(p, "id")), str(_req(p, "text")), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli"))
@@ -278,7 +410,7 @@ def register_rpc(d: "Daemon") -> None:
 
     d.methods.update(
         {
-            "tui.snapshot": lambda p: snapshot(hub, p),
+            "tui.snapshot": lambda p: cache.get(),  # không tham số (params bị bỏ qua như trước)
             "tui.agent_state": lambda p: agent_state(hub, p),
             "run.steer": run_steer,
             "template.list": lambda p: templates.list_templates(),

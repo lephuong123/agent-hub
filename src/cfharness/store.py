@@ -1018,6 +1018,18 @@ MIGRATIONS: list[str] = [
     DROP TABLE IF EXISTS mcp_servers;
     UPDATE agents SET mcp_servers='[]' WHERE mcp_servers IS NULL OR mcp_servers <> '[]';
     """,
+    # v36 — hiệu năng (plan-api-caching PR3; `scripts/explain_hot_queries.py` in EXPLAIN trước/sau). Chỉ THÊM index:
+    # - `tasks(current_run_id)`: dispatcher dọn task kẹt `WHERE current_run_id = ?` mỗi vòng — trước là SCAN tasks.
+    # - `runs(kind, queued_at)`: chi phí/đếm theo loại run trong ngày (curation, learning review, graph_extract) — trước đi `runs_queued`
+    #   rồi lọc kind trên từng dòng của cả khoảng thời gian.
+    # - `events(agent_id, epoch, seq)`: backfill của `events.subscribe` theo agent (`Hub.backfill` → `query_events(agent_id, epoch,
+    #   since_seq)`) — trước đi khoá chính (epoch, seq) và đọc event của MỌI agent sau mốc. Bảng ghi nhiều nhất: chỉ thêm đúng index này.
+    # `runs(ended_at)`, `runs(agent_id, ended_at)` đã có từ v32.
+    """
+    CREATE INDEX IF NOT EXISTS tasks_current_run ON tasks(current_run_id);
+    CREATE INDEX IF NOT EXISTS runs_kind_queued ON runs(kind, queued_at);
+    CREATE INDEX IF NOT EXISTS events_agent_epoch_seq ON events(agent_id, epoch, seq);
+    """,
 ]
 
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.
@@ -1092,6 +1104,7 @@ class Store:
         self._ro_conns: list[sqlite3.Connection] = []
         self._read_pool: ThreadPoolExecutor | None = None
         self._closed = False
+        self._event_changes = 0  # dòng do `insert_event` ghi (trừ khỏi `write_changes`)
         self.migrate()
 
     @property
@@ -1106,6 +1119,18 @@ class Store:
     def close(self) -> None:
         self.close_readers()
         self._wconn.close()
+
+    @property
+    def write_changes(self) -> int:
+        """Số dòng TRẠNG THÁI kết nối GHI đã INSERT/UPDATE/DELETE từ lúc mở (`sqlite3_total_changes`) TRỪ dòng do `insert_event` ghi —
+        bộ đếm rẻ để biết "trạng thái hub (runs/approvals/questions/tasks/agents/hub_state…) đã đổi chưa" (khoá cache `tui.snapshot`):
+        stream event (message.delta…) không làm nó tăng. Daemon là writer duy nhất nên mọi ghi của hub đều qua kết nối này."""
+        return int(self._wconn.total_changes) - getattr(self, "_event_changes", 0)
+
+    def count_agents(self, *, include_archived: bool = False) -> int:
+        """Số agent (`COUNT(*)`, không nạp dòng)."""
+        sql = "SELECT COUNT(*) FROM agents" + ("" if include_archived else " WHERE archived_at IS NULL")
+        return int(self.conn.execute(sql).fetchone()[0])
 
     # ------------------------------------------------------------------ đọc ngoài event loop
     @property
@@ -1241,6 +1266,13 @@ class Store:
 
     # ------------------------------------------------------------------ events
     def insert_event(self, ev: HubEvent) -> None:
+        before = self._wconn.total_changes
+        try:
+            self._insert_event(ev)
+        finally:  # dòng ghi của event (kể cả chỉ mục hội thoại) KHÔNG tính vào `write_changes`
+            self._event_changes = getattr(self, "_event_changes", 0) + (self._wconn.total_changes - before)
+
+    def _insert_event(self, ev: HubEvent) -> None:
         self.conn.execute(
             "INSERT INTO events (epoch, seq, ts, type, level, source, agent_id, team_id, task_id, run_id, "
             "session_id, subagent_id, payload, req_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",

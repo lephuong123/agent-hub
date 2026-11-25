@@ -189,3 +189,143 @@ async def test_side_actions_newest_and_filtered_by_workstream(wenv, monkeypatch)
     side = [a["summary"] for a in (await snap(wenv, f"?w={w['id']}"))["side_actions"]]
     assert "Việc của luồng Monitor" in side
     assert not any("Sảnh việc" in x for x in side) and "Việc của luồng khác" not in side
+
+
+# --------------------------------------------------------------------------- PR3 (plan-api-caching): index v36, N+1, cache snapshot
+def test_v36_indexes_and_plans(store):
+    names = {r[0] for r in store.conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    assert {"tasks_current_run", "runs_kind_queued", "events_agent_epoch_seq"} <= names
+    since = iso(datetime.now(timezone.utc))
+    assert "tasks_current_run" in _plan(store, "SELECT * FROM tasks WHERE current_run_id = ?", ("x",))
+    for kind in ("curator", "review", "graph_extract"):
+        assert "runs_kind_queued" in _plan(store, f"SELECT COALESCE(SUM(cost_usd),0) FROM runs WHERE kind='{kind}' AND queued_at>=?", (since,))
+    # đúng câu lệnh `Store.query_events` của backfill `events.subscribe` (Hub.backfill)
+    p = _plan(store, "SELECT * FROM events WHERE agent_id=? AND epoch=? AND seq>? ORDER BY ts, epoch, seq LIMIT ?", ("a", "e", 1, 10))
+    assert "events_agent_epoch_seq (agent_id=? AND epoch=? AND seq>?)" in p, p
+
+
+def test_v36_applies_on_existing_db(tmp_path):
+    path = tmp_path / "hub.db"
+    s = Store(path)
+    for name in ("tasks_current_run", "runs_kind_queued", "events_agent_epoch_seq"):
+        s.conn.execute(f"DROP INDEX {name}")
+    s.conn.execute(f"PRAGMA user_version={len(MIGRATIONS) - 1}")  # DB cũ: dừng ở v35
+    s.close()
+    s = Store(path)
+    try:
+        assert s.schema_version == len(MIGRATIONS)
+        names = {r[0] for r in s.conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        assert {"tasks_current_run", "runs_kind_queued", "events_agent_epoch_seq"} <= names
+    finally:
+        s.close()
+
+
+def test_today_usage_sql_matches_python(store):
+    from cfharness.tui import rpc as R
+
+    now = datetime.now(timezone.utc)
+    t = iso(now - timedelta(minutes=1))
+    old = iso(now - timedelta(days=3))
+    usages = [{"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 7, "x": 9},
+              {"input_tokens": 3}, None, {"output_tokens": None}, [1, 2]]
+    for i, u in enumerate(usages):
+        _run(store, f"ra{i}", "a", queued=t, ended=t, cost=0.1 * (i + 1), usage=u)
+    _run(store, "rb", "b", queued=t, ended=t, cost=0.25, usage={"input_tokens": 4})
+    _run(store, "rold", "a", queued=old, ended=old, cost=9.0, usage={"input_tokens": 999})
+    store.conn.execute("UPDATE runs SET usage='{hỏng' WHERE id='ra2'")  # JSON hỏng → 0 token (như `_tokens`)
+    since = R._today_start_utc()
+    exp_tok: dict[str, int] = {}
+    exp_cost: dict[str, float] = {}
+    for r in store.conn.execute("SELECT agent_id, usage, cost_usd FROM runs WHERE ended_at >= ?", (since,)):  # cách cũ
+        exp_tok[r["agent_id"]] = exp_tok.get(r["agent_id"], 0) + R._tokens(r["usage"])
+        exp_cost[r["agent_id"]] = exp_cost.get(r["agent_id"], 0.0) + float(r["cost_usd"] or 0.0)
+    hub = type("H", (), {"store": store})()
+    tok, cost = R._today_usage(hub, since)
+    assert tok == exp_tok == {"a": 1025, "b": 4}
+    assert cost.keys() == exp_cost.keys() and all(abs(cost[k] - exp_cost[k]) < 1e-9 for k in cost)
+    tok_a, cost_a = R._today_usage(hub, since, "a")
+    assert tok_a == {"a": 1025} and abs(cost_a["a"] - exp_cost["a"]) < 1e-9
+
+
+def test_batched_prefetch_matches_per_agent_queries(store):
+    from cfharness.tui import rpc as R
+
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    store.conn.execute("INSERT INTO tasks(id, title, status, created_at, updated_at) VALUES ('t1', 'Việc một', 'running', ?, ?)",
+                       (iso(t0), iso(t0)))
+    _run(store, "a_old", "a", queued=iso(t0), ended=iso(t0))
+    _run(store, "a_new", "a", queued=iso(t0 + timedelta(hours=1)), task_id="t1", diff={"kind": "git", "patch": "x" * 100})
+    _run(store, "b_1", "b", queued=iso(t0), ended=iso(t0))
+    _run(store, "b_2", "b", queued=iso(t0), ended=iso(t0))  # trùng queued_at: phải chọn giống `list_runs(limit=1)`
+    hub = type("H", (), {"store": store})()
+    agents = [{"id": "a", "current_run_id": "a_new"}, {"id": "b", "current_run_id": None}, {"id": "c", "current_run_id": None}]
+    runs, last, titles = R._prefetch(hub, agents, {}, {})
+    assert set(runs) == {"a_new"} and "diff" not in runs["a_new"] and runs["a_new"]["task_id"] == "t1"
+    assert last["b"]["id"] == store.list_runs(agent_id="b", limit=1)[0]["id"] and "c" not in last and "a" not in last
+    assert titles == {"t1": "Việc một"}
+
+
+async def test_snapshot_cache_shares_and_invalidates(denv):
+    from cfharness.tui.rpc import SnapshotCache, snapshot
+
+    hub = denv.hub
+    clock = [100.0]
+    c = SnapshotCache(hub, ttl=1.0, clock=lambda: clock[0])
+    s1 = c.get()
+    s2 = c.get()
+    assert (c.misses, c.hits) == (1, 1) and s1 == s2 and s1 is not s2
+    s2["agents"].clear()  # người gọi sửa bản của mình — cache không đổi
+    assert c.get()["agents"] and c.hits == 2
+    assert {r["id"] for r in s1["agents"]} == {r["id"] for r in snapshot(hub)["agents"]}  # đúng như bản không cache
+
+    t = iso(datetime.now(timezone.utc))
+    _run(hub.store, "r_c1", "w1", queued=t, ended=t, cost=0.5)  # ghi trạng thái thẳng vào DB (không event) → tính lại ngay
+    row = next(r for r in c.get()["agents"] if r["id"] == "w1")
+    assert c.misses == 2 and row["cost_today_usd"] == 0.5 and row["last_run_id"] == "r_c1"
+
+    c.get()
+    assert c.misses == 2
+    clock[0] += 1.5  # quá TTL → tính lại dù khoá không đổi
+    c.get()
+    assert c.misses == 3
+
+
+async def test_snapshot_cache_shared_while_streaming_but_fresh_on_approval(denv):
+    """(a) đang stream message.delta (event được lưu, last_seq tăng): các lần gọi trong TTL dùng cache; (b) approval mới → tính lại NGAY."""
+    from cfharness.tui.rpc import SnapshotCache
+
+    hub = denv.hub
+    clock = [100.0]
+    c = SnapshotCache(hub, ttl=1.0, clock=lambda: clock[0])
+    t = iso(datetime.now(timezone.utc))
+    _run(hub.store, "r_s", "w1", queued=t, status="running", started_at=t)
+    s0 = c.get()
+    assert c.misses == 1
+    for i in range(20):  # stream: mỗi lần gọi xen giữa các event, vẫn trong TTL
+        hub.publish(make_event("message.delta", "w1", {"text": f"chữ {i} "}, run_id="r_s"))  # không lưu DB
+        hub.publish(make_event("tool.start", "w1", {"name": "Read"}, run_id="r_s"))  # CÓ lưu DB (insert_event không tính)
+        clock[0] += 0.04
+        assert c.get()["last_seq"] == s0["last_seq"]
+    assert c.misses == 1 and c.hits == 20
+    assert hub.bus.last_seq > s0["last_seq"] and len(hub.store.query_events(run_id="r_s", types=["tool.start"])) == 20
+
+    ap = hub.approvals.open(hub.store.get_run("r_s"), tool_name="Bash", tool_input={"command": "rm -rf build"}, tool_use_id="tu1",
+                            fingerprint="fp1", verdict={"klass": "fs_delete", "rule": "rm_recursive", "verdict": "destructive", "reason": "xoá"},
+                            channel="hook")
+    s1 = c.get()  # vẫn trong TTL nhưng trạng thái đổi
+    assert c.misses == 2 and ap["id"] in [a["id"] for a in s1["approvals"]]
+    assert next(r for r in s1["agents"] if r["id"] == "w1")["pending_approvals"] == [ap["id"]]
+    assert s1["last_seq"] == hub.bus.last_seq
+    hub.approvals.resolve(ap["id"], "allow", by="user", channel="cli")  # duyệt → cũng thấy ngay
+    assert c.get()["approvals"] == [] and c.misses == 3
+
+
+async def test_snapshot_rpc_uses_cache_and_hub_status_counts(denv):
+    before = denv.d.snapshot_cache.misses
+    a = await mgr_rpc(denv, "tui.snapshot")
+    b = await mgr_rpc(denv, "tui.snapshot")
+    assert a["agents"] == b["agents"] and denv.d.snapshot_cache.misses - before <= 1 and denv.d.snapshot_cache.hits >= 1
+    assert a["hub"]["agents"] == 2 == denv.hub.status()["agents"] == denv.hub.store.count_agents()
+    denv.hub.agents.create({"id": "w2", "name": "w2", "model": "haiku"})
+    c = await mgr_rpc(denv, "tui.snapshot")
+    assert {r["id"] for r in c["agents"]} == {"boss", "w1", "w2"} and c["hub"]["agents"] == 3

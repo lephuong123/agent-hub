@@ -44,7 +44,11 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 ### Sửa lỗi
 - `cfharness update` (và nút "Cập nhật hệ thống" trên web) không còn báo `TimeoutError` khi hub lớn: bản sao lưu trước khi cập nhật mất hơn 60 s nên lệnh hết thời gian chờ dù việc cập nhật vẫn chạy tiếp — nay chờ tới 30 phút.
 
+### Hiệu năng
+- **Bảng agent (TUI, web, điều phối viên) nhẹ hơn cho daemon**: `tui.snapshot` không còn truy vấn riêng cho từng agent và cộng token hôm nay ngay trong SQLite (~60 → ~22 ms với 40 agent, 20.000 run); các màn gọi gần nhau dùng chung một ảnh chụp, kể cả lúc agent đang chạy (cũ tối đa 1 s; duyệt, trả lời, dừng, run mới thì tính lại ngay). Thêm index cho dọn task kẹt của dispatcher, chi phí theo loại run trong ngày và backfill event theo agent.
+
 ### Lưu ý khi cập nhật
+- Migration DB v36 chỉ thêm index (`tasks(current_run_id)`, `runs(kind, queued_at)`, `events(agent_id, epoch, seq)`); lần mở đầu tiên trên hub.db lớn có thể mất vài giây để dựng index `events`.
 - **Mọi agent giờ thấy MỌI server MCP và connector** trong cấu hình Claude của tài khoản đang dùng (kể cả agent trước đây không được gán server nào), và **không còn bước duyệt nào cho tool MCP**. Server nào không muốn agent dùng: gỡ khỏi Claude (`claude mcp remove <tên>`) hoặc chặn tool bằng `tool_policy.disallowed_tools` của agent (vd `mcp__<server>__*`).
 - Đã gỡ: `cfharness mcp claude add|rm|login|logout|status`, `cfharness mcp add|edit|show|rm|restore|assign|unassign|agent-config|claude-servers`, `mcp annotate` cho server khác Claude in Chrome, cờ `agent create|edit --mcp` (còn nhận nhưng bỏ qua), khoá `manager.capabilities.mcp` (bỏ qua), RPC `mcp.add|update|remove|restore|show|assign|agent_config|claude_*`. Dùng `claude mcp …` thay thế; `cfharness mcp list` để xem.
 - Migration DB v35 xoá bảng registry `mcp_servers` (tin cậy, include/exclude, annotations) và gỡ server gán theo agent. Cấu hình agent / gói chuyển hub / YAML cũ có `mcp_servers` vẫn nạp bình thường (trường bị bỏ qua). Khoá `mcp.audit_ignore_servers` không còn dùng (config.yaml cũ vẫn đọc).
