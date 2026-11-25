@@ -1037,7 +1037,11 @@ class ManagerService:
         if self.pending:
             self._first_pending = time.monotonic() - float(self.cfg("event_debounce_s", 45)) - 1.0
 
+    _COLLECT_TYPES = frozenset({"task.status", "task.circuit_open", "run.failed", "run.completed", "learning.digest"})
+
     def _collect(self, ev: HubEvent) -> None:
+        if ev.type not in self._COLLECT_TYPES:  # plan-api-caching PR1: delta/progress không chạm DB (state_get) ở mỗi event
+            return
         aid = self.agent_id()
         if not aid or ev.agent_id == aid:
             return

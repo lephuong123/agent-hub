@@ -10,6 +10,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Hiệu năng
+- **Daemon xử lý luồng chữ của agent nhẹ hơn ~50 lần**: đọc cấu hình không còn gộp lại toàn bộ giá trị mặc định ở mỗi lần đọc (trước ~1,6 ms/lần, bị gọi nhiều lần cho mỗi mẩu chữ agent trả về); notifier/OTel/điều phối viên bỏ qua sớm các event không liên quan. Mỗi `message.delta` từ ~6,8 ms CPU xuống ~0,13 ms (`scripts/bench_publish.py`) — nhiều run song song không còn làm chậm web/Slack. Sửa tay `config.yaml` vẫn có hiệu lực ngay (đường nóng trễ tối đa 0,1 s).
+
 ---
 
 ## v0.2.34 — 2026-11-25

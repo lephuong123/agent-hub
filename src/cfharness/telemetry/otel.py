@@ -87,7 +87,13 @@ class OtelExporter:
 
     @property
     def enabled(self) -> bool:
-        return bool(self.cfg().get("enabled"))
+        # hỏi ở MỌI event → nhớ theo revision của config (plan-api-caching PR1)
+        rev = self.hub.config.revision
+        memo = getattr(self, "_enabled_memo", None)
+        if memo is None or memo[0] != rev:
+            memo = (rev, bool(self.cfg().get("enabled")))
+            self._enabled_memo = memo
+        return memo[1]
 
     # ------------------------------------------------------------------ listener (không chặn)
     def on_event(self, ev: HubEvent) -> None:
