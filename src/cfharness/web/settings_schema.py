@@ -177,7 +177,25 @@ FILES_GROUP = ("files", "Xem / mở file", (
     _s("files.secret_patterns", "Tên file coi là bí mật (không xem/mở/tải qua web)", "list", "mỗi dòng một tên hoặc mẫu glob, vd .env, *.pem"),
     _s("files.secret_allow", "Ngoại lệ (không coi là bí mật)", "list", "vd .env.example, *.pub"),
 ))
-GROUPS = GROUPS + (FILES_GROUP,)
+# Connector claude.ai (Google Drive, Gmail…) — hiện ở Cài đặt › Tài khoản Claude, ngay dưới khối connector (không lặp ở Hành vi hub).
+# BẬT (nới) chỉ nhận khi dùng web trên chính máy chạy hub (kiểm ở action `config_set` của app.py) — qua link public chỉ được tắt.
+CONNECTORS_GROUP = ("connectors", "Connector claude.ai cho agent", (
+    _s("connectors.auto", "Agent tự dùng mọi connector đã Connect", "bool",
+       "agent chưa chọn connector riêng dùng mọi connector claude.ai của tài khoản đang dùng (cần phiên claude.ai)"),
+    _s("runtime.claude.connectors_auth", "Cách run có connector đăng nhập", "choice",
+       "auto = phiên claude.ai khi có, không thì token; login = luôn phiên claude.ai; token = không bao giờ (tắt mọi connector)",
+       choices=("auto", "login", "token")),
+))
+GROUPS = GROUPS + (FILES_GROUP, CONNECTORS_GROUP)
+
+
+def connectors_loosens(key: str, old: Any, new: Any) -> bool:
+    """Đổi khoá connector có BẬT thêm connector không (web qua link public chỉ được tắt)."""
+    if key == "connectors.auto":
+        return bool(new) and not bool(old)
+    if key == "runtime.claude.connectors_auth":
+        return str(old or "auto") == "token" and str(new or "auto") != "token"
+    return False
 
 # Khoá nới lỏng bảo vệ: web chỉ hiện giá trị + lệnh CLI.
 READONLY: tuple[tuple[str, str], ...] = (

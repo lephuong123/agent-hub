@@ -98,7 +98,8 @@ Các bước bật Google Drive cho hub dùng token chung (vd `cchcadmin`, admin
 
 ## Tự động: mọi connector tài khoản đã Connect (`connectors.auto`, `--connectors all`) (2026-11-20)
 
-- `connectors.auto` — BẬT MẶC ĐỊNH từ v0.2.26 (chủ repo chốt 2026-11-20, web không có công tắc; tắt: `cfharness config set
+- `connectors.auto` — BẬT MẶC ĐỊNH từ v0.2.26 (chủ repo chốt 2026-11-20; từ v0.2.38 có công tắc ở web Cài đặt › Tài khoản Claude, nhóm `cfg-connectors` cùng
+  `runtime.claude.connectors_auth` — BẬT chỉ nhận trên chính máy chạy hub, qua link public chỉ được tắt; CLI: `cfharness config set
   connectors.auto false`, chỉ người, nhánh `connectors` ∈ `integrity.SECURITY_KEYS`). Bộ test chung tắt bằng env
   `CFHARNESS_CONNECTORS_AUTO=off` (conftest — claude giả không hiểu `auth status`). Run LÀM VIỆC của agent
   CHƯA đặt `tool_policy.connectors` tự bật connector `*` = mọi server `claude.ai *` CLI nạp — tức mọi connector tài khoản `/login`

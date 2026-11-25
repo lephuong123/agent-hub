@@ -57,8 +57,9 @@
     {{ m.act("claudeai_login_cancel", "Bỏ qua", {"login_id": claudeai.login.login_id}, "btn sm ghost", next="/settings/accounts") }}
   </div>
   {% endif %}
-  {% if claudeai.connectors_auth == 'token' or not claudeai.connectors_auto %}<p class="banner warn small">{{ m.icon('alert') }} Agent không tự dùng connector: đã tắt bằng cấu hình (<code>connectors.auto</code> / <code>runtime.claude.connectors_auth</code>).</p>{% endif %}
+  {% if claudeai.connectors_auth == 'token' or not claudeai.connectors_auto %}<p class="banner warn small">{{ m.icon('alert') }} Agent không tự dùng connector: đã tắt bằng cấu hình (<code>connectors.auto</code> / <code>runtime.claude.connectors_auth</code>) — bật lại ở <a href="#cfg-connectors">Connector claude.ai cho agent</a> bên dưới.</p>{% endif %}
   {% endif %}
+  {% if conn_group %}{% import "settings/_cfg.html" as C with context %}{{ C.group(conn_group, "/settings/accounts", open=claudeai and (claudeai.connectors_auth == 'token' or not claudeai.connectors_auto)) }}{% endif %}
 
   <h3 class="small" id="acct-add">Thêm tài khoản</h3>
   {% if acct_login %}

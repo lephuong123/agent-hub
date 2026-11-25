@@ -1463,12 +1463,14 @@ async def _tab_safety(request: Request) -> dict[str, Any]:
 
 async def _tab_accounts(request: Request) -> dict[str, Any]:
     status = await rpc(request, "hub.status")
-    return {"status": status, **await _account_pages.accounts_ctx(request, status)}  # khối "Tài khoản Claude" (web/account_pages.py)
+    groups = _settings.view(await rpc(request, "config.get") or {})["groups"]
+    return {"status": status, **await _account_pages.accounts_ctx(request, status),  # khối "Tài khoản Claude" (web/account_pages.py)
+            "conn_group": next((g for g in groups if g["id"] == "connectors"), None)}  # công tắc connector dưới khối connector
 
 
 async def _tab_config(request: Request) -> dict[str, Any]:
     cfg = _settings.view(await rpc(request, "config.get") or {})  # danh mục khoá + kiểu ô (web/settings_schema.py)
-    return {"groups": [g for g in cfg["groups"] if g["id"] != "notify"]}
+    return {"groups": [g for g in cfg["groups"] if g["id"] not in ("notify", "connectors")]}
 
 
 async def _tab_notifications(request: Request) -> dict[str, Any]:
@@ -1612,6 +1614,17 @@ async def _config_set(request: Request, p: dict[str, Any]) -> Any:
     """`config.set` từ trang Cài đặt. `files.*` NỚI LỎNG (thêm đuôi được mở, bớt mẫu bí mật, bật tải qua cloud, tăng trần) chỉ nhận
     khi web dùng trên CHÍNH máy chạy hub — phiên qua link public chỉ được siết (docs/dev-notes/file-open.md)."""
     key = str(p.get("key") or "")
+    if key in ("connectors.auto", "runtime.claude.connectors_auth"):
+        from .file_pages import is_local_request
+
+        if not is_local_request(request):
+            try:
+                old = await rpc(request, "config.get", {"key": key})
+            except RpcError:
+                old = None
+            if _settings.connectors_loosens(key, old, p.get("value")):
+                raise RpcError(-32003, "Bật connector chỉ đổi được khi dùng web trên chính máy chạy hub "
+                                       "(hoặc `cfharness config set` trong terminal). Qua link public chỉ được tắt.")
     if key.startswith("files."):
         from ..config import get_path
         from ..fileview import loosens
