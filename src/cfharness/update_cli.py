@@ -13,6 +13,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .updater import START_TIMEOUT_S
+
 PHASES = {"starting": "chuẩn bị", "waiting_daemon": "chờ daemon dừng", "installing": "đang tải + cài bản mới",
           "restarting": "khởi động lại daemon", "health": "chờ daemon trả lời", "rolling_back": "quay về bản trước (cài lại + hub.db nếu cần)",
           "rollback_restarting": "khởi động lại daemon bản trước", "verifying": "kiểm tra phiên bản", "finished": "xong"}
@@ -186,7 +188,7 @@ def cmd_rollback(ctx: Any) -> int:
             return 0
     try:
         ctx.client(autostart=False)
-        r = ctx.call("update.rollback", {"force": a.force})
+        r = ctx.call("update.rollback", {"force": a.force}, timeout=START_TIMEOUT_S)
     except DaemonUnavailable:
         import os
 
@@ -227,6 +229,7 @@ def cmd_update(ctx: Any) -> int:
         if ans not in ("y", "yes", "c", "co", "có"):
             print("đã huỷ")
             return 0
-    r = ctx.call("update.start", {"tag": a.tag, "force": a.force})
+    # update.start tạo bản sao lưu pre-update TRƯỚC khi trả lời (hub lớn: vài phút) — chờ lâu hơn timeout RPC mặc định (60 s)
+    r = ctx.call("update.start", {"tag": a.tag, "force": a.force}, timeout=START_TIMEOUT_S)
     print(f"bắt đầu cập nhật → {r.get('tag')} (log: {r.get('log')})", flush=True)
     return _follow(ctx)

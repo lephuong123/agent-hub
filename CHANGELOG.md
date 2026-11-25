@@ -10,10 +10,16 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
-### Hiệu năng
+---
+
+## v0.2.33 — 2026-11-25
+
+### Hiệu năng (#222, #223)
 - **Web hỏi daemon ít hơn khi để mở trang**: trang *Hoạt động* tải lại bảng khi có thay đổi thật (theo luồng sự kiện, gom loạt 1 giây) thay vì hỏi mỗi 3 giây — để yên thì gần như không gọi; thanh trên cùng của trang lượt chạy cập nhật theo luồng trực tiếp, chỉ hỏi lại mỗi 15 giây để dự phòng (trước 2 giây). Trang lượt chạy mở nhanh hơn: không lấy lại lượt chạy hai lần, các lời gọi độc lập chạy đồng thời, chỉ lấy trạng thái của đúng agent đó thay vì ảnh chụp cả hub. Mỗi lời gọi tới daemon không còn đọc lại file token (~0,3–0,5 ms/lần trên Windows) và mỗi trang không còn kiểm ngày sửa của từng icon.
 
-### Luồng việc ngay trong trò chuyện
+- **Hub không còn khựng vì lệnh kiểm tra chạy nền**: trang Hệ thống (danh sách job Task Scheduler/launchd), kiểm phiên bản `claude`, kiểm đăng nhập `claude auth status` và kiểm git của guard không còn chặn daemon — các trang và lượt chạy khác vẫn phản hồi trong lúc chờ. Nhiều lượt chạy/trang mở cùng lúc dùng chung một lần kiểm (trước: mỗi lượt một tiến trình); danh sách job giữ 20 giây (trước 2 giây) và làm mới ngay sau khi tạm dừng/bật lại/khởi động lại job; nâng cấp `claude` được nhận ra từ lượt chạy kế tiếp, không chờ hết 10 phút cache.
+
+### Luồng việc ngay trong trò chuyện (#213–#220)
 - **Theo dõi và duyệt việc của cả đội mà không rời khung chat**: khay **"N việc cần bạn"** ghim ngay trên ô nhập (cả ở hội thoại mới) liệt kê thao tác phá huỷ chờ duyệt và câu hỏi chờ bạn của mọi agent — cho phép/từ chối/trả lời tại chỗ với cùng bước xác nhận như trang Duyệt (thao tác nặng vẫn sang trang Duyệt). Khi điều phối viên giao task/chạy việc, dưới khối "Đã làm N việc" có **thẻ việc tự cập nhật**: agent, trạng thái, bước đang làm, kết quả khi xong, nút **Xem** (diễn biến trong panel trượt bên phải), **Nhắn thêm**, **Dừng**. Panel phải đổi thành **"Đội đang làm gì"** (việc cần bạn, agent đang làm, chi phí hôm nay); "Kiểm tra ngay"/"Huỷ chỉ định" gọn vào mục "Điều phối viên". Hội thoại mới cho biết bao nhiêu agent đang có việc/việc cần bạn và lại hiện các gợi ý câu hỏi; gợi ý phím tắt chỉ hiện khi đang gõ. **Tìm kiếm** nhóm kết quả theo hội thoại và mở đúng hội thoại (tô sáng tin tìm được); kết quả của lượt chạy thường vẫn mở lượt chạy. Bộ lọc **Lượt chạy → Chờ duyệt** giờ gồm cả lượt đang chạy có thao tác chờ duyệt.
 - **Dữ liệu nhiều / tên dài**: bộ lọc agent ở Lượt chạy và Tìm kiếm không còn làm trang tràn ngang trên điện thoại khi có agent tên dài; công việc chờ team chưa có trưởng nhóm ghi "team chưa có trưởng nhóm" thay vì mã `no_lead`; lượt tự học rà soát hội thoại có tiêu đề tiếng Việt thay vì prompt tiếng Anh.
 - **Nhiều việc cùng lúc**: tab luồng và tên agent dài trong "Đội đang làm gì" cắt gọn bằng dấu "…" thay vì cắt giữa chữ hoặc đẩy nhãn trạng thái xuống dòng; trang Cần bạn tự thu gọn thẻ khi có từ 4 việc trở lên. Thanh bên hội thoại không còn chờ kiểm tra bản cập nhật (có lúc 8 giây khi daemon vừa khởi động) — việc kiểm tra chạy nền. Demo web có thêm `--heavy` để thử giao diện với dữ liệu lớn.
@@ -21,20 +27,22 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - **Khung chat nhiều chỗ cho nội dung hơn** (màn 1440×900: vùng đọc 632 → 697px cao, cột chữ 764 → 876px rộng): đầu trang và hàng tab luồng thấp hơn, khay "Cần bạn" một dòng, các tin sát nhau hơn (nút chép/sửa/giờ hiện khi rê chuột, không chiếm dòng riêng), dòng nhắc "có thể nhầm" chỉ hiện ở hội thoại mới. Panel phải "Đội đang làm gì" mặc định đóng khi màn hẹp hơn 1700px — mở lại bằng nút ở đầu trang, hub nhớ lựa chọn.
 - **Chữ không chân cho câu trả lời**: câu trả lời của điều phối viên, diễn biến lượt chạy và câu hỏi của agent dùng chữ không chân 14.5px (trước: chữ có chân 16–16.5px). Popup *+ Luồng* / *Đã đóng* / *⚙ Luồng này* ở hàng tab luồng không còn bị khuất ngoài mép phải màn hình.
 - **Khung chat gọn kiểu Gemini**: chữ câu trả lời 14px, nhịp dòng và khoảng cách đoạn/danh sách chặt hơn, tin của bạn và ô nhập 13.5px, khối code thấp hơn (đầu khối mỏng, chữ code 12px) — một câu trả lời chiếm ít chiều cao hơn ~25%. Cỡ chữ chỉnh một chỗ qua biến `--chat-fs` / `--chat-lh`.
-- **Hub không còn khựng vì lệnh kiểm tra chạy nền**: trang Hệ thống (danh sách job Task Scheduler/launchd), kiểm phiên bản `claude`, kiểm đăng nhập `claude auth status` và kiểm git của guard không còn chặn daemon — các trang và lượt chạy khác vẫn phản hồi trong lúc chờ. Nhiều lượt chạy/trang mở cùng lúc dùng chung một lần kiểm (trước: mỗi lượt một tiến trình); danh sách job giữ 20 giây (trước 2 giây) và làm mới ngay sau khi tạm dừng/bật lại/khởi động lại job; nâng cấp `claude` được nhận ra từ lượt chạy kế tiếp, không chờ hết 10 phút cache.
 
-### Gọi ra dịch vụ ngoài nhẹ hơn
+### Gọi ra dịch vụ ngoài nhẹ hơn (#224)
 - **Trang Tài khoản Claude mở nhanh hơn**: không còn chạy `claude auth status` (1–3 s) mỗi lần tải trang — hub dùng kết quả kiểm gần nhất, quá 10 phút thì tự kiểm lại ở nền. Bấm «Kiểm tra», đăng nhập, đăng xuất hoặc xoá tài khoản vẫn cập nhật ngay.
 - **Slack và Telegram giữ kết nối** giữa các lần gọi API thay vì bắt tay TLS lại mỗi tin (gửi tin, long polling, tải tệp); đổi token thì tự tạo kết nối mới.
 - Slack: tên người trong ngữ cảnh thread và lúc ghép nối dùng chung bộ nhớ tên (nhớ 24 giờ, tối đa 500 người), tra tên nhiều người cùng lúc — tag bot trong thread đông người phản hồi nhanh hơn.
 - Thông báo bị Slack/Telegram giới hạn tốc độ (429) chờ đúng thời gian dịch vụ yêu cầu (tối đa 5 phút) trước khi gửi lại, thay vì thử lại quá sớm.
 - Kiểm tra bản cập nhật nhớ kết quả qua lần khởi động lại daemon (`HUB_HOME/update/latest.json`), hỏi GitHub kèm ETag (không tốn hạn mức khi không có gì mới) và gộp các lượt kiểm cùng lúc thành một.
 
-### MCP: mọi agent dùng chung MCP của tài khoản Claude
+### MCP: mọi agent dùng chung MCP của tài khoản Claude (#221)
 - **Mọi agent tự có mọi server MCP và connector claude.ai của tài khoản Claude đang dùng** — không còn gán MCP cho từng agent. Bạn quản lý MCP hoàn toàn bằng Claude: `claude mcp add …`, `claude mcp login <tên>`, `claude mcp remove <tên>` (tài khoản thêm trong cfharness, không phải "Đăng nhập của máy": chạy với `CLAUDE_CONFIG_DIR=<HUB_HOME>/claude-config/<id>`), connector bật trên claude.ai. Hub chỉ còn **liệt kê** server của từng tài khoản: `cfharness mcp list` (`--json`), đọc thẳng `.claude.json` nên mở ngay (không chạy `claude mcp list` ~50 s); lệnh stdio hiện kèm đối số đã che giá trị bí mật, không bao giờ hiện header/env.
 - **Agent gọi tool MCP không còn bị hỏi duyệt hay chặn**: hub bỏ toàn bộ lớp chính sách MCP (tin cậy/không tin cậy, chọn tool include/exclude, "luôn hỏi duyệt", ghi đè annotations, khung `read_only_trusted` của điều phối viên, audit `tool.write`). Guard vẫn chặn agent tự duyệt/điều khiển hub qua MCP; server trong cấu hình Claude trỏ về chính hub (`cfharness mcp serve`) bị gỡ khỏi run. Chế độ Chrome / allowlist domain vẫn gỡ Playwright (nhận theo lệnh trong cấu hình Claude).
 - Guard không còn bắt buộc bật vì MCP (trước đây agent có MCP mà tắt guard thì run hỏng): không còn gì để lọc. Khi `guard.enabled=false`, run tự cho phép sẵn `mcp__<server>` của mọi server trong cấu hình Claude (không có kênh hỏi quyền thì claude `-p` sẽ từ chối tool MCP); connector claude.ai vẫn cần guard bật mới gọi được (tên không biết trước).
 - Web: trang MCP thành danh sách chỉ đọc theo tài khoản Claude (thêm server bằng `claude mcp add`); bỏ gán MCP trong form agent, mục MCP ở Tài khoản Claude và trang chính sách `/mcp/<tên>` (URL cũ chuyển về `/mcp`).
+
+### Sửa lỗi
+- `cfharness update` (và nút "Cập nhật hệ thống" trên web) không còn báo `TimeoutError` khi hub lớn: bản sao lưu trước khi cập nhật mất hơn 60 s nên lệnh hết thời gian chờ dù việc cập nhật vẫn chạy tiếp — nay chờ tới 30 phút.
 
 ### Lưu ý khi cập nhật
 - **Mọi agent giờ thấy MỌI server MCP và connector** trong cấu hình Claude của tài khoản đang dùng (kể cả agent trước đây không được gán server nào), và **không còn bước duyệt nào cho tool MCP**. Server nào không muốn agent dùng: gỡ khỏi Claude (`claude mcp remove <tên>`) hoặc chặn tool bằng `tool_policy.disallowed_tools` của agent (vd `mcp__<server>__*`).
