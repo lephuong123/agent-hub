@@ -80,6 +80,8 @@ class OtelExporter:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self.sent_batches: list[dict[str, Any]] = []  # exporter "memory" (test)
+        # ngắt mạch: (url lỗi, monotonic tới khi thử lại). Collector chết → không mở kết nối/chờ timeout cho mỗi lô.
+        self._circuit: tuple[str, float] | None = None
         hub.bus.add_listener(self.on_event)
 
     def cfg(self) -> dict[str, Any]:
@@ -263,17 +265,32 @@ class OtelExporter:
                 url = str(c.get("endpoint") or "http://127.0.0.1:4318").rstrip("/")
                 if not url.endswith("/v1/traces"):
                     url += "/v1/traces"
+                if self._circuit_open(url):  # endpoint vừa lỗi → bỏ lô ngay, không thử kết nối (đổi endpoint thì thử lại luôn)
+                    self.stats["dropped"] += len(spans)
+                    self.stats["circuit_skipped"] = int(self.stats.get("circuit_skipped") or 0) + len(spans)
+                    return
                 headers = {"Content-Type": "application/json"}
                 for k, v in (c.get("headers") or {}).items():
                     headers[str(k)] = self._resolve(str(v))
                 req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=float(c.get("timeout_s") or 5)) as r:
-                    r.read()
+                try:
+                    with urllib.request.urlopen(req, timeout=float(c.get("timeout_s") or 5)) as r:
+                        r.read()
+                except Exception:
+                    cool = float(c.get("circuit_s") if c.get("circuit_s") is not None else 60.0)
+                    if cool > 0:
+                        self._circuit = (url, time.monotonic() + cool)
+                    raise
+                self._circuit = None
             self.stats["exported"] += len(spans)
         except Exception as e:  # best-effort: lỗi xuất OTel đếm trong stats (last_error); không log từng lần để tránh ồn
             self.stats["errors"] += 1
             self.stats["dropped"] += len(spans)
             self.stats["last_error"] = repr(e)[:200]
+
+    def _circuit_open(self, url: str) -> bool:
+        cb = self._circuit
+        return cb is not None and cb[0] == url and time.monotonic() < cb[1]
 
     def _resolve(self, v: str) -> str:
         if "${" not in v:
@@ -294,7 +311,8 @@ class OtelExporter:
     def status(self) -> dict[str, Any]:
         c = self.cfg()
         return {"enabled": bool(c.get("enabled")), "exporter": c.get("exporter"), "endpoint": c.get("endpoint") if c.get("exporter", "otlp_http") == "otlp_http" else c.get("file"),
-                "include_payloads": bool(c.get("include_payloads")), "queued": self.q.qsize(), **self.stats}
+                "include_payloads": bool(c.get("include_payloads")), "queued": self.q.qsize(),
+                "circuit_open_s": round(max(0.0, self._circuit[1] - time.monotonic()), 1) if self._circuit else 0.0, **self.stats}
 
 
 def _int(v: Any) -> int | None:

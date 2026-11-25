@@ -585,6 +585,7 @@ DEFAULTS: dict[str, Any] = {
             "batch_size": 64,
             "flush_s": 2.0,
             "timeout_s": 5.0,
+            "circuit_s": 60.0,  # endpoint lỗi → bỏ qua gửi trong N giây (span bị bỏ, đếm dropped) rồi mới thử lại; 0 = tắt
         },
     },
     # Lịch chạy tự động (schedules/, docs/dev-notes/schedules.md). Nhánh được kiểm toàn vẹn (trần của điều phối viên).
