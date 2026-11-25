@@ -1,6 +1,6 @@
 """Hub demo cho giao diện web (chụp ảnh màn, thử tay) — daemon THẬT trên socket + FakeRuntime (không gọi `claude`, không tốn tiền).
 
-    uv run python -m cfharness.web.demo --home /tmp/ahub-demo --port 8799
+    uv run python -m cfharness.web.demo --home /tmp/ahub-demo --port 8799 [--heavy] [--delay 0.005]
 
 Dựng sẵn: agent từ template + MCP giả, team + task (DAG), vài run đã xong, một run đang chạy (giữ), một thao tác phá huỷ
 đang chờ người duyệt (waiting_human). Gửi cho điều phối viên một tin có `[demo]` → câu trả lời chạy chữ ~100 token/s, tool, thẻ hành
@@ -226,6 +226,10 @@ async def main_async(a: argparse.Namespace) -> None:
     info["manager"] = await seed_manager(d)
     info["questions"] = seed_questions(d.hub, info)
     info["memory"] = seed_memory(d.hub)
+    if a.heavy:  # nhiều dữ liệu: thử UI với danh sách dài, tên dài
+        from .demo_heavy import seed_heavy
+
+        await seed_heavy(d)
     auth = WebAuth()
     app = create_app(paths, auth=auth, port=a.port)
     write_state(paths, host="127.0.0.1", port=a.port, key=auth.key)  # name mặc định cfharness.localhost
@@ -246,6 +250,7 @@ def main() -> None:
     p.add_argument("--home", required=True)
     p.add_argument("--port", type=int, default=8799)
     p.add_argument("--delay", type=float, default=0.05)
+    p.add_argument("--heavy", action="store_true", help="nạp thêm nhiều agent/luồng/hội thoại/task/run để thử UI với dữ liệu lớn")
     asyncio.run(main_async(p.parse_args()))
 
 

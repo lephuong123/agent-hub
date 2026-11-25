@@ -502,21 +502,28 @@ async def side_data(request: Request) -> dict[str, Any]:
 
 
 async def update_flag(request: Request) -> bool:
-    """Có bản phát hành mới? (`update.check` không ép làm mới — daemon cache) — cache UPDATE_TTL_S trên WebState; `render` đọc giá trị
-    đã cache (`cached_update_flag`) nên không trang nào chờ mạng."""
+    """Có bản phát hành mới? Trả NGAY giá trị đã cache (mặc định False) — `update.check` có thể gọi mạng nhiều giây khi daemon chưa có
+    cache, nên khi hết hạn chỉ khởi một lượt làm mới chạy nền (tối đa một lượt cùng lúc); chấm hiện ở lần nạp thanh bên sau."""
+    import asyncio
     import time
 
     st = ws(request)
     hit = getattr(st, "_upd_flag", None)
     if hit and time.monotonic() - hit[0] < UPDATE_TTL_S:
         return bool(hit[1])
-    try:
-        chk = await rpc(request, "update.check") or {}
-        flag = bool(chk.get("update_available"))
-    except (RpcError, DaemonUnavailable, OSError):
-        flag = False
-    st._upd_flag = (time.monotonic(), flag)  # type: ignore[attr-defined]
-    return flag
+    task = getattr(st, "_upd_task", None)
+    if task is None or task.done():
+
+        async def refresh() -> None:
+            try:
+                chk = await rpc(request, "update.check") or {}
+                flag = bool(chk.get("update_available"))
+            except (RpcError, DaemonUnavailable, OSError):
+                flag = False
+            st._upd_flag = (time.monotonic(), flag)  # type: ignore[attr-defined]
+
+        st._upd_task = asyncio.create_task(refresh())  # type: ignore[attr-defined]
+    return bool(hit[1]) if hit else False
 
 
 async def partial_side(request: Request) -> Response:

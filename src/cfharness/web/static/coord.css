@@ -137,3 +137,9 @@
   .ctray-list { max-height: 46vh; }
   .ctray-wm { display: none; }
 }
+
+/* Tên dài: tab luồng cắt bằng dấu "…"; tên agent dài trong "Đội đang làm gì" không đẩy nhãn trạng thái xuống dòng */
+.ws-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-n { flex-wrap: nowrap; }
+.team-n > a { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-n > .pill { flex: none; }

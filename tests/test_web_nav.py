@@ -118,3 +118,31 @@ async def test_side_partial_lists_conversations(env):  # noqa: F811
     assert r.status_code == 200
     assert "Hội thoại" in r.text and "Gần đây" in r.text
     assert 'id="upd-dot"' in r.text and 'hx-swap-oob="true"' in r.text
+
+
+async def test_update_flag_never_waits_for_network(monkeypatch):
+    """Thanh bên (nạp lười trên MỌI trang) không được chờ `update.check` (có thể gọi mạng nhiều giây khi daemon chưa cache):
+    lần đầu trả False ngay, kiểm tra chạy nền; lần sau đọc giá trị đã cache."""
+    import asyncio
+    import time
+    from types import SimpleNamespace
+
+    from cfharness.web import manager as M
+
+    st = SimpleNamespace()
+    calls = []
+
+    async def slow_rpc(request, method, params=None, **kw):
+        calls.append(method)
+        await asyncio.sleep(0.5)
+        return {"update_available": True}
+
+    monkeypatch.setattr(M, "rpc", slow_rpc)
+    monkeypatch.setattr(M, "ws", lambda request: st)
+    t0 = time.monotonic()
+    assert await M.update_flag(None) is False
+    assert await M.update_flag(None) is False  # chỉ một lượt kiểm tra chạy nền cùng lúc
+    assert time.monotonic() - t0 < 0.2
+    await st._upd_task
+    assert calls == ["update.check"]
+    assert await M.update_flag(None) is True
