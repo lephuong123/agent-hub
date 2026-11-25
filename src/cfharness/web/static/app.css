@@ -1613,3 +1613,20 @@ html { overflow-x: clip; }
 .q-text { font-family: var(--sans); font-size: 14.5px; }
 /* Popup trong hàng tab luồng (+ Luồng, Đã đóng, ⚙ Luồng này) nằm ở mép phải → neo theo mép phải, không tràn ra ngoài màn hình. */
 @media (min-width: 721px) { .ws-bar > .ws-pop-wrap > .ws-pop { left: auto; right: 0; } }
+
+/* Khung chat gọn kiểu Gemini: chữ nhỏ hơn, nhịp dòng và đoạn chặt hơn → nhiều nội dung trên một màn.
+   Chỉnh một chỗ: --chat-fs (cỡ chữ trả lời), --chat-lh (nhịp dòng). */
+.mgr-chat, .run-read { --chat-fs: 14px; --chat-lh: 1.55; }
+.mm-md .md, .ti.msg .md { font-size: var(--chat-fs, 14px); line-height: var(--chat-lh, 1.55); }
+.mm-md .md p, .ti.msg .md p { margin: .3rem 0; }
+.mm-md .md ul, .mm-md .md ol, .ti.msg .md ul, .ti.msg .md ol { margin: .25rem 0; padding-left: 1.25rem; }
+.mm-md .md li + li, .ti.msg .md li + li { margin-top: .1rem; }
+.mm-md .md h1, .mm-md .md h2, .mm-md .md h3, .ti.msg .md h1, .ti.msg .md h2, .ti.msg .md h3 { font-size: 14.5px; margin: .6rem 0 .2rem; }
+.mm-md .md pre, .ti.msg .md pre { font-size: 12px; }
+.mm.user .mm-text { font-size: 13.5px; padding: 7px 12px; }
+.mgr-form textarea { font-size: 13.5px; }
+.mm-who { font-size: 11.5px; }
+.mgr-chat .tx-code, .run-read .tx-code { margin: .4rem 0; }
+.mgr-chat .tx-code-head, .run-read .tx-code-head { padding: 1px 4px 1px 10px; font-size: 11px; }
+.mgr-chat .tx-code-head .tx-copy, .run-read .tx-code-head .tx-copy { padding: 2px 6px; font-size: 11px; min-height: 0; }
+.mgr-chat .tx-code pre, .run-read .tx-code pre { padding: 7px 10px; font-size: 12px; line-height: 1.5; }
