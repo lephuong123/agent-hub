@@ -25,6 +25,9 @@ import os
 import re
 import subprocess
 import sys
+import threading
+import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -1135,8 +1138,49 @@ def _in_confine_write(ap: str, rp: str, ctx: GuardContext) -> bool:
     return all(any(_under(c, b) for b in bases if b) for c in {ap, rp})
 
 
+# Cache `git rev-parse --git-dir/--git-common-dir/--show-toplevel` theo (cwd, args): bố cục repo gần như không đổi trong một phút, mà mỗi
+# lượt kiểm guard (chạy trên event loop daemon) có thể gọi 2–4 lần — mỗi lần một tiến trình git. LRU `_REVPARSE_MAX` khoá, sống
+# `_REVPARSE_TTL_S` giây; chỉ cache kết quả THÀNH CÔNG (None = lỗi/chưa phải repo → hỏi lại lần sau). KHÔNG cache gì phụ thuộc trạng thái
+# cây làm việc (`status --porcelain`, `rev-parse --verify HEAD`…).
+_REVPARSE_CACHEABLE = frozenset({"--git-dir", "--git-common-dir", "--show-toplevel"})
+_REVPARSE_TTL_S = 60.0
+_REVPARSE_MAX = 256
+_revparse_cache: "OrderedDict[tuple[str, tuple[str, ...]], tuple[float, str]]" = OrderedDict()
+_revparse_lock = threading.Lock()
+
+
+def _revparse_cacheable(args: tuple[str, ...]) -> bool:
+    return bool(args) and args[0] == "rev-parse" and args[-1] in _REVPARSE_CACHEABLE and all(
+        a == "rev-parse" or a in _REVPARSE_CACHEABLE or a.startswith("--path-format=") for a in args)
+
+
+def clear_git_cache() -> None:
+    with _revparse_lock:
+        _revparse_cache.clear()
+
+
 def _git_out(cwd: str, *args: str) -> str | None:
-    """Probe git (NGOÀI sandbox → tắt khoá chạy lệnh như workspace._git). Lỗi/timeout → None."""
+    """Probe git (NGOÀI sandbox → tắt khoá chạy lệnh như workspace._git). Lỗi/timeout → None. Vị trí repo (`rev-parse --git-dir/
+    --git-common-dir/--show-toplevel`) được cache theo cwd (xem `_revparse_cache`)."""
+    key = (cwd, args) if _revparse_cacheable(args) else None
+    if key is not None:
+        now = time.monotonic()
+        with _revparse_lock:
+            hit = _revparse_cache.get(key)
+            if hit is not None and now - hit[0] < _REVPARSE_TTL_S:
+                _revparse_cache.move_to_end(key)
+                return hit[1]
+    out = _git_out_uncached(cwd, *args)
+    if key is not None and out is not None:
+        with _revparse_lock:
+            _revparse_cache[key] = (time.monotonic(), out)
+            _revparse_cache.move_to_end(key)
+            while len(_revparse_cache) > _REVPARSE_MAX:
+                _revparse_cache.popitem(last=False)
+    return out
+
+
+def _git_out_uncached(cwd: str, *args: str) -> str | None:
     try:
         from ..workspace import GIT_ENV, GIT_SAFE_ARGS
 
