@@ -88,7 +88,7 @@ function TabBar() {
         return html`<a key=${t.ws} class=${"ws-tab" + (scope === t.ws ? " on" : "")} href=${url} data-ws=${t.ws}
           title=${t.label + " — " + (t.dot_label || "") + " · task " + (tk.done || 0) + "/" + (tk.total || 0)}
           aria-current=${scope === t.ws ? "page" : undefined} onClick=${(e) => onNav(e, url)}>
-          <${Dot} cls=${t.dot} label=${t.dot_label} />${t.title}${t.unread ? html`<span class="ws-unread">${t.unread}</span>` : null}</a>`;
+          <${Dot} cls=${t.dot} label=${t.dot_label} /><span class="ws-t">${t.title}</span>${t.unread ? html`<span class="ws-unread">${t.unread}</span>` : null}</a>`;
       })}
       ${closedCur ? html`<a class="ws-tab on closed" href=${"/manager?w=" + encodeURIComponent(closedCur.ws)}
           onClick=${(e) => onNav(e, "/manager?w=" + encodeURIComponent(closedCur.ws))}><${Dot} cls=${closedCur.dot} label=${closedCur.dot_label} />${closedCur.title} · đã đóng</a>` : null}
@@ -876,7 +876,7 @@ export function TeamSide() {
       ${n.with_manager ? html`<span class="muted small">${n.with_manager} câu hỏi đang chờ điều phối viên</span>` : null}</section>
     <section class="mgr-side-sec"><h3>Đang làm (${f.team.length})</h3>${f.team.length ? html`<ul class="team-list">${f.team.map((a) => html`<li key=${a.id}>
         <span class=${"avatar sm " + (a.avatar || "")} aria-hidden="true">${(a.name || "?").slice(0, 1)}</span>
-        <div class="team-b"><div class="team-n"><a href=${"/agents/" + encodeURIComponent(a.id)}>${a.name}</a><span class=${"pill " + a.tone}>${a.label}</span></div>
+        <div class="team-b"><div class="team-n"><a href=${"/agents/" + encodeURIComponent(a.id)} title=${a.name}>${a.name}</a><span class=${"pill " + a.tone}>${a.label}</span></div>
           ${a.task ? html`<div class="team-t" title=${a.task}>${a.task}</div>` : null}${a.tool ? html`<div class="team-s">Đang dùng ${a.tool}</div>` : null}</div>
         ${a.run_id ? html`<${Look} w=${{ run_id: a.run_id, title: a.name + " · " + (a.task || a.label) }} />` : null}</li>`)}</ul>`
       : html`<p class="muted small">Cả đội đang rảnh — nhắn điều phối viên để giao việc.</p>`}

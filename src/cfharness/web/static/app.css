@@ -1518,3 +1518,12 @@ a.outcome-denied { color: var(--danger); font-weight: 600; }
 select { max-width: 100%; text-overflow: ellipsis; }
 .filters form.row, .page-head form.row, .search-form label { min-width: 0; max-width: 100%; }
 .filters form.row select, .page-head form.row select { flex: 1 1 auto; min-width: 0; }
+
+/* Nhiều việc chờ (≥4 thẻ): thẻ duyệt/câu hỏi gọn hơn để thấy được nhiều việc trên một màn */
+.need:has(> .xcard:nth-child(4)) { gap: var(--s2); }
+.need:has(> .xcard:nth-child(4)) > .xcard { padding: 12px 14px; }
+.need:has(> .xcard:nth-child(4)) .xcard-head { margin-bottom: 6px; gap: 10px; }
+.need:has(> .xcard:nth-child(4)) .xcard-ic { width: 26px; height: 26px; border-radius: 8px; }
+.need:has(> .xcard:nth-child(4)) .xcard-title .t > .pill { display: none; }
+.need:has(> .xcard:nth-child(4)) .xcard-why { margin-top: 4px; font-size: var(--fs-xs); }
+.need:has(> .xcard:nth-child(4)) .xcard-actions { margin-top: 8px; }
