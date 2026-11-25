@@ -12,7 +12,9 @@ import logging
 import os
 import uuid
 import signal
+import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -377,28 +379,132 @@ def child_env(claude_cfg: dict[str, Any], base: dict[str, str] | None = None, *,
     return with_loopback_no_proxy(env)
 
 
-_version_cache: dict[str, tuple[float, str | None]] = {}
-# ClaudeCliRuntime.login_available (runtime tạo mới mỗi run → cache theo binary + thư mục cấu hình; khoá = binary khi cấu hình mặc định)
-_login_cache: dict[str, tuple[float, bool]] = {}
+# binary → (lúc đo, phiên bản, chữ ký binary (đường dẫn thật, mtime)) — chữ ký đổi (nâng cấp CLI) = hết hạn ngay
+_version_cache: dict[str, tuple[float, str | None, Any]] = {}
+_version_lock = threading.Lock()  # bảo vệ `_version_cache`/`_version_refreshing`
+_version_compute_locks: dict[str, threading.Lock] = {}  # một tiến trình `--version` mỗi binary cùng lúc (thread khác chờ rồi dùng kết quả)
+_version_refreshing: set[str] = set()
+# ClaudeCliRuntime.login_available (runtime tạo mới mỗi run → cache theo binary + thư mục cấu hình; khoá = binary khi cấu hình mặc định).
+# Giá trị = (lúc đo, kết quả); kết quả None (không chạy được/không đọc được) cũng cache nhưng chỉ `AUTH_NONE_CACHE_S`.
+_login_cache: dict[str, tuple[float, bool | None]] = {}
+# lượt `claude auth status` đang bay theo khoá — N run song song chờ chung MỘT tiến trình (singleflight)
+_login_flight: dict[str, "asyncio.Future[bool | None]"] = {}
+# auth_status (token hub): khoá = (binary, token có/không — không giữ token) → (lúc đo, kết quả); gộp lời gọi trong `AUTH_STATUS_COALESCE_S`
+_auth_status_cache: dict[str, tuple[float, bool | None]] = {}
+_auth_status_flight: dict[str, "asyncio.Future[bool | None]"] = {}
+AUTH_NONE_CACHE_S = 45.0
+AUTH_STATUS_COALESCE_S = 5.0
+_auth_gen = [0]  # tăng ở `clear_auth_caches` — lượt đang bay từ TRƯỚC khi đăng nhập/đăng xuất không ghi kết quả cũ vào cache
 
 
 def _login_key(binary: str, config_dir: Any) -> str:
     return binary if not config_dir else f"{binary}\0{config_dir}"
 
 
-def claude_version(binary: str = "claude", cache_s: float = 600) -> str | None:
-    """`claude --version` → '2.1.302' (cache, FR-RT-15). None nếu không chạy được."""
-    now = time.monotonic()
-    hit = _version_cache.get(binary)
-    if hit and now - hit[0] < cache_s:
-        return hit[1]
+def clear_auth_caches() -> None:
+    """Quên kết quả `claude auth status` đã cache (đăng nhập/đăng xuất/đổi token) — lượt sau kiểm lại ngay."""
+    _auth_gen[0] += 1
+    _login_cache.clear()
+    _auth_status_cache.clear()
+    _login_flight.clear()  # lời gọi sau không ghép vào lượt đang bay từ trước thay đổi
+    _auth_status_flight.clear()
+
+
+def _binary_sig(binary: str) -> Any:
+    """(đường dẫn thật, mtime_ns) của binary — đổi khi nâng cấp CLI. Không tìm thấy → None."""
     try:
-        out = subprocess.run(exec_argv([binary, "--version"]), capture_output=True, encoding="utf-8", errors="replace", timeout=20, **no_window_kwargs())
-        v = out.stdout.strip().split()[0] if out.returncode == 0 and out.stdout.strip() else None
-    except (OSError, subprocess.TimeoutExpired):
-        v = None
-    _version_cache[binary] = (now, v)
-    return v
+        path = binary if os.path.isabs(binary) else shutil.which(binary)
+        if not path:
+            return None
+        return (path, os.stat(path).st_mtime_ns)
+    except OSError:
+        return None
+
+
+def _in_event_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+def _compute_version(binary: str, sig: Any) -> str | None:
+    """Chạy `binary --version` (CHẶN tới 20 s) rồi ghi cache. Một lượt mỗi binary cùng lúc: thread đến sau chờ và dùng kết quả vừa đo."""
+    with _version_lock:
+        clock = _version_compute_locks.setdefault(binary, threading.Lock())
+        before = _version_cache.get(binary)
+    with clock:
+        with _version_lock:
+            cur = _version_cache.get(binary)
+        if cur is not None and cur is not before and cur[2] == sig:
+            return cur[1]  # thread khác vừa đo xong trong lúc chờ
+        try:
+            out = subprocess.run(exec_argv([binary, "--version"]), capture_output=True, encoding="utf-8", errors="replace", timeout=20,
+                                 **no_window_kwargs())
+            v = out.stdout.strip().split()[0] if out.returncode == 0 and out.stdout.strip() else None
+        except (OSError, subprocess.TimeoutExpired):
+            v = None
+        with _version_lock:
+            _version_cache[binary] = (time.monotonic(), v, sig)
+        return v
+
+
+def _refresh_version_bg(binary: str, sig: Any) -> None:
+    """Đo lại phiên bản trong thread nền (một lượt mỗi binary) — gọi từ event loop không bao giờ chờ `claude --version`."""
+    with _version_lock:
+        if binary in _version_refreshing:
+            return
+        _version_refreshing.add(binary)
+
+    def run() -> None:
+        try:
+            _compute_version(binary, sig)
+        except Exception:  # pragma: no cover - best-effort
+            log.debug("đo phiên bản claude (nền) lỗi", exc_info=True)
+        finally:
+            with _version_lock:
+                _version_refreshing.discard(binary)
+
+    threading.Thread(target=run, name="claude-version-probe", daemon=True).start()
+
+
+def claude_version(binary: str = "claude", cache_s: float = 600, *, block: bool | None = None) -> str | None:
+    """`claude --version` → '2.1.302' (cache, FR-RT-15). None nếu không chạy được.
+
+    Cache theo binary + chữ ký (đường dẫn thật, mtime) — nâng cấp CLI → đo lại. Stale-while-revalidate như `pdf_support`: `block`
+    (mặc định True khi KHÔNG ở trong event loop) False → cache hết hạn/lệch chữ ký trả giá trị CŨ và đo lại trong thread nền; chỉ lần
+    đầu tiên (chưa từng đo) mới đo tại chỗ. Code async muốn tránh cả lần đầu → `ClaudeCliRuntime.aversion()`."""
+    now = time.monotonic()
+    sig = _binary_sig(binary)
+    with _version_lock:
+        hit = _version_cache.get(binary)
+    if hit and now - hit[0] < cache_s and hit[2] == sig:
+        return hit[1]
+    if block is None:
+        block = not _in_event_loop()
+    if not block and hit is not None:
+        _refresh_version_bg(binary, sig)
+        return hit[1]
+    return _compute_version(binary, sig)
+
+
+async def _singleflight(flights: dict[str, "asyncio.Future[Any]"], key: str, factory: Any) -> Any:
+    """Chạy `factory()` (coroutine) một lần cho mỗi `key` cùng lúc; người gọi đến sau chờ chung kết quả (huỷ một người chờ không huỷ lượt)."""
+    loop = asyncio.get_running_loop()
+    fut = flights.get(key)
+    if fut is None or fut.done() or fut.get_loop() is not loop:
+        fut = asyncio.ensure_future(factory())
+        flights[key] = fut
+
+        def _done(f: "asyncio.Future[Any]", key: str = key) -> None:
+            if flights.get(key) is f:
+                flights.pop(key, None)
+            if not f.cancelled():
+                f.exception()
+
+        fut.add_done_callback(_done)
+    return await asyncio.shield(fut)
 
 
 class ClaudeCliRuntime(AgentRuntime):
@@ -445,14 +551,41 @@ class ClaudeCliRuntime(AgentRuntime):
         }
 
     def version(self) -> str | None:
+        """Phiên bản CLI (stale-while-revalidate — xem `claude_version`). Trong event loop không chờ đo lại, trừ lần đầu tiên."""
         return claude_version(self.cfg.get("binary") or "claude", float(self.cfg.get("version_cache_s", 600)))
 
+    async def aversion(self) -> str | None:
+        """Như `version()` nhưng chưa từng đo → đo trong thread (không chặn event loop cả lần đầu)."""
+        binary = self.cfg.get("binary") or "claude"
+        with _version_lock:
+            known = binary in _version_cache
+        if known:
+            return self.version()
+        return await asyncio.to_thread(claude_version, binary, float(self.cfg.get("version_cache_s", 600)), block=True)
+
     async def auth_status(self) -> bool | None:
-        """`claude auth status` (JSON `loggedIn`) với cùng env của tiến trình con. None khi không chạy được/không đọc được."""
+        """`claude auth status` (JSON `loggedIn`) với cùng env của tiến trình con. None khi không chạy được/không đọc được.
+        Gộp lời gọi: kết quả dùng lại trong `AUTH_STATUS_COALESCE_S` (5 s), lời gọi đồng thời chờ chung một tiến trình (singleflight)."""
+        env = self.env()
+        key = f"{self.cfg.get('binary') or 'claude'}\0{'token' if env.get(OAUTH_TOKEN_SECRET) else 'login'}"
+        hit = _auth_status_cache.get(key)
+        if hit is not None and time.monotonic() - hit[0] < AUTH_STATUS_COALESCE_S:
+            return hit[1]
+
+        async def run() -> bool | None:
+            gen = _auth_gen[0]
+            res = await self._auth_status_uncached(env)
+            if gen == _auth_gen[0]:
+                _auth_status_cache[key] = (time.monotonic(), res)
+            return res
+
+        return await _singleflight(_auth_status_flight, key, run)
+
+    async def _auth_status_uncached(self, env: dict[str, str]) -> bool | None:
         argv = exec_argv([self.cfg.get("binary") or "claude", "auth", "status"])
         try:
             proc = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-                                                        stderr=asyncio.subprocess.PIPE, env=self.env(), **no_window_kwargs())
+                                                        stderr=asyncio.subprocess.PIPE, env=env, **no_window_kwargs())
         except OSError:
             return None
         try:
@@ -474,18 +607,32 @@ class ClaudeCliRuntime(AgentRuntime):
     async def login_available(self, config_dir: Path | None = None) -> bool | None:
         """`claude auth status` KHÔNG có CLAUDE_CODE_OAUTH_TOKEN → True khi đã `/login` claude.ai (authMethod=claude.ai).
         `config_dir` (thư mục cấu hình riêng của tài khoản token) → kiểm phiên trong thư mục đó (CLAUDE_CONFIG_DIR).
-        Cache `version_cache_s` (mặc định 600 s) theo (binary, thư mục); không chạy được/không đọc được → None (không cache)."""
-        now = time.monotonic()
+        Cache `version_cache_s` (mặc định 600 s) theo (binary, thư mục); không chạy được/không đọc được → None, cache ngắn
+        `AUTH_NONE_CACHE_S` (45 s) để N run song song không mỗi run spawn một lần. Lời gọi đồng thời cùng khoá chờ chung MỘT tiến trình
+        (singleflight). Đăng nhập/đăng xuất → `clear_auth_caches()`."""
         binary = self.cfg.get("binary") or "claude"
         key = _login_key(binary, config_dir)
         hit = _login_cache.get(key)
-        if hit is not None and now - hit[0] < float(self.cfg.get("version_cache_s", 600)):
-            return hit[1]
+        if hit is not None:
+            ttl = float(self.cfg.get("version_cache_s", 600)) if hit[1] is not None else AUTH_NONE_CACHE_S
+            if time.monotonic() - hit[0] < ttl:
+                return hit[1]
+
+        async def run() -> bool | None:
+            gen = _auth_gen[0]
+            res = await self._login_available_uncached(binary, config_dir)
+            if gen == _auth_gen[0]:
+                _login_cache[key] = (time.monotonic(), res)
+            return res
+
+        return await _singleflight(_login_flight, key, run)
+
+    async def _login_available_uncached(self, binary: str, config_dir: Path | None) -> bool | None:
         env = child_env(self.cfg)
         env.pop(OAUTH_TOKEN_SECRET, None)
         if config_dir:
             env["CLAUDE_CONFIG_DIR"] = str(config_dir)
-        argv = exec_argv([self.cfg.get("binary") or "claude", "auth", "status"])
+        argv = exec_argv([binary, "auth", "status"])
         try:
             proc = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
                                                         stderr=asyncio.subprocess.PIPE, env=env, **no_window_kwargs())
@@ -505,9 +652,7 @@ class ClaudeCliRuntime(AgentRuntime):
             return None
         if not isinstance(info, dict) or "loggedIn" not in info:
             return None
-        ok = bool(info.get("loggedIn")) and info.get("authMethod") == "claude.ai"
-        _login_cache[key] = (now, ok)
-        return ok
+        return bool(info.get("loggedIn")) and info.get("authMethod") == "claude.ai"
 
     async def oneshot(self, req: "OneShotRequest") -> "OneShotResult":
         import tempfile
@@ -524,7 +669,7 @@ class ClaudeCliRuntime(AgentRuntime):
                 f.write(json.dumps(self.cfg.get("settings") or {"autoMemoryEnabled": False}))
             binary = str(self.cfg.get("binary") or "claude")
             # binary khác `claude` mặc định (judge/curator giả trong test) → không có phiên bản trong ma trận → không kiểm cờ
-            version = self.version() if binary == "claude" else None
+            version = await self.aversion() if binary == "claude" else None
             argv = exec_argv(oneshot_argv(req, self.cfg, mcp_path=mcp_path, settings_path=settings_path, cli_version=version))
             proc = None
             try:
@@ -552,7 +697,7 @@ class ClaudeCliRuntime(AgentRuntime):
         return OneShotResult(ok, res if ok else None, cost, int((time.monotonic() - t0) * 1000), err, data)
 
     async def start(self, spec: RunSpec) -> RunHandle:
-        cli_version = self.version()
+        cli_version = await self.aversion()
         argv, stdin_bytes = build_argv(spec, self.cfg, cli_version)  # H-10: kiểm ma trận cờ theo phiên bản
         argv = exec_argv(argv)
         if IS_WINDOWS:

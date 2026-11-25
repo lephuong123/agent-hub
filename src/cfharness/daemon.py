@@ -55,7 +55,8 @@ OFFLOAD_READS = frozenset({
     "report.get", "report.hangs", "report.kpi", "report.overhead", "report.cost",  # báo cáo quét `runs`/`events` — 0,1–0,6 s
     "approval.stats",
     "audit.list", "audit.activity",
-    "system.list",  # chờ PowerShell/launchctl (tiến trình con, 1,3–2,6 s) — không phải SQLite nhưng cũng chặn loop
+    # `system.list/get` KHÔNG ở đây: handler async, đọc backend trong thread riêng + singleflight (systems/service.snapshot) — không
+    # giữ luồng đọc DB 1–3 s chờ PowerShell/launchctl.
 })
 LOOP_LAG_INTERVAL_S = 1.0  # chu kỳ đo độ trễ event loop (`Daemon._loop_lag`)
 from .perf import DEFAULT_LOOP_LAG_WARN_MS  # noqa: E402

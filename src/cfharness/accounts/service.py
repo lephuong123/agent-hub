@@ -286,6 +286,9 @@ class AccountService:
             self.secrets.set(OAUTH_SECRET, tok)
             self.store.conn.execute("UPDATE claude_accounts SET last_used_at=? WHERE id=?", (iso(), account_id))
         self.store.state_set(ACTIVE_KEY, account_id)
+        from ..runtime import claude_cli
+
+        claude_cli.clear_auth_caches()  # token đổi → `auth_status` gộp 5 s không trả kết quả của token cũ
         self.hub.runs.clear_auth_block(by="account_switch")
         self._publish("account.switched", {"from": previous, "to": account_id, "by": self._by()})
         try:
@@ -612,7 +615,7 @@ class AccountService:
     def _login_changed() -> None:
         from ..runtime import claude_cli
 
-        claude_cli._login_cache.clear()  # run sau kiểm lại phiên /login ngay (connector bật/tắt theo phiên)
+        claude_cli.clear_auth_caches()  # run sau kiểm lại phiên /login ngay (connector bật/tắt theo phiên)
 
     async def _auth_status(self, env: dict[str, str]) -> tuple[bool | None, str]:
         """`claude auth status` (JSON `loggedIn`) với env cho trước → (loggedIn|None, mô tả lỗi). Cùng kiểu ClaudeCliRuntime.auth_status."""

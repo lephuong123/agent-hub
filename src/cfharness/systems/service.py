@@ -11,6 +11,9 @@
 - Ghi registry (scan --apply / add / rm / lock) = CHỈ NGƯỜI. Thao tác job (pause|resume|restart) = người hoặc điều phối viên (qua
   MANAGER_ALLOWED + `manager/permissions.check_rpc`), chỉ job thuộc hệ thống ĐÃ ĐĂNG KÝ, không khoá. Hệ thống/job của chính hub
   (repo mã nguồn, HUB_HOME, lệnh cfharness) không bao giờ được nhận diện.
+- Không chặn event loop (plan-api-caching PR2): đọc backend (PowerShell/launchctl, 1–3 s) gom vào một "ảnh chụp" `_snapshot()` chạy
+  trong thread qua `snapshot()` — singleflight: nhiều lời gọi đồng thời dùng chung MỘT lượt truy vấn đang bay. RPC `system.list/get`
+  và `job()` đi đường này; `list()/get()` đồng bộ giữ cho CLI/test (nhận `snap=` để khỏi hỏi lại backend).
 """
 
 from __future__ import annotations
@@ -81,6 +84,7 @@ class SystemService:
     def __init__(self, hub: "Hub", launchctl: Any = None) -> None:
         self.hub = hub
         self._lc = launchctl
+        self._snap_flight: "asyncio.Future[dict[str, Any]] | None" = None
 
     # ------------------------------------------------------------------ cấu hình
     @property
@@ -140,10 +144,10 @@ class SystemService:
                 return os.path.join(r, first)
         return None
 
-    def _jobs_by_dir(self) -> dict[str, list[dict[str, Any]]]:
-        """Thư mục hệ thống (khoá `normcase`) → job trỏ vào."""
+    def _jobs_by_dir(self, snap: dict[str, Any] | None = None) -> dict[str, list[dict[str, Any]]]:
+        """Thư mục hệ thống (khoá `normcase`) → job trỏ vào. `snap` (từ `snapshot()`) → không hỏi lại backend."""
         out: dict[str, list[dict[str, Any]]] = {}
-        for j in self.launchctl.jobs(self._agents_dir()):
+        for j in (snap["jobs"] if snap is not None else self.launchctl.jobs(self._agents_dir())):
             if self._is_hub_job(j):
                 continue
             for p in job_paths(j):
@@ -238,8 +242,39 @@ class SystemService:
         return {"system": sid, "label": label, "locked": on}
 
     # ------------------------------------------------------------------ đọc
-    def _jobs_for(self, path: str) -> list[dict[str, Any]]:
-        return self._jobs_by_dir().get(os.path.normcase(path), [])
+    def _snapshot(self) -> dict[str, Any]:
+        """Đọc backend một lượt (ĐỒNG BỘ, chậm — PowerShell/launchctl): job + trạng thái + task tắt. Không đụng DB → chạy được trong thread."""
+        lc = self.launchctl
+        return {"state": lc.state(), "disabled": lc.disabled(), "jobs": lc.jobs(self._agents_dir())}
+
+    async def snapshot(self, *, fresh: bool = False) -> dict[str, Any]:
+        """`_snapshot()` trong thread, singleflight: lời gọi đến khi đã có lượt đang bay thì chờ chung lượt đó (một tiến trình con cho N
+        người gọi). `fresh=True` (sau thao tác ghi) → không ghép vào lượt đã bay từ trước khi ghi."""
+        loop = asyncio.get_running_loop()
+        fut = self._snap_flight
+        if fresh or fut is None or fut.done() or fut.get_loop() is not loop:
+            fut = asyncio.ensure_future(asyncio.to_thread(self._snapshot))
+            self._snap_flight = fut
+
+            def _done(f: "asyncio.Future[dict[str, Any]]") -> None:
+                if self._snap_flight is f:
+                    self._snap_flight = None
+                if not f.cancelled():
+                    f.exception()  # đã lấy lỗi → không cảnh báo "never retrieved" khi mọi người chờ đã huỷ
+
+            fut.add_done_callback(_done)
+        return await asyncio.shield(fut)
+
+    async def alist(self) -> list[dict[str, Any]]:
+        """`list()` không chặn event loop (RPC `system.list`, công cụ điều phối viên)."""
+        return self.list(snap=await self.snapshot())
+
+    async def aget(self, sid: str, *, log_bytes: int | None = None) -> dict[str, Any]:
+        """`get()` không chặn event loop (RPC `system.get`). Đuôi log đọc tối đa `log_bytes` mỗi file — nhỏ, giữ trên loop."""
+        return self.get(sid, log_bytes=log_bytes, snap=await self.snapshot())
+
+    def _jobs_for(self, path: str, snap: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        return self._jobs_by_dir(snap).get(os.path.normcase(path), [])
 
     def _status(self, job: dict[str, Any], st: dict[str, dict[str, Any]], dis: set[str], paused: dict[str, Any]) -> dict[str, Any]:
         s = st.get(job["label"])
@@ -257,25 +292,30 @@ class SystemService:
             out["paused_by"] = paused[job["label"]]
         return out
 
-    def _row(self, sid: str, v: dict[str, Any], st: dict[str, Any], dis: set[str], paused: dict[str, Any]) -> dict[str, Any]:
+    def _row(self, sid: str, v: dict[str, Any], st: dict[str, Any], dis: set[str], paused: dict[str, Any],
+             snap: dict[str, Any] | None = None) -> dict[str, Any]:
         jobs = []
-        for j in self._jobs_for(v["path"]):
+        for j in self._jobs_for(v["path"], snap):
             jobs.append({"label": j["label"], "kind": j["kind"], "schedule": j["schedule"], "program": " ".join(j["program"])[:300],
                          "locked": j["label"] in (v.get("locked") or []), **self._status(j, st, dis, paused)})
         return {"id": sid, "path": v["path"], "title": v.get("title"), "added_at": v.get("added_at"), "jobs": jobs}
 
-    def list(self) -> list[dict[str, Any]]:
+    def list(self, *, snap: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         reg = self.registry()
-        st, dis, paused = self.launchctl.state(), self.launchctl.disabled(), self.paused()
-        return [self._row(sid, v, st, dis, paused) for sid, v in sorted(reg.items())]
+        if snap is None:
+            snap = self._snapshot()
+        paused = self.paused()
+        return [self._row(sid, v, snap["state"], snap["disabled"], paused, snap) for sid, v in sorted(reg.items())]
 
-    def get(self, sid: str, *, log_bytes: int | None = None) -> dict[str, Any]:
+    def get(self, sid: str, *, log_bytes: int | None = None, snap: dict[str, Any] | None = None) -> dict[str, Any]:
         reg = self.registry()
         if sid not in reg:
             raise NotFound(f"không có hệ thống '{sid}' (đã đăng ký: {', '.join(sorted(reg)) or 'chưa có — `cfharness system scan --apply`'})")
-        row = self._row(sid, reg[sid], self.launchctl.state(), self.launchctl.disabled(), self.paused())
+        if snap is None:
+            snap = self._snapshot()
+        row = self._row(sid, reg[sid], snap["state"], snap["disabled"], self.paused(), snap)
         if log_bytes:
-            by_label = {j["label"]: j for j in self._jobs_for(reg[sid]["path"])}
+            by_label = {j["label"]: j for j in self._jobs_for(reg[sid]["path"], snap)}
             for j in row["jobs"]:
                 src = by_label.get(j["label"]) or {}
                 j["log"] = {k: self._tail(src.get(k), log_bytes) for k in ("stdout", "stderr") if src.get(k)}
@@ -307,21 +347,22 @@ class SystemService:
         return redact_str(data)
 
     # ------------------------------------------------------------------ thao tác job
-    def _find_job(self, label: str) -> tuple[str, dict[str, Any]]:
+    def _find_job(self, label: str, snap: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
         if not self.launchctl.label_ok(str(label or "")):
             raise HubError(f"label job không hợp lệ: {label!r}", code=-32602)
+        by_dir = self._jobs_by_dir(snap)
         for sid, v in self.registry().items():
-            for j in self._jobs_for(v["path"]):
+            for j in by_dir.get(os.path.normcase(v["path"]), []):
                 if j["label"] == label:
                     return sid, j
         raise NotFound(f"job '{label}' không thuộc hệ thống nào đã đăng ký (xem `cfharness system list`)")
 
-    def job_check(self, label: str, action: str, *, manager: bool) -> str | None:
+    def job_check(self, label: str, action: str, *, manager: bool, snap: dict[str, Any] | None = None) -> str | None:
         """Lý do từ chối hoặc None (dùng chung cho service và `manager/permissions.check_rpc`)."""
         if action not in ACTIONS:
             return f"action phải là {'|'.join(ACTIONS)}"
         try:
-            sid, _ = self._find_job(label)
+            sid, _ = self._find_job(label, snap)
         except HubError as e:
             return e.message
         if manager and label in (self.registry()[sid].get("locked") or []):
@@ -335,10 +376,11 @@ class SystemService:
         is_mgr = bool(c is not None and c.manager)
         if c is not None and not c.human and not is_mgr:
             raise Blocked("thao tác job hệ thống: chỉ người hoặc điều phối viên")
-        why = self.job_check(label, action, manager=is_mgr)
+        snap = await self.snapshot()
+        why = self.job_check(label, action, manager=is_mgr, snap=snap)
         if why:
             raise Blocked(why) if "khoá" in why else HubError(why)
-        sid, j = self._find_job(label)
+        sid, j = self._find_job(label, snap)
         lc = self.launchctl
         if action == "pause":
             ok, msg = await asyncio.to_thread(lc.pause, label)
@@ -359,5 +401,6 @@ class SystemService:
                                                         "reason": (reason or "")[:300], "detail": msg}))
         if not ok:
             raise HubError(f"{action} {label} thất bại: {msg}")
-        st = self._status(j, lc.state(), lc.disabled(), self.paused())
+        snap = await self.snapshot(fresh=True)  # backend vừa đổi → không ghép vào lượt đọc đã bay từ trước khi ghi
+        st = self._status(j, snap["state"], snap["disabled"], self.paused())
         return {"system": sid, "label": label, "action": action, "ok": True, "detail": msg, **st}

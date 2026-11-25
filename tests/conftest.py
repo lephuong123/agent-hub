@@ -106,6 +106,17 @@ def _allow_pytest_tmp_workspaces(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _reset_process_caches():
+    """Cache trong RAM của tiến trình (rev-parse của guard, `claude auth status`) không mang từ test này sang test khác."""
+    from cfharness.guard.classifier import clear_git_cache
+    from cfharness.runtime.claude_cli import clear_auth_caches
+
+    clear_git_cache()
+    clear_auth_caches()
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _plain_cli_output(monkeypatch):
     """CLI in văn bản thuần khi không phải TTY; FORCE_COLOR của CI/terminal ngoài sẽ bật chế độ rich (ui/theme.py)
     và làm lệch các assert trên chuỗi thuần — test nào cần chế độ có kiểu tự đặt lại (tests/test_cli_design.py)."""

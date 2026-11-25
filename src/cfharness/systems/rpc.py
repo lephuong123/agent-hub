@@ -43,8 +43,9 @@ def register_rpc(daemon: "Daemon") -> None:
         return await s.job(str(_req(p, "label")), str(_req(p, "action")), by=_by(), reason=p.get("reason"))
 
     methods: dict[str, Callable[[dict[str, Any]], Any]] = {
-        "system.list": lambda p: s.list(),
-        "system.get": lambda p: s.get(str(_req(p, "id")), log_bytes=int(p.get("log_bytes") or 0) or None),
+        # đọc backend (PowerShell/launchctl) trong thread + singleflight (`SystemService.snapshot`) — không chặn event loop
+        "system.list": lambda p: s.alist(),
+        "system.get": lambda p: s.aget(str(_req(p, "id")), log_bytes=int(p.get("log_bytes") or 0) or None),
         "system.scan": lambda p: s.scan(apply=bool(p.get("apply")), by=_by()),
         "system.add": lambda p: s.add(str(_req(p, "path")), sid=p.get("id"), by=_by()),
         "system.rm": lambda p: s.remove(str(_req(p, "id"))),

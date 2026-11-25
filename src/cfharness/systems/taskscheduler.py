@@ -19,6 +19,7 @@ import os
 import re
 import shlex
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -203,22 +204,42 @@ class TaskScheduler:
     no_log_note = NO_LOG_NOTE
 
     def __init__(self, schtasks: str = "schtasks", powershell: str = "powershell", runner: Runner | None = None,
-                 timeout: float = 15.0, cache_s: float = 2.0) -> None:
+                 timeout: float = 15.0, cache_s: float = 20.0) -> None:
         self.schtasks = schtasks
         self.powershell = powershell
         self.runner = runner or default_runner
         self.timeout = timeout
+        # Cache 20 s (truy vấn PowerShell 1–3 s); thao tác ghi (`_run`) xoá cache + tăng `_gen` để lượt truy vấn đang bay từ TRƯỚC khi
+        # ghi không ghi đè cache bằng dữ liệu cũ. `_lock`: nhiều thread cùng hỏi khi cache hết hạn → chỉ một tiến trình PowerShell.
         self.cache_s = cache_s
         self._cache: tuple[float, list[dict[str, Any]]] | None = None
+        self._gen = 0
+        self._lock = threading.Lock()
 
     @staticmethod
     def label_ok(label: str) -> bool:
         return bool(LABEL_RE.match(str(label or "")))
 
     # ------------------------------------------------------------------ đọc
+    def _fresh(self) -> list[dict[str, Any]] | None:
+        c = self._cache
+        return c[1] if c and time.monotonic() - c[0] < self.cache_s else None
+
     def _query(self) -> list[dict[str, Any]]:
-        if self._cache and time.monotonic() - self._cache[0] < self.cache_s:
-            return self._cache[1]
+        hit = self._fresh()
+        if hit is not None:
+            return hit
+        with self._lock:
+            hit = self._fresh()  # thread khác vừa truy vấn xong trong lúc chờ khoá
+            if hit is not None:
+                return hit
+            gen = self._gen
+            jobs = self._query_uncached()
+            if gen == self._gen:
+                self._cache = (time.monotonic(), jobs)
+            return jobs
+
+    def _query_uncached(self) -> list[dict[str, Any]]:
         enc = base64.b64encode(_QUERY.encode("utf-16-le")).decode("ascii")
         # liệt kê + Get-ScheduledTaskInfo từng task chậm hơn một lệnh launchctl → gấp đôi timeout
         rc, out, _ = self.runner([self.powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc],
@@ -233,7 +254,6 @@ class TaskScheduler:
                 j = parse_task(t)
                 if j:
                     jobs.append(j)
-        self._cache = (time.monotonic(), jobs)
         return jobs
 
     def jobs(self, _source_dir: Path | None = None) -> list[dict[str, Any]]:
@@ -255,8 +275,13 @@ class TaskScheduler:
 
     # ------------------------------------------------------------------ ghi
     def _run(self, *args: str) -> tuple[int, str, str]:
+        self._gen += 1
         self._cache = None
-        return self.runner([self.schtasks, *args], self.timeout)
+        try:
+            return self.runner([self.schtasks, *args], self.timeout)
+        finally:  # lượt truy vấn bắt đầu TRONG lúc lệnh ghi chạy cũng có thể thấy trạng thái cũ → vô hiệu lần nữa
+            self._gen += 1
+            self._cache = None
 
     def pause(self, label: str) -> tuple[bool, str]:
         """Dừng lần chạy hiện tại (`/End`, không chạy cũng được) + tắt task để không chạy lại theo lịch/khi đăng nhập."""

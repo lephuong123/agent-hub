@@ -292,12 +292,12 @@ class ManagerOps:
             raise HubError("path = <tên thư mục chung>/<đường dẫn trong thư mục> (như filehub_list)")
         return fh.link({"path": p})  # coroutine — call() chờ
 
-    def op_system_list(self, a: dict[str, Any]) -> list[dict[str, Any]]:
-        return self.hub.systems.list()  # type: ignore[attr-defined]
+    def op_system_list(self, a: dict[str, Any]) -> Any:
+        return self.hub.systems.alist()  # type: ignore[attr-defined]  # coroutine — call() chờ
 
-    def op_system_get(self, a: dict[str, Any]) -> dict[str, Any]:
+    def op_system_get(self, a: dict[str, Any]) -> Any:
         n = int(self.hub.config.get("systems.log_tail_bytes") or 0) if a.get("log") else 0
-        return self.hub.systems.get(str(a.get("id") or ""), log_bytes=n or None)  # type: ignore[attr-defined]
+        return self.hub.systems.aget(str(a.get("id") or ""), log_bytes=n or None)  # type: ignore[attr-defined]  # coroutine — call() chờ
 
     def _clamp_budget(self, v: Any) -> Any:
         cap = self.svc.perms.bounds().get("max_budget_usd_per_run")

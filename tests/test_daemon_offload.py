@@ -113,7 +113,6 @@ PARAMS = {
     "approval.stats": [{}, {"days": 365}],
     "audit.list": [{}, {"principal": "os:boss"}],
     "audit.activity": [{}],
-    "system.list": [{}],
 }
 
 
