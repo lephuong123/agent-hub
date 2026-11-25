@@ -10,6 +10,10 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Bật/tắt connector claude.ai ngay trên web
+- **Cài đặt › Tài khoản Claude có thêm nhóm «Connector claude.ai cho agent»**, ngay dưới khối connector: bật/tắt «Agent tự dùng mọi connector đã Connect» (`connectors.auto`) và chọn cách run có connector đăng nhập (`runtime.claude.connectors_auth`: auto / login / token). Trước đây chỉ đổi được bằng `cfharness config set` trong terminal, banner «Agent không tự dùng connector: đã tắt bằng cấu hình» chỉ báo mà không có chỗ bấm — giờ banner dẫn thẳng tới công tắc.
+- An toàn: **bật** connector chỉ nhận khi dùng web trên chính máy chạy hub; qua link public (tunnel) chỉ được **tắt**.
+
 ---
 
 ## v0.2.38 — 2026-11-25
