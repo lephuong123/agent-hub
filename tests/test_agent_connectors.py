@@ -87,15 +87,16 @@ async def test_agent_run_spec_with_connectors(d, user_home, claude_mcp):
 
 async def test_agent_run_without_connectors_unchanged(d, user_home):
     spec, run_id = await _agent_run(d, None)
-    assert spec.isolation_overrides == {"strict_mcp_config": False} and not spec.allowed_mcp_prefixes  # MCP của tài khoản (PR7)
-    assert "enabledPlugins" not in json.loads(spec.settings_path.read_text())
+    assert spec.isolation_overrides == {"setting_sources": "user", "strict_mcp_config": False} and not spec.connectors  # MCP của tài khoản (PR7)
+    # nguồn setting `user` bật để nạp MCP user-scope → plugin của người bị TẮT qua --settings (không chạy trong run của agent)
+    assert all(v is False for v in (json.loads(spec.settings_path.read_text()).get("enabledPlugins") or {}).values())
     assert "ToolSearch" in spec.tool_policy["tools"]  # MCP nạp → schema tool hoãn qua ToolSearch
 
 
 async def test_agent_connectors_need_guard(d, user_home):
     d.hub.config.set("guard.enabled", False)
     spec, _ = await _agent_run(d, ["Atlassian"])
-    assert spec.isolation_overrides == {"strict_mcp_config": False} and not spec.connectors  # connector (phiên claude.ai) cần guard
+    assert spec.isolation_overrides == {"setting_sources": "user", "strict_mcp_config": False} and not spec.connectors  # connector (phiên claude.ai) cần guard
 
 
 def test_manager_cannot_grant_connectors():

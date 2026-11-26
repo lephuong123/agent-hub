@@ -30,6 +30,63 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ---
 
+## v0.2.39 — 2026-11-25
+
+### Bật/tắt connector claude.ai ngay trên web (#235)
+- **Cài đặt › Tài khoản Claude có thêm nhóm «Connector claude.ai cho agent»**, ngay dưới khối connector: bật/tắt «Agent tự dùng mọi connector đã Connect» (`connectors.auto`) và chọn cách run có connector đăng nhập (`runtime.claude.connectors_auth`: auto / login / token). Trước đây chỉ đổi được bằng `cfharness config set` trong terminal, banner «Agent không tự dùng connector: đã tắt bằng cấu hình» chỉ báo mà không có chỗ bấm — giờ banner dẫn thẳng tới công tắc.
+- An toàn: **bật** connector chỉ nhận khi dùng web trên chính máy chạy hub; qua link public (tunnel) chỉ được **tắt**.
+
+---
+
+## v0.2.38 — 2026-11-25
+
+### Super Admin Console — sửa lỗi web SAC (#206)
+- Mã QR trên trang kích hoạt tài khoản hiện được (trước bị vỡ ảnh); form không còn bị từ chối "Bad Origin" trên Chrome/Safari (`Referrer-Policy: same-origin` thay cho `no-referrer`).
+- Mọi nút thao tác không còn báo "Bad CSRF".
+- Hồ sơ user vừa tạo (hub chưa xuất số liệu) không còn lỗi 500; chi phí hiện "—".
+- Nút "Khởi động lại" hub trên trang user chạy được (trước báo "tham số không hợp lệ").
+- Nút "Gửi lại báo cáo ngày" không còn lồng trong form lọc ngày (trước bấm không gửi, còn đưa mã CSRF lên URL).
+- Nhập user từ CSV báo đúng từng dòng lỗi / số dòng hợp lệ khi chạy thử, thay vì luôn "xong".
+- Tên miền chưa kiểm hiện "—" ở cột HTTP/TLS thay vì chữ "ngày" trơ trọi.
+
+### Lưu ý khi cập nhật
+- Không có migration DB hay cấu hình phải sửa tay. Chỉ ảnh hưởng Super Admin Console (bản cài `/opt/cfharness`); hub của user không đổi hành vi.
+
+---
+
+## v0.2.37 — 2026-11-25
+
+### Điều phối viên tự dùng connector claude.ai (#232)
+- **Điều phối viên giờ tự có mọi connector claude.ai (Google Drive, Claude Docs, Atlassian…) mà tài khoản Claude đang dùng đã Connect** — như agent thường, không phải cấu hình gì. Trước đây phải chạy `cfharness manager capabilities set --connectors …` trong terminal (web không có chỗ bật), nên điều phối viên "không thấy MCP" dù tài khoản đã có. Vẫn cần tài khoản đã gắn phiên claude.ai (Cài đặt › Tài khoản Claude › Gắn connector) và guard bật.
+- Muốn tắt riêng cho điều phối viên: `cfharness manager capabilities set --connectors none`; chỉ cho vài connector: `--connectors "Google Drive,Claude Docs"`; về mặc định: `--connectors auto`. Tắt cho cả hub: `cfharness config set connectors.auto false`.
+
+### Lưu ý khi cập nhật
+- Hub chưa từng đặt `manager.capabilities.connectors` sẽ được bật connector cho điều phối viên ngay sau khi cập nhật. Hub đã đặt danh sách giữ nguyên danh sách đó.
+
+---
+
+## v0.2.36 — 2026-11-25
+
+### MCP đổi theo tài khoản Claude (#231)
+- **Đổi tài khoản đang dùng (`cfharness account use`, Cài đặt › Tài khoản Claude) thì MCP của run đổi theo**: tài khoản có thư mục cấu hình riêng (`HUB_HOME/claude-config/<id>/`, nơi `CLAUDE_CONFIG_DIR=<thư mục> claude mcp add` ghi server) → run dùng server MCP của thư mục đó; tài khoản chỉ có token (chưa có thư mục) và "Đăng nhập của máy" dùng `~/.claude.json`. Trước đây trên Windows (chưa bật Developer Mode) hub không tạo được symlink nên run luôn rơi về MCP của máy dù đã đổi tài khoản.
+- Windows không cho tạo symlink → hub dùng **junction** cho thư mục `projects` (không cần quyền quản trị): session vẫn dùng chung giữa các tài khoản (`--resume` chéo tài khoản được). Nếu cả junction cũng không tạo được, run vẫn dùng thư mục của tài khoản cho MCP (chỉ mất resume chéo tài khoản, có cảnh báo trong log).
+- An toàn dữ liệu: xoá tài khoản gỡ liên kết (symlink/junction) trước rồi mới xoá thư mục — không bao giờ chạm `~/.claude/projects`; trang dung lượng và bước quét khi nhập gói chuyển hub không đi vào junction (Windows `os.walk` mặc định đi theo junction).
+- Run dùng thư mục của tài khoản (MCP) → không xoá/đăng xuất được tài khoản đó khi run đang chạy (như run dùng phiên claude.ai).
+
+---
+
+## v0.2.35 — 2026-11-25
+
+### MCP: sửa lỗi agent mất MCP của tài khoản (#230)
+- **Agent mất toàn bộ MCP trong `~/.claude.json` khi run không đi qua đường connector claude.ai** (guard tắt, `connectors.auto` tắt, xác thực bằng token, điều phối viên…). Cờ cô lập `--setting-sources ""` của hub khiến claude bỏ cả server MCP user-scope; v0.2.33/v0.2.34 chỉ chạy đúng khi guard bật + `connectors.auto` (đường connector tình cờ bật nguồn `user`). Nay mọi run làm việc nạp nguồn setting `user` của tài khoản đang dùng (thư mục cấu hình riêng của tài khoản nếu có) nên luôn thấy MCP của tài khoản; plugin cá nhân vẫn bị tắt trong run, hook cá nhân được coi là đã biết (không báo "vi phạm cô lập"). Run kỹ thuật (review, eval, curator) vẫn cô lập hoàn toàn.
+- Guard: server MCP trỏ về chính hub trong cấu hình claude bị chặn MỌI tool, kể cả tool chỉ đọc (`hub_status`, `hub_golden_list`) — agent đọc trạng thái hub qua `hub-self` của run.
+
+### Hiệu năng (#228, #229)
+- **OTel không còn kéo chậm khi collector chết**: gửi lỗi một lần thì tạm ngừng gửi tới endpoint đó 60 giây (`telemetry.otel.circuit_s`, 0 = tắt) thay vì mỗi lô lại chờ hết timeout; span trong lúc ngắt bị bỏ và đếm vào `dropped`/`circuit_skipped`. Đổi endpoint thì thử lại ngay.
+- **Daemon xử lý luồng chữ của agent nhẹ hơn ~50 lần**: đọc cấu hình không còn gộp lại toàn bộ giá trị mặc định ở mỗi lần đọc (trước ~1,6 ms/lần, bị gọi nhiều lần cho mỗi mẩu chữ agent trả về); notifier/OTel/điều phối viên bỏ qua sớm các event không liên quan. Mỗi `message.delta` từ ~6,8 ms CPU xuống ~0,13 ms (`scripts/bench_publish.py`) — nhiều run song song không còn làm chậm web/Slack. Sửa tay `config.yaml` vẫn có hiệu lực ngay (đường nóng trễ tối đa 0,1 s).
+
+---
+
 ## v0.2.34 — 2026-11-25
 
 ### Sửa lỗi

@@ -134,7 +134,8 @@ def test_hub_mcp_human_only_tools_forbidden_under_any_name(tmp_path):
                  "mcp__whatever__hub_agent_update", "mcp__whatever__hub_estop", "mcp__ops__agent_update", "mcp__ops__hub_team_update"):
         v = classify(tool, {}, ctx)
         assert v.forbidden, (tool, v)
-    assert not classify("mcp__ops__hub_status", {}, ctx).forbidden
+    # server trỏ về CHÍNH hub (H-18): MỌI tool bị cấm, kể cả tool đọc — agent đọc trạng thái hub qua hub-self của run
+    assert classify("mcp__ops__hub_status", {}, ctx).forbidden
     assert not classify("mcp__other__agent_update", {}, ctx).forbidden  # server khác, không phải hub
 
 

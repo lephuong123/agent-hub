@@ -8,8 +8,9 @@
   <select name="team_id"><option value="">toàn hệ</option>{% for t in teams %}<option value="{{ t.id }}" {% if q.team_id == t.id %}selected{% endif %}>{{ t.name }}</option>{% endfor %}</select>
   <button class="btn">Xem</button>
   <a class="btn ghost" href="/reports?day={{ r.day }}&team_id={{ q.team_id or '' }}&format=csv">Xuất CSV</a>
-  {% if can(sess, "system") %}{{ op_form("report.send_now", "Gửi lại báo cáo ngày này", {"day": r.day}) }}{% endif %}
 </form>
+{# form POST không được lồng trong form lọc (GET) — trình duyệt bỏ thẻ form trong, nút sẽ gửi GET kèm csrf lên URL #}
+{% if can(sess, "system") %}<div class="row">{{ op_form("report.send_now", "Gửi lại báo cáo ngày này", {"day": r.day}) }}</div>{% endif %}
 <div class="tiles">
   <div class="tile"><span>Run</span><b>{{ r.totals.runs }}</b></div>
   <div class="tile"><span>Chi phí</span><b>{{ r.totals.cost | money }}</b></div>

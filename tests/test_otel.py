@@ -151,3 +151,51 @@ def test_req_id_trace_and_allowlist(hub_home):
     assert "cfharness.req_id" in RUN_SPAN_KEYS and keys <= RUN_SPAN_KEYS
     assert {a["key"]: a["value"] for a in run["attributes"]}["cfharness.req_id"]["stringValue"] == rq
     h.store.close()
+
+
+def test_circuit_breaker_skips_dead_endpoint(hub_home, monkeypatch):
+    """Collector chết → lỗi một lần rồi ngắt mạch: các lô sau bỏ ngay (không mở kết nối) cho tới hết `circuit_s`."""
+    import urllib.request
+
+    from cfharness.telemetry import otel as O
+
+    calls = {"n": 0}
+
+    def boom(*a, **k):
+        calls["n"] += 1
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    h = _hub(hub_home, {"enabled": True, "exporter": "otlp_http", "endpoint": "http://127.0.0.1:9", "batch_size": 1, "circuit_s": 60})
+    tel = h.telemetry
+    tel.close()  # dừng luồng nền: gửi tay bằng flush() cho đếm chính xác
+    for i in range(5):
+        tel._put(tel._span("0" * 32, f"{i:016x}", None, "x", 1, 2, {}, True, None))
+    while tel.flush() > 0:
+        pass
+    assert calls["n"] == 1 and tel.stats["errors"] == 1
+    assert tel.stats["dropped"] == 5 and tel.stats["circuit_skipped"] == 4
+    assert tel.status()["circuit_open_s"] > 0
+    # đổi endpoint → thử lại ngay, không chờ hết thời gian ngắt
+    h.config.set("telemetry.otel.endpoint", "http://127.0.0.1:10")
+    tel._put(tel._span("0" * 32, "f" * 16, None, "x", 1, 2, {}, True, None))
+    tel.flush()
+    assert calls["n"] == 2
+    # hết thời gian ngắt → thử lại; thành công thì đóng mạch
+    monkeypatch.setattr(O.time, "monotonic", lambda: 1e12)
+
+    class R:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b"{}"
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: R())
+    tel._put(tel._span("0" * 32, "e" * 16, None, "x", 1, 2, {}, True, None))
+    tel.flush()
+    assert tel.stats["exported"] == 1 and tel._circuit is None
+    h.store.close()

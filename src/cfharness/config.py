@@ -585,6 +585,7 @@ DEFAULTS: dict[str, Any] = {
             "batch_size": 64,
             "flush_s": 2.0,
             "timeout_s": 5.0,
+            "circuit_s": 60.0,  # endpoint lỗi → bỏ qua gửi trong N giây (span bị bỏ, đếm dropped) rồi mới thử lại; 0 = tắt
         },
     },
     # Lịch chạy tự động (schedules/, docs/dev-notes/schedules.md). Nhánh được kiểm toàn vẹn (trần của điều phối viên).
@@ -997,36 +998,62 @@ class HubConfig:
     def __init__(self, path: Path) -> None:
         self.path = path
         self._overrides: dict[str, Any] = {}
-        self._mtime: float | None = None
+        self._mtime: tuple[int, int] | None = None
+        self._merged: dict[str, Any] = {}
         self.reload()
 
+    def _stamp(self) -> tuple[int, int] | None:
+        """(mtime_ns, size) của config.yaml — một lần stat; None = chưa có file."""
+        try:
+            st = self.path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
     def reload(self) -> None:
-        if self.path.exists():
+        stamp = self._stamp()
+        if stamp is not None:
             data = yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
             if not isinstance(data, dict):
                 raise ValueError(f"{self.path}: cấu hình phải là một mapping YAML")
             self._overrides = data
-            self._mtime = self.path.stat().st_mtime
         else:
             self._overrides = {}
-            self._mtime = None
+        self._mtime = stamp
+        self._rev = getattr(self, "_rev", 0) + 1
+        # plan-api-caching PR1: gộp DEFAULTS + overrides MỘT lần mỗi lần nạp (trước đây deep-merge ~1,6 ms ở MỌI lần get)
+        self._merged = deep_merge(DEFAULTS, self._overrides)
 
     def _maybe_reload(self) -> None:
-        try:
-            m = self.path.stat().st_mtime if self.path.exists() else None
-        except OSError:
-            m = None
-        if m != self._mtime:
+        if self._stamp() != self._mtime:
             self.reload()
 
     @property
+    def revision(self) -> int:
+        """Tăng mỗi lần config được nạp lại. Dùng để nhớ giá trị suy ra từ config trên đường nóng (mỗi event):
+        `if rev != self._rev: self._cfg = ...`.
+        Chỉ stat file tối đa mỗi 100 ms (sửa tay config.yaml có hiệu lực trễ ≤ 0,1 s ở đường này; `set()` nạp lại ngay)."""
+        import time as _t
+
+        now = _t.monotonic()
+        if now - getattr(self, "_rev_checked", 0.0) >= 0.1:
+            self._rev_checked = now
+            self._maybe_reload()
+        return self._rev
+
+    @property
     def data(self) -> dict[str, Any]:
+        """Bản sao đầy đủ (người gọi được sửa thoải mái)."""
         self._maybe_reload()
-        return deep_merge(DEFAULTS, self._overrides)
+        return copy.deepcopy(self._merged)
 
     def get(self, key: str | None = None) -> Any:
-        data = self.data
-        return data if not key else get_path(data, key)
+        """Giá trị theo khoá chấm. dict/list trả BẢN SAO của riêng nhánh đó → người gọi sửa không làm hỏng cache."""
+        self._maybe_reload()
+        if not key:
+            return copy.deepcopy(self._merged)
+        v = get_path(self._merged, key)
+        return copy.deepcopy(v) if isinstance(v, (dict, list)) else v
 
     def explicit(self, key: str) -> tuple[bool, Any]:
         """(có, giá trị) nếu NGƯỜI đặt rõ `key` trong config.yaml (không tính DEFAULTS; null = coi như không đặt).

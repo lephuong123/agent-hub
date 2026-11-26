@@ -67,19 +67,54 @@ def _inside(d: Path, hub_home: Path) -> bool:
         return False
 
 
+def _is_link(p: Path) -> bool:
+    """Symlink hoặc junction (Windows) — liên kết, KHÔNG phải dữ liệu thật của thư mục."""
+    try:
+        return p.is_symlink() or bool(getattr(p, "is_junction", lambda: False)())
+    except OSError:
+        return False
+
+
+def _same(a: Path, b: Path) -> bool:
+    try:
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    except OSError:
+        return False
+
+
+def _unlink_link(p: Path) -> None:
+    """Gỡ symlink/junction (không đi theo — dữ liệu ở đích còn nguyên)."""
+    try:
+        p.unlink()
+    except (IsADirectoryError, PermissionError, OSError):
+        os.rmdir(p)  # junction / symlink thư mục trên Windows
+
+
 def _link(link: Path, target: Path) -> None:
-    """Đặt `link` → `target`. Symlink sai đích → thay; file/thư mục THẬT ở đó → để nguyên (không xoá dữ liệu)."""
-    if link.is_symlink():
-        if os.readlink(link) == str(target):
+    """Đặt `link` → `target`. Liên kết sai đích → thay; file/thư mục THẬT ở đó → để nguyên (không xoá dữ liệu).
+    Windows không cho tạo symlink (chưa bật Developer Mode) → thư mục dùng junction (không cần quyền)."""
+    if _is_link(link):
+        if _same(link, target):
             return
-        link.unlink()
+        _unlink_link(link)
     elif link.exists():
-        log.warning("thư mục cấu hình claude: %s không phải symlink — để nguyên", link.name)
+        log.warning("thư mục cấu hình claude: %s không phải liên kết — để nguyên", link.name)
         return
     try:
         os.symlink(str(target), str(link), target_is_directory=target.is_dir())
-    except OSError as e:  # Windows không có quyền tạo symlink → session không dùng chung (resume chéo tài khoản không được)
-        log.warning("không tạo được symlink %s trong thư mục cấu hình claude: %s", link.name, type(e).__name__)
+        return
+    except OSError as e:
+        err = e
+    if os.name == "nt" and target.is_dir():
+        try:
+            import _winapi  # type: ignore[import-not-found]
+
+            _winapi.CreateJunction(str(target), str(link))
+            return
+        except OSError as e:
+            err = e
+    # không liên kết được → session không dùng chung (resume chéo tài khoản không được)
+    log.warning("không tạo được liên kết %s trong thư mục cấu hình claude: %s", link.name, type(err).__name__)
 
 
 def ensure(hub_home: Path, account_id: str) -> Path:
@@ -112,13 +147,10 @@ def ensure(hub_home: Path, account_id: str) -> Path:
 
 
 def shared(d: Path) -> bool:
-    """`<d>/projects` là symlink sang `projects` của claude home mặc định? Không (vd Windows không tạo được symlink) → session
+    """`<d>/projects` là symlink/junction sang `projects` của claude home mặc định? Không (vd Windows không tạo được symlink) → session
     của tài khoản tách khỏi cây chung, `--resume` chéo tài khoản hỏng → hub không chạy run bằng thư mục này."""
     link = Path(d) / "projects"
-    try:
-        return link.is_symlink() and os.readlink(link) == str(default_home() / "projects")
-    except OSError:
-        return False
+    return _is_link(link) and _same(link, default_home() / "projects")
 
 
 def exists(hub_home: Path, account_id: str) -> bool:
@@ -136,6 +168,9 @@ def remove(hub_home: Path, account_id: str) -> bool:
         raise HubError(f"thư mục cấu hình claude của '{account_id}' không phải thư mục thường — không xoá")
     if root(hub_home).is_symlink() or not _inside(d, hub_home):
         raise HubError(f"thư mục cấu hình claude của '{account_id}' nằm ngoài {root(hub_home)} — không xoá")
+    for child in list(d.iterdir()):  # gỡ liên kết (symlink/junction) TRƯỚC — rmtree không bao giờ chạm cây session dùng chung
+        if _is_link(child):
+            _unlink_link(child)
     shutil.rmtree(d)
     return True
 

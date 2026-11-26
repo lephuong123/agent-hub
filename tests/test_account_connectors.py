@@ -73,6 +73,18 @@ def _claude_home() -> Path:
 
 
 # ---------------------------------------------------------------- thư mục cấu hình + symlink
+def _can_symlink() -> bool:
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as t:
+        try:
+            os.symlink(t, os.path.join(t, "l"), target_is_directory=True)
+            return True
+        except OSError:
+            return False
+
+
+@pytest.mark.skipif(not _can_symlink(), reason="cần quyền tạo symlink (Windows: Developer Mode) — junction: test_windows_junction_*")
 def test_config_dir_layout_and_symlinks(hub_home):
     home = hub_home.home
     ch = _claude_home()
@@ -100,6 +112,55 @@ def test_config_dir_layout_and_symlinks(hub_home):
         claude_config.ensure(home, "machine")
 
 
+@pytest.mark.skipif(os.name != "nt", reason="junction chỉ có trên Windows")
+def test_windows_junction_when_symlink_not_allowed(hub_home, monkeypatch):
+    """Windows chưa bật Developer Mode (không tạo được symlink) → `projects` là junction: session vẫn dùng chung (resume chéo tài
+    khoản được), MCP đi theo thư mục của tài khoản; xoá tài khoản KHÔNG đi theo junction."""
+    home = hub_home.home
+    ch = _claude_home()
+
+    def no_symlink(*a, **k):
+        raise OSError(1314, "A required privilege is not held by the client")
+
+    monkeypatch.setattr(os, "symlink", no_symlink)
+    d = claude_config.ensure(home, "a_0badcafe")
+    assert (d / "projects").is_junction() and claude_config.shared(d)
+    claude_config.ensure(home, "a_0badcafe")  # idempotent
+    assert (d / "projects").is_junction() and claude_config.shared(d)
+    (ch / "projects" / "keep.jsonl").write_text("x", encoding="utf-8")
+    assert claude_config.remove(home, "a_0badcafe") and not d.exists()
+    assert (ch / "projects" / "keep.jsonl").exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="junction chỉ có trên Windows")
+def test_hub_walkers_do_not_follow_account_junction(hub_home, monkeypatch, tmp_path):
+    """os.walk(followlinks=False)/lstat KHÔNG coi junction là link trên Windows → dung lượng hub, quét gói nhập không được đi vào
+    `claude-config/<id>/projects` (= ~/.claude/projects của người)."""
+    from cfharness import housekeeping
+    from cfharness.pathmap import PathMap, scan_files
+
+    home = hub_home.home
+    ch = _claude_home()
+    monkeypatch.setattr(os, "symlink", lambda *a, **k: (_ for _ in ()).throw(OSError(1314, "no privilege")))
+    claude_config.ensure(home, "a_0badf00d")
+    (ch / "projects" / "p").mkdir(parents=True, exist_ok=True)
+    (ch / "projects" / "p" / "s.json").write_text("/old/home/path " * 1000, encoding="utf-8")
+    b, n = housekeeping._du(home / "claude-config")
+    assert b < 1000  # không tính session của người
+    seen: list[str] = []
+    real_walk = os.walk
+
+    def spy(top, *a, **k):
+        for dp, dns, fns in real_walk(top, *a, **k):
+            seen.append(str(dp))
+            yield dp, dns, fns
+
+    monkeypatch.setattr(os, "walk", spy)
+    scan_files(home, PathMap([("/old/home", "/new/home")]))
+    assert not [x for x in seen if "projects" in x and "claude-config" in x]
+
+
+@pytest.mark.skipif(not _can_symlink(), reason="cần quyền tạo symlink")
 def test_remove_refuses_symlinked_dir(hub_home, tmp_path):
     home = hub_home.home
     (home / "claude-config").mkdir(mode=0o700)
@@ -256,7 +317,9 @@ async def test_run_without_connectors_untouched(d, monkeypatch):
     _patch_login(d, monkeypatch, machine=True)
     d.hub.accounts.use(a)
     spec, fb = await _run(d, None)
-    assert spec.auth_mode == "token" and spec.claude_config_dir is None and spec.connectors is None and not fb
+    # không connector → token; MCP đi theo thư mục cấu hình của tài khoản đang dùng (đổi tài khoản = đổi MCP)
+    assert spec.auth_mode == "token" and spec.connectors is None and not fb
+    assert spec.claude_config_dir == d.hub.paths.home / "claude-config" / a
 
 
 async def test_auto_connectors_follow_active_account(d, monkeypatch):
@@ -280,7 +343,7 @@ async def test_forced_login_uses_active_account_dir(d, monkeypatch):
     d.hub.config.set("runtime.claude.connectors_auth", "login")
     spec, _ = await _run(d, ["Google Drive"])
     assert spec.auth_mode == "login" and spec.claude_config_dir == d.hub.paths.home / "claude-config" / a
-    assert os.path.islink(spec.claude_config_dir / "projects")
+    assert claude_config.shared(spec.claude_config_dir)  # symlink (POSIX) / junction (Windows) sang cây session chung
 
 
 async def test_rm_and_logout_refused_while_run_uses_session(d, monkeypatch):
@@ -324,12 +387,13 @@ async def test_unshared_config_dir_falls_back(d, monkeypatch):
     _patch_login(d, monkeypatch, machine=True)
     d.hub.accounts.use(a)
     monkeypatch.setattr(claude_config, "_link", lambda link, target: None)  # như Windows không tạo được symlink
-    os.unlink(home / "claude-config" / a / "projects")
+    claude_config._unlink_link(home / "claude-config" / a / "projects")
     (home / "claude-config" / a / "projects").mkdir()
     spec, fb = await _run(d, ["Google Drive"])
-    assert spec.auth_mode == "token" and spec.claude_config_dir is None
+    # connector không dùng phiên của thư mục không dùng chung session → token; MCP VẪN theo thư mục của tài khoản (chỉ mất resume chéo)
+    assert spec.auth_mode == "token" and spec.claude_config_dir == home / "claude-config" / a
     assert [(e.payload["reason"], e.payload.get("account")) for e in fb] == [("config_dir_unshared", a)]
-    assert d.hub.runs.active[spec.run_id].claude_session is None
+    assert d.hub.runs.active[spec.run_id].claude_session == a  # run dùng thư mục của A (MCP) → chặn xoá/đăng xuất A khi đang chạy
 
 
 async def test_forced_login_custom_and_dir_error_fall_back(d, monkeypatch):

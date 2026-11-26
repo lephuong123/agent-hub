@@ -174,7 +174,10 @@ def resolve_capabilities(raw: Any) -> dict[str, Any]:
         connectors = tuple(dict.fromkeys(slugs))
     elif conns_raw is not None and not isinstance(conns_raw, list):
         warnings.append("connectors không phải danh sách → tắt")
-    return {"profile": profile, "tools": frozenset(ts), "web": web, "connectors": connectors, "warnings": warnings}
+    # null (mặc định) = tự động: mọi connector tài khoản đã Connect khi có phiên claude.ai + `connectors.auto` (như agent thường);
+    # danh sách người đặt thắng; [] = tắt hẳn
+    return {"profile": profile, "tools": frozenset(ts), "web": web, "connectors": connectors, "connectors_auto": conns_raw is None,
+            "warnings": warnings}
 
 
 def _deep_keys(obj: Any, prefix: str = "") -> list[str]:

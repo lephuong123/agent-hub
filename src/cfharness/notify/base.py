@@ -40,7 +40,7 @@ def _retry_after(e: BaseException) -> float | None:
         if headers is not None and (getattr(resp, "status_code", None) or getattr(resp, "code", None)) == 429:
             try:
                 v = headers.get("Retry-After")
-            except Exception:  # pragma: no cover
+            except Exception:  # best-effort: header lạ của thư viện HTTP → coi như không có Retry-After
                 v = None
     try:
         f = float(v) if v is not None else None
@@ -61,7 +61,15 @@ class QueuedNotifier:
 
     # ------------------------------------------------------------------ cấu hình (lớp con ghi đè)
     def cfg(self) -> dict[str, Any]:
-        return dict(self.hub.config.get(f"notify.{self.channel}") or {})
+        # gọi ở MỌI event của bus → nhớ theo revision của config (plan-api-caching PR1); trả bản sao nông như trước
+        rev = getattr(self.hub.config, "revision", None)  # config giả (test) không có revision → không nhớ
+        if rev is None:
+            return dict(self.hub.config.get(f"notify.{self.channel}") or {})
+        memo = getattr(self, "_cfg_memo", None)
+        if memo is None or memo[0] != rev:
+            memo = (rev, dict(self.hub.config.get(f"notify.{self.channel}") or {}))
+            self._cfg_memo = memo
+        return dict(memo[1])
 
     def _secret(self, name: str | None) -> str | None:
         if not name:
@@ -87,13 +95,14 @@ class QueuedNotifier:
     def __call__(self, ev: HubEvent) -> None:
         from ..hub_freeze import frozen
 
-        if frozen(self.hub):  # hub đã chuyển nhà sang máy khác (hub_freeze): máy này không gửi gì ra kênh ngoài
-            return
         events = self.cfg().get("events") or []
         # approval.escalated = "người được hỏi lần đầu" → nhận ở mọi cấu hình đã nhận approval.open (danh sách cũ người tự đặt)
         # đề xuất golden có nút = bản một chạm của `golden.suggested` → nhận ở mọi cấu hình đã nhận golden.suggested
+        # Lọc theo loại TRƯỚC (rẻ, loại ngay message.delta/progress) rồi mới hỏi DB `frozen` — plan-api-caching PR1
         if ev.type not in events and not (ev.type == "approval.escalated" and "approval.open" in events) \
                 and not (ev.type == "golden.suggestion_opened" and "golden.suggested" in events):
+            return
+        if frozen(self.hub):  # hub đã chuyển nhà sang máy khác (hub_freeze): máy này không gửi gì ra kênh ngoài
             return
         if self._delegated(ev):
             return

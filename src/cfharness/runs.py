@@ -535,8 +535,8 @@ class RunManager:
         conn: dict[str, Any] | None = None
         if guard_on:
             conns = run_connectors(hub, agent, is_mgr)
-            if not conns and auto_connectors and not is_mgr:
-                conns = ("*",)  # connectors.auto: mọi connector tài khoản claude.ai (/login) đã Connect
+            if not conns and auto_connectors:
+                conns = ("*",)  # connectors.auto: mọi connector tài khoản claude.ai (/login) đã Connect (cả điều phối viên chưa đặt riêng)
             if conns:
                 from .manager.connectors import run_setup
 
@@ -546,6 +546,14 @@ class RunManager:
         # tài khoản đang dùng — run làm việc bỏ --strict-mcp-config, không gán/lọc theo agent, guard không chặn/hỏi tool MCP bên thứ
         # ba. Run kỹ thuật (review/eval/curator/graph_extract, bản sao eval) giữ strict. Chỉ gỡ server trỏ về CHÍNH hub (H-18).
         open_mcp = self._open_mcp(run)
+        if open_mcp and conn is None:
+            # MCP user-scope (`.claude.json` của tài khoản) chỉ được claude nạp khi nguồn setting `user` bật — `--setting-sources ""`
+            # (cô lập mặc định) bỏ LUÔN mcpServers user-scope (kiểm claude 2.1.332). Cùng đường với run connector (không connector nào):
+            # nguồn `user`, plugin của người tắt qua --settings, hook/MCP của người coi là đã biết (không isolation.violation).
+            from .manager.connectors import run_setup
+
+            conn = run_setup((), config_dir=mcp_dir or connector_dir)
+            settings = {**settings, **conn["settings_patch"]}
         account_mcp: dict[str, dict[str, Any]] = {}
         mcp_deny: list[str] = []
         if open_mcp:
@@ -833,6 +841,12 @@ class RunManager:
         if cdir is None or not aid or not Path(cdir).exists():
             return None
         d, why = self._shared_config_dir(aid)
+        if d is None and why == "config_dir_unshared":
+            # MCP đi theo TÀI KHOẢN đang dùng (người chọn): vẫn dùng thư mục của nó dù `projects` không liên kết được về cây
+            # session chung (hiếm — Windows đã dùng junction) — đổi lại `--resume` session chéo tài khoản không được
+            log.warning("run %s: thư mục cấu hình claude của tài khoản %s không dùng chung session (%s) — vẫn dùng cho MCP; "
+                        "resume chéo tài khoản sẽ không được", run.get("id"), aid, why)
+            return Path(cdir)
         if d is None:
             log.warning("run %s: không dùng được thư mục cấu hình claude của tài khoản %s (%s) — MCP lấy từ cấu hình mặc định",
                         run.get("id"), aid, why)
@@ -1412,7 +1426,8 @@ class RunManager:
                                acct: tuple[str | None, Path | None] = (None, None)) -> bool:
         """`connectors.auto` (chỉ người): run LÀM VIỆC của agent chưa đặt connector riêng tự nạp mọi connector claude.ai mà phiên
         claude.ai CỦA TÀI KHOẢN ĐANG DÙNG đã Connect. Không có phiên → không bật (token setup-token không nạp connector, khỏi nạp
-        cấu hình user). Không áp cho điều phối viên (manager.capabilities.connectors) và run kỹ thuật (review/eval/curator/graph_extract)."""
+        cấu hình user). Điều phối viên: chỉ khi `manager.capabilities.connectors` chưa đặt (null); không áp cho run kỹ thuật
+        (review/eval/curator/graph_extract)."""
         if not self.hub.config.get("connectors.auto") or not self.hub.config.get("guard.enabled"):
             return False
         if os.environ.get("CFHARNESS_CONNECTORS_AUTO", "").lower() in ("off", "0", "false"):  # bộ test chung (tests/conftest.py)
@@ -1421,7 +1436,12 @@ class RunManager:
 
         if ar.kind in NON_WORK_KINDS or str(run.get("kind") or "") in NON_WORK_KINDS:
             return False
-        if (run.get("run_opts") or {}).get("hub_self") == "manager" or (agent.get("tool_policy") or {}).get("connectors"):
+        if (run.get("run_opts") or {}).get("hub_self") == "manager":
+            # điều phối viên: `manager.capabilities.connectors` CHƯA đặt (null, mặc định) = tự động như agent; danh sách/[] người đặt thắng
+            mgr = getattr(self.hub, "manager", None)
+            if mgr is None or not mgr.perms.capabilities().get("connectors_auto"):
+                return False
+        elif (agent.get("tool_policy") or {}).get("connectors"):
             return False
         if str(self.hub.config.get("runtime.claude.connectors_auth") or "auto") == "token":
             return False

@@ -168,7 +168,7 @@ class SacApp:
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; "
                                "base-uri 'none'; form-action 'self'",
-    "Referrer-Policy": "no-referrer",
+    "Referrer-Policy": "same-origin",  # no-referrer làm Chrome/Safari gửi `Origin: null` cho form POST → "Bad Origin"
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Cache-Control": "no-store",
@@ -277,6 +277,8 @@ def build(app: SacApp) -> Starlette:
                     raise
                 return NOT_FOUND
             qr = info.get("qr_svg")
+            if qr and "xmlns=" not in qr.split(">", 1)[0]:  # SVG dạng ảnh (data:) bắt buộc có xmlns, không thì trình duyệt không vẽ
+                qr = qr.replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ', 1)
             return app.render(request, "enroll.html", None, info=info, code=code,
                               qr=("data:image/svg+xml;base64," + base64.b64encode(qr.encode()).decode()) if qr else None)
         if not app._origin_ok(request):
@@ -328,8 +330,8 @@ def build(app: SacApp) -> Starlette:
                 detail = " — " + "; ".join(f"{x.get('field')}: {x.get('error')}" for x in e.data[:3] if isinstance(x, dict))
             s.flash("err", f"{label or name}: {e.message}{detail}")
             return RedirectResponse(nxt, status_code=303)
-        views.after_op(s, name, r)
-        s.flash("ok", f"{label or views.OP_LABEL.get(name, name)}: xong")
+        if not views.after_op(s, name, r):
+            s.flash("ok", f"{label or views.OP_LABEL.get(name, name)}: xong")
         jid = r.get("job_id") if isinstance(r, dict) else None
         if jid:
             return RedirectResponse(f"/jobs/{jid}", status_code=303)

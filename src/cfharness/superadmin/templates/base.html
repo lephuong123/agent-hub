@@ -9,7 +9,7 @@
 <script src="/static/sac.js" defer></script>
 </head>
 <body>
-{% from "_m.html" import op_form, pill, form_open %}
+{% from "_m.html" import op_form, pill, form_open with context %}
 {% if sess %}
 <header class="top">
   <button class="menu-btn" type="button" data-toggle="nav" aria-label="Menu">☰</button>

@@ -204,10 +204,11 @@ async def test_run_loads_account_mcp_without_strict(d, tmp_path):
     run_id, spec, _ = await _run(d)
     mcp = json.loads(spec.mcp_config_path.read_text(encoding="utf-8"))["mcpServers"]
     assert "hub-guard" in mcp and not {"jira", "gh", "other"} & set(mcp)  # mcp.json: CHỈ server của hub
-    assert spec.isolation_overrides == {"strict_mcp_config": False}
+    # `--setting-sources ""` bỏ cả mcpServers user-scope (claude 2.1.332) → run làm việc dùng nguồn `user`
+    assert spec.isolation_overrides == {"setting_sources": "user", "strict_mcp_config": False}
     assert spec.allowed_mcp_servers is None  # nạp MCP của tài khoản: không isolation.violation theo tên server
     argv, _ = build_argv(spec, dict(DEFAULTS["runtime"]["claude"]))
-    assert "--strict-mcp-config" not in argv and argv[argv.index("--setting-sources") + 1] == ""
+    assert "--strict-mcp-config" not in argv and argv[argv.index("--setting-sources") + 1] == "user"
     assert [x for x in _dis(argv) if x.startswith("mcp__")] == ["mcp__selfhub__*"]  # chỉ server trỏ về CHÍNH hub (H-18)
     assert "ToolSearch" in spec.tool_policy["tools"]
     # CLAUDE_CONFIG_DIR = thư mục của tài khoản đang dùng (đã có) — server/token MCP của claude theo thư mục đó
@@ -215,8 +216,8 @@ async def test_run_loads_account_mcp_without_strict(d, tmp_path):
     if shared:
         assert spec.claude_config_dir == cdir and d.hub.runs.active[run_id].claude_session == a
         assert env["CLAUDE_CONFIG_DIR"] == str(cdir)
-    else:  # không dựng được thư mục dùng chung session → cảnh báo, chạy bằng cấu hình mặc định (không hỏng run)
-        assert spec.claude_config_dir is None and "CLAUDE_CONFIG_DIR" not in env
+    else:  # không liên kết được cây session chung → MCP vẫn theo thư mục của tài khoản (chỉ mất resume chéo tài khoản)
+        assert spec.claude_config_dir == cdir and env["CLAUDE_CONFIG_DIR"] == str(cdir)
     init = {"type": "system", "subtype": "init", "session_id": "s", "tools": [], "plugins": [],
             "mcp_servers": [{"name": "jira", "status": "needs-auth"}, {"name": "claude.ai Slack", "status": "connected"},
                             {"name": "evil", "status": "connected"}, {"name": "hub-guard", "status": "connected"}]}
@@ -231,7 +232,7 @@ async def test_account_without_config_dir_uses_default(d, tmp_path):
     d.hub.accounts.use(a)
     d.hub.agents.create({"id": "w1", "name": "w1", "model": "haiku", "tool_policy": {"tools": TOOLS}})
     _, spec, _ = await _run(d)
-    assert spec.claude_config_dir is None and spec.isolation_overrides == {"strict_mcp_config": False}
+    assert spec.claude_config_dir is None and spec.isolation_overrides == {"setting_sources": "user", "strict_mcp_config": False}
     argv, _ = build_argv(spec, dict(DEFAULTS["runtime"]["claude"]))
     assert "--strict-mcp-config" not in argv and [x for x in _dis(argv) if x.startswith("mcp__")] == ["mcp__selfhub__*"]
 
@@ -248,6 +249,8 @@ async def test_guard_off_allows_account_mcp_tools(d, tmp_path):
     assert "mcp__selfhub" not in allowed and "mcp__*" not in allowed
     argv, _ = build_argv(spec, dict(DEFAULTS["runtime"]["claude"]))
     assert "--strict-mcp-config" not in argv and "mcp__jira" in argv[argv.index("--allowedTools") + 1:]
+    assert argv[argv.index("--setting-sources") + 1] == "user"  # guard tắt (không connector) vẫn nạp MCP user-scope
+    assert spec.connectors is None and spec.auth_mode == "token"  # không chuyển sang phiên claude.ai chỉ vì MCP
 
 
 async def test_chrome_mode_removes_only_playwright(d, tmp_path):
@@ -472,3 +475,17 @@ async def test_managed_playwright_removed_and_guard_forbids_in_chrome_mode(d, tm
     assert "mcp__orgbrowser__*" not in (sn.tool_policy.get("disallowed_tools") or [])
     assert classify("mcp__orgbrowser__browser_navigate", {}, d.hub.guard.context_for(d.hub.store.get_run(rn))).verdict == "safe"
     assert "@playwright" not in json.dumps(await rpc(d, "mcp.list", {}))
+
+
+async def test_account_mcp_dir_used_even_when_session_tree_unshared(d, tmp_path, monkeypatch):
+    """Đổi tài khoản → MCP đổi theo: thư mục của tài khoản được dùng cho MCP cả khi `projects` không liên kết được (mất resume chéo)."""
+    a, _, cdir = _acct(d)
+    _write_cj(tmp_path / "claude-home")
+    (cdir / ".claude.json").write_text(json.dumps({"mcpServers": {"acct-only": {"type": "http", "url": "https://acct.example/mcp"}}}),
+                                       encoding="utf-8")
+    monkeypatch.setattr(claude_config, "shared", lambda _d: False)
+    d.hub.agents.create({"id": "w1", "name": "w1", "model": "haiku", "tool_policy": {"tools": TOOLS}})
+    _, spec, _ = await _run(d)
+    assert spec.claude_config_dir == cdir
+    env = ClaudeCliRuntime(dict(DEFAULTS["runtime"]["claude"]), secrets=d.hub.secrets)._run_env(spec)
+    assert env["CLAUDE_CONFIG_DIR"] == str(cdir)
