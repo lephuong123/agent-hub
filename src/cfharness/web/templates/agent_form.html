@@ -56,6 +56,7 @@
   <details {{ 'open' if agent }}>
     <summary>Nâng cao</summary>
     <div class="fgrid">
+      <label>Runtime <select name="runtime">{% for k, label in runtimes %}<option value="{{ k }}" {{ 'selected' if (v.runtime or 'claude') == k }}>{{ label }}</option>{% endfor %}</select><span class="hint">codex/grok: đăng nhập tài khoản của chính bạn (<code>codex login</code> / <code>grok login</code>); không có connector claude.ai, plugin, subagent</span></label>
       <label>Model <select name="model"><option value="">{{ '(theo mẫu)' if not agent else '' }}</option>{% for x in models %}<option value="{{ x }}" {{ 'selected' if v.model == x }}>{{ x }}</option>{% endfor %}
         {% if v.model and v.model not in models %}<option value="{{ v.model }}" selected>{{ v.model }}</option>{% endif %}</select></label>
       <label>Mức suy nghĩ (effort) <select name="effort"><option value="">(mặc định)</option>{% for x in efforts %}<option value="{{ x }}" {{ 'selected' if v.effort == x }}>{{ x }}</option>{% endfor %}</select></label>

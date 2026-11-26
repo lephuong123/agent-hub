@@ -1,5 +1,12 @@
 {% extends "settings/_layout.html" %}
-{% block title %}Tài khoản Claude · Cài đặt{% endblock %}
-{% block h1 %}Tài khoản Claude{% endblock %}
-{% block sub %}Tài khoản agent dùng để chạy, connector claude.ai theo từng tài khoản.{% endblock %}
-{% block body %}{% include "_accounts.html" %}{% endblock %}
+{% block title %}Tài khoản AI · Cài đặt{% endblock %}
+{% block h1 %}Tài khoản AI{% endblock %}
+{% block sub %}Tài khoản agent dùng để chạy: Claude (connector claude.ai theo từng tài khoản), ChatGPT (Codex), Grok.{% endblock %}
+{% block body %}{% include "_accounts.html" %}
+{% include "_runtime_accounts.html" %}
+{% import "settings/_cfg.html" as C with context %}
+<section class="card" id="rt-settings"><h2>Cấu hình ChatGPT (Codex) &amp; Grok</h2>
+  <p class="muted small">Sandbox, chế độ hỏi duyệt, cô lập — khoá bảo vệ: {% if cfg_local %}đổi cần xác nhận 2 lần.{% else %}chỉ xem qua link public.{% endif %}
+    Đường dẫn CLI, model, effort mặc định: mục <b>Cấu hình</b> trong từng thẻ ở trên.</p>
+  {% for g in groups %}{{ C.group(g, "/settings/accounts", open=False) }}{% endfor %}
+</section>{% endblock %}

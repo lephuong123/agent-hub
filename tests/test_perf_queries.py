@@ -209,7 +209,7 @@ def test_v36_applies_on_existing_db(tmp_path):
     s = Store(path)
     for name in ("tasks_current_run", "runs_kind_queued", "events_agent_epoch_seq"):
         s.conn.execute(f"DROP INDEX {name}")
-    s.conn.execute(f"PRAGMA user_version={len(MIGRATIONS) - 1}")  # DB cũ: dừng ở v35
+    s.conn.execute("PRAGMA user_version=35")  # DB cũ: dừng ở v35 (ghim số — migration sau v36 không làm lệch test)
     s.close()
     s = Store(path)
     try:

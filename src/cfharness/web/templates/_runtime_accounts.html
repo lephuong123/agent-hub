@@ -1,0 +1,95 @@
+{#- Thẻ "Tài khoản ChatGPT (Codex)" / "Tài khoản Grok" (web/runtime_account_pages.py; partial /partials/runtime-accounts).
+    Nhiều tài khoản mỗi runtime như "Tài khoản Claude". Hiện NGAY trạng thái đã cache; poll 3 s chỉ khi đang kiểm ngầm / chờ đăng nhập.
+    Hub không nhận token: chỉ hiện link + mã một lần do CLI cấp. Ô form KHÔNG đặt tên `method` (che `form.method` → JS lỗi khoá phiên). -#}
+{% import "_macros.html" as m with context %}
+<div id="rt-accounts"{% if rt_busy %} hx-get="/partials/runtime-accounts" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+{% if rt_error %}<section class="card"><p class="banner warn">{{ m.icon('alert') }} {{ rt_error }}</p></section>{% endif %}
+{% for c in rt_cards %}{% set lg = c.login or {} %}{% set nx = "/settings/accounts#rt-" ~ c.kind %}
+<section class="card {{ 'attention' if lg.state == 'pending' }}" id="rt-{{ c.kind }}">
+  <div class="card-head"><h2>{{ m.icon('bot') }} Tài khoản {{ c.label }}</h2>
+    {% for a in c.accounts if a.active %}<span class="pill accent">đang dùng: {{ a.label }}</span>{% endfor %}</div>
+  <p class="muted small">Agent chọn runtime <b>{{ c.kind }}</b> (form agent → Nâng cao → Runtime) chạy bằng tài khoản <b>Đang dùng</b>; bấm <b>Dùng</b>
+    ở tài khoản khác để đổi (hub không tự đổi). Mỗi tài khoản là phiên đăng nhập của CLI <code>{{ c.kind }}</code> trên máy chạy hub — hub không lưu token.
+    Dùng tài khoản <b>của chính bạn</b> (điều khoản cấm dùng chung). Guard vẫn duyệt từng lệnh, sửa file, tool MCP như run Claude.</p>
+  {% if not c.binary %}<p class="banner warn small">{{ m.icon('alert') }} Không tìm thấy CLI <code>{{ c.configured or c.kind }}</code> —
+    {% if c.kind == 'codex' %}cài: <code>npm i -g @openai/codex</code>{% else %}cài theo hướng dẫn ở <code>x.ai/cli</code>{% endif %}, rồi đặt đường dẫn ở <b>Cấu hình</b> bên dưới.</p>{% endif %}
+
+  <table class="tbl stack acct"><thead><tr><th>Tài khoản</th><th>Trạng thái</th><th>Kiểm lần cuối</th><th></th></tr></thead><tbody>
+  {% for a in c.accounts %}<tr id="rt-{{ c.kind }}-{{ a.id }}">
+    <td data-label="Tài khoản"><b>{{ a.label }}</b>{% if a.active %} <span class="pill ok strong">{{ m.icon('check') }}Đang dùng</span>{% endif %}
+      {% if a.machine %}<div class="muted small">đăng nhập sẵn của <code>{{ c.kind }}</code> trên máy ({{ '~/.codex' if c.kind == 'codex' else '~/.grok' }})</div>{% endif %}
+      {% if a.email %}<div class="small">{{ a.email }}</div>{% endif %}
+      {% if a.workspace %}<div class="muted small">workspace: {{ a.workspace }}</div>{% endif %}</td>
+    <td data-label="Trạng thái"><span class="pill {{ a.tone }}">{{ a.chip }}</span>{% if a.plan_label %} <span class="pill accent">{{ a.plan_label }}</span>{% endif %}
+      {% if a.checking and a.checked_at %} <span class="muted small">đang kiểm lại…</span>{% endif %}
+      {% if a.limits %}<div class="small">hạn mức: {{ a.limits|join(' · ') }}</div>{% endif %}
+      {% if a.models %}<div class="muted small">model: {{ a.models|join(', ') }}</div>{% endif %}
+      {% if a.error and not a.logged_in %}<div class="small danger-t">{{ a.error }}</div>{% endif %}</td>
+    <td data-label="Kiểm lần cuối">{{ m.rel(a.checked_at) }}</td>
+    <td class="actions"><div class="row gap wrap-row">
+      {% if not a.active %}{{ m.act("rtacct_use", "Dùng", {"kind": c.kind, "id": a.id, "name": a.label}, "btn sm primary",
+          confirm="Dùng tài khoản «" ~ a.label ~ "» cho mọi agent chạy " ~ c.label ~ "? Run mới dùng tài khoản này; run đang chạy giữ tài khoản cũ.", next=nx) }}{% endif %}
+      {{ m.act("rtacct_refresh", "Kiểm tra", {"kind": c.kind, "id": a.id}, "btn sm", next=nx) }}
+      {% if c.binary and lg.state != 'pending' and (a.logged_in is sameas false or a.machine) %}
+        {{ m.act("rtacct_login", "Đăng nhập" if not a.logged_in else "Đăng nhập lại", {"kind": c.kind, "id": a.id, "via": "device"}, "btn sm" ~ (" primary" if a.logged_in is sameas false else ""), next=nx) }}{% endif %}
+      {% if a.logged_in %}{{ m.act("rtacct_logout", "Đăng xuất", {"kind": c.kind, "id": a.id, "name": a.label}, "btn sm ghost",
+          confirm="Đăng xuất tài khoản " ~ c.label ~ " «" ~ a.label ~ "»? Agent dùng tài khoản này sẽ không chạy được tới khi đăng nhập lại.", next=nx) }}{% endif %}
+      {% if not a.machine %}{{ m.act("rtacct_rm", "Xoá", {"kind": c.kind, "id": a.id, "name": a.label}, "btn sm ghost",
+          confirm="Xoá tài khoản " ~ c.label ~ " «" ~ a.label ~ "» khỏi hub? Phiên đăng nhập bị xoá; muốn dùng lại phải đăng nhập lần nữa.", next=nx) }}{% endif %}
+    </div></td></tr>
+  {% endfor %}
+  </tbody></table>
+
+  {% if lg.state == 'pending' %}
+  <div class="pairbox">
+    <p><b>{{ 'Thêm tài khoản' if lg.new else 'Đăng nhập' }} «{{ lg.label }}»</b></p>
+    <p>{{ m.icon('external') }} <b>1.</b> Mở <a href="{{ lg.url }}" target="_blank" rel="noopener noreferrer">{{ 'trang đăng nhập' if lg.method == 'browser' else lg.url }}</a>
+      và đăng nhập tài khoản {{ c.label }} của bạn{% if c.kind == 'codex' %} (chọn đúng workspace, vd Business){% endif %}.</p>
+    {% if lg.code %}<p><b>2.</b> Nhập mã: <span class="pair-code"><code>{{ lg.code }}</code></span></p>{% endif %}
+    {% if lg.method == 'browser' %}<p class="muted small">Đăng nhập qua trình duyệt chỉ chạy khi bạn mở web này trên <b>chính máy chạy hub</b> (trang đăng nhập trả về localhost).</p>{% endif %}
+    <p class="muted small">Đang chờ bạn xác nhận… trang tự cập nhật. Mã dùng một lần, hết hạn sau 15 phút.</p>
+    {{ m.act("rtacct_cancel", "Huỷ", {"kind": c.kind}, "btn sm ghost", next=nx) }}
+  </div>
+  {% elif lg.state == 'done' %}
+  <p class="banner ok small">{{ m.icon('check') }} {{ 'Đã thêm' if lg.new else 'Đã đăng nhập' }} «{{ lg.label }}».{% if not lg.new %}{% for a in c.accounts if a.id == lg.account_id and not a.active %} Bấm <b>Dùng</b> để agent chạy bằng tài khoản này.{% endfor %}{% else %} Bấm <b>Dùng</b> để agent chạy bằng tài khoản này.{% endif %}
+    {% if c.kind == 'grok' and not lg.new %}<span class="muted">Muốn đổi sang tài khoản Grok khác: <b>Thêm tài khoản</b> (hoặc Đăng xuất trước — còn phiên thì <code>grok login</code> dùng lại phiên cũ).</span>{% endif %}</p>
+  {% elif lg.state == 'failed' %}
+  <p class="banner danger small">{{ m.icon('alert') }} Đăng nhập «{{ lg.label }}» không thành công: {{ lg.error or 'lỗi không rõ' }}
+    {% if c.device_disabled %}<br>Workspace chưa bật <b>device code sign-in</b> (ChatGPT → Settings → Security; workspace Business: admin bật ở Permissions) —
+    hoặc dùng <b>Đăng nhập qua trình duyệt</b>.{% endif %}</p>
+  {% endif %}
+
+  {% if c.binary and lg.state != 'pending' %}
+  <details class="acct-add" {{ 'open' if c.accounts|length == 1 and c.accounts[0].logged_in is sameas false }}>
+    <summary>Thêm tài khoản {{ c.label }}</summary>
+    <form method="post" action="/do/rtacct_login" class="form" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="kind" value="{{ c.kind }}"><input type="hidden" name="new" value="1">
+      <input type="hidden" name="next" value="{{ nx }}">
+      <label>Tên tài khoản <input name="label" required maxlength="60" placeholder="VD: Công ty, Cá nhân"></label>
+      <p class="muted small">Hub mở lượt đăng nhập của CLI vào thư mục phiên RIÊNG cho tài khoản này (không đụng phiên của máy) và đưa bạn link + mã.</p>
+      <div class="row end gap">
+        {% if c.kind == 'codex' %}<button class="btn sm" type="submit" name="via" value="browser">Qua trình duyệt</button>{% endif %}
+        <button class="btn sm primary" type="submit" name="via" value="device">Đăng nhập bằng mã</button>
+      </div>
+    </form>
+  </details>
+  {% endif %}
+
+  <details {{ 'open' if not c.binary }}>
+    <summary>Cấu hình {{ c.label }}{% if c.binary %} <span class="muted small">— <code>{{ c.binary }}</code>{% if c.version %} v{{ c.version }}{% endif %} · model {{ c.model or 'theo tài khoản' }} · effort {{ c.effort or 'mặc định' }}</span>{% endif %}</summary>
+    <form method="post" action="/do/rtacct_config" class="form" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="kind" value="{{ c.kind }}">
+      <input type="hidden" name="next" value="{{ nx }}">
+      <div class="fgrid">
+        <label class="span2">Đường dẫn CLI <input name="binary" value="{{ c.configured or c.kind }}" list="rt-cand-{{ c.kind }}" spellcheck="false">
+          <datalist id="rt-cand-{{ c.kind }}">{% for x in c.candidates or [] %}<option value="{{ x }}">{% endfor %}</datalist>
+          <span class="hint">{% if c.candidates %}Tìm thấy: {% for x in c.candidates %}<code>{{ x }}</code>{{ ', ' if not loop.last }}{% endfor %}{% else %}tên lệnh trong PATH hoặc đường dẫn đầy đủ (để <code>{{ c.kind }}</code> = tự dò){% endif %}</span></label>
+        <label>Model mặc định <input name="model" value="{{ c.model or '' }}" placeholder="trống = theo tài khoản" spellcheck="false"></label>
+        <label>Effort mặc định <select name="effort"><option value="">(mặc định)</option>{% for x in efforts %}<option value="{{ x }}" {{ 'selected' if c.effort == x }}>{{ x }}</option>{% endfor %}</select></label>
+      </div>
+      <div class="row end gap"><button class="btn sm" type="submit">Lưu</button></div>
+    </form>
+  </details>
+</section>
+{% endfor %}
+</div>

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
 from . import names as _names
 from .config import VALID_PERMISSION_MODES, HubConfig
@@ -50,7 +50,11 @@ EDITABLE = (
     "result_schema",
     # plugin Claude Code nạp cho run qua `--plugin-dir` (plugins.py) — chỉ người đặt (không có trong manager AGENT_FIELDS)
     "plugins",
+    # runtime chạy agent: claude (mặc định) | codex (gói ChatGPT) | grok (Grok Build) — plan-codex-grok-runtime; chỉ người đặt
+    "runtime",
 )
+RUNTIMES = ("claude", "codex", "grok")
+NATIVE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$")
 # trường cũ được NHẬN rồi BỎ QUA (YAML agent / gói chuyển hub / client cũ): `mcp_servers` — MCP gán theo agent, bỏ từ
 # plan-mcp-claude-native PR7 (mọi agent dùng chung MCP của tài khoản Claude; migration v35 làm rỗng cột)
 IGNORED_FIELDS = ("mcp_servers",)
@@ -69,6 +73,10 @@ Role: {role}
 
 def _valid_model(m: str) -> bool:
     return m in MODEL_ALIASES or m.startswith("claude-")
+
+
+def is_claude_model(m: str | None) -> bool:
+    return bool(m) and _valid_model(str(m))
 
 
 class ToolPolicy(BaseModel):
@@ -134,6 +142,8 @@ class AgentConfig(BaseModel):
     name: str
     role: str = ""
     description: str = ""
+    # khai báo TRƯỚC `model`: kiểm model theo runtime (Claude: alias/claude-…; codex/grok: id model của nhà cung cấp hoặc "default")
+    runtime: Literal["claude", "codex", "grok"] = "claude"
     model: str = "sonnet"
     effort: str | None = None
     fallback_model: str | None = None
@@ -166,12 +176,40 @@ class AgentConfig(BaseModel):
             raise ValueError("id phải là slug: chữ thường, số, '-' hoặc '_', bắt đầu bằng chữ/số, ≤ 63 ký tự")
         return v
 
+    @field_validator("runtime", mode="before")
+    @classmethod
+    def _runtime(cls, v: Any) -> str:
+        return "claude" if v in (None, "") else v
+
     @field_validator("model")
     @classmethod
-    def _model(cls, v: str) -> str:
+    def _model(cls, v: str, info: ValidationInfo) -> str:
+        rt = info.data.get("runtime") or "claude"
+        if rt != "claude":
+            if _valid_model(v):  # model Claude (mặc định "sonnet") trên runtime khác = model mặc định của tài khoản
+                return "default"
+            if not NATIVE_MODEL_RE.match(v):
+                raise ValueError(f"model không hợp lệ cho runtime {rt}: id model của nhà cung cấp (vd gpt-5.6-luna, grok-4.7) hoặc 'default'")
+            return v
+        if v == "default":  # đổi runtime codex/grok → claude: model mặc định của runtime cũ = sonnet
+            return "sonnet"
         if not _valid_model(v):
             raise ValueError(f"model không hợp lệ: dùng {'/'.join(MODEL_ALIASES)} hoặc id đầy đủ 'claude-…'")
         return v
+
+    @model_validator(mode="after")
+    def _runtime_features(self) -> "AgentConfig":
+        """Tính năng chỉ Claude Code có — từ chối rõ ràng thay vì lặng lẽ bỏ qua khi agent chạy trên runtime khác."""
+        if self.runtime == "claude":
+            return self
+        if _valid_model(self.model):  # giá trị mặc định "sonnet" không đi qua field validator
+            self.model = "default"
+        bad =[n for n, on in (("subagents", bool(self.subagents)), ("result_schema", bool(self.result_schema)),
+                               ("plugins", bool(self.plugins)), ("fallback_model", bool(self.fallback_model)),
+                               ("tool_policy.connectors", bool(self.tool_policy.connectors))) if on]
+        if bad:
+            raise ValueError(f"runtime {self.runtime} không hỗ trợ: {', '.join(bad)} (chỉ có ở runtime claude)")
+        return self
 
     @field_validator("fallback_model")
     @classmethod

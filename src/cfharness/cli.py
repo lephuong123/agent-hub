@@ -424,6 +424,13 @@ def cmd_doctor(ctx: Ctx) -> int:
                 add("tỉ lệ event lạ (raw.unknown, 1 giờ)", not ur.get("alert"), f"{ur.get('unknown', 0)}/{ur.get('total', 0)} ({(ur.get('rate') or 0) * 100:.1f}%)", "error")
         except Exception:  # best-effort: kiểm compat trong doctor là phụ
             pass
+    try:  # runtime codex/grok theo agent — chỉ kiểm khi CLI đã cài (runtime/doctor.py)
+        from .runtime.doctor import runtime_checks
+
+        for name, ok, detail, level in runtime_checks(cfg):
+            add(name, ok, detail, level)
+    except Exception as e:  # noqa: BLE001 — kiểm phụ không làm hỏng doctor
+        add("runtime codex/grok", False, f"không kiểm được: {e}", "warning")
     bad = [c for c in checks if c["level"] == "error"]
     text = "\n".join(f"{'✓' if c['ok'] else ('!' if c['level'] == 'warning' else '✗')} {c['check']}: {c['detail']}" for c in checks)
     ctx.out({"ok": not bad, "checks": checks}, text, lambda: V.doctor(checks, ctx.mode, home=str(ctx.paths.home), width=ctx.width))
@@ -458,6 +465,8 @@ def _agent_payload(a: argparse.Namespace, *, creating: bool) -> dict[str, Any]:
         d["tool_policy"] = tp
     if getattr(a, "mcp", None):
         eprint("lưu ý: --mcp đã bỏ — mọi agent dùng mọi MCP của tài khoản Claude (`cfharness mcp list`); bỏ qua cờ này")
+    if getattr(a, "runtime", None) is not None:
+        d["runtime"] = a.runtime
     if getattr(a, "plugin", None) is not None:  # "none" = bỏ hết plugin
         d["plugins"] = [] if [x.strip() for x in a.plugin] == ["none"] else _split_list(a.plugin)
     lim: dict[str, Any] = {}
@@ -799,7 +808,9 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--name")
         sp.add_argument("--role")
         sp.add_argument("--description")
-        sp.add_argument("--model", help="opus|sonnet|haiku|fable hoặc id đầy đủ")
+        sp.add_argument("--runtime", choices=["claude", "codex", "grok"],
+                        help="runtime chạy agent: claude (mặc định), codex (gói ChatGPT — `codex login`), grok (Grok Build — `grok login`)")
+        sp.add_argument("--model", help="claude: opus|sonnet|haiku|fable hoặc id 'claude-…'; codex/grok: id model của nhà cung cấp hoặc 'default'")
         sp.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"])
         sp.add_argument("--fallback-model")
         sp.add_argument("--permission-mode", choices=["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan", "default"])

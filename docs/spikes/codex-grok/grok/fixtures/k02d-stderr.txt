@@ -1,0 +1,2 @@
+warning: sandbox could not be applied: this build has no sandbox enforcement for this platform. The 'workspace' profile is not in effect.
+permission required: Write `C:\WorkSpace\agent-hub\docs\spikes\codex-grok\grok\work\k02d\created.txt` was not run, as a headless run cannot ask for approval

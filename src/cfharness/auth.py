@@ -61,6 +61,9 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "approval.approve", "approval.deny", "approval.manager_decide",
         "guard.protect.add", "guard.protect.rm", "guard.integrity.accept", "guard.sandbox.set", "guard.sandbox.allow_domain", "guard.sandbox.dev_host", "guard.trust.set", "guard.trust.set_all", "guard.grant.set", "guard.grant.rm", "guard.repo_deny.add", "guard.repo_deny.rm",
         "config.set", "auth.reset", "hub.shutdown", "estop.set", "team.estop",
+        # tài khoản runtime codex/grok (runtime/accounts.py): đăng nhập/đăng xuất CLI của người dùng — chỉ người
+        "runtime_account.list", "runtime_account.refresh", "runtime_account.detect", "runtime_account.login_start",
+        "runtime_account.login_cancel", "runtime_account.logout", "runtime_account.use", "runtime_account.rm",
         # vòng đời / cấu hình agent (tool_policy, permission_mode… là bề mặt nâng quyền)
         "agent.create", "agent.update", "agent.delete", "agent.restore", "agent.purge", "agent.clone", "agent.import",
         "agent.create_from_template", "mcp.agent_create",

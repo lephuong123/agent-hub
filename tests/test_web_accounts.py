@@ -383,7 +383,7 @@ async def test_banner_on_closed_gate(env):
 async def test_health_mentions_switch(env):
     env.status_extra = {"auth_block": {"reason": "x"}, "rate_limit": {"until": "2026-11-13T10:00:00+00:00"}, "account": {"id": "a_11111111", "label": "Công ty"}}
     h = (await get(env, "/partials/health")).text
-    assert h.count("đổi sang tài khoản khác ở mục Tài khoản Claude") == 2
+    assert h.count("đổi sang tài khoản khác ở Cài đặt › Tài khoản AI") == 2
     assert "đang dùng Công ty" in h
 
 

@@ -322,6 +322,11 @@ class ManagerPermissions:
                "`cfharness manager capabilities set --profile hermes`")
         tp = row.get("tool_policy") or {}
         tools = tp.get("tools")
+        native = (row.get("runtime") or "claude") != "claude"
+        if tools is None and native:
+            # codex/grok: tên tool Claude không áp lên CLI — khung được ÉP lúc chạy (RunManager đặt tool_policy.tools = khung cho run
+            # điều phối viên; runtime từ chối tool ngoài khung, codex sandbox read-only + tắt web khi khung không có) — không cần liệt kê
+            tools = sorted(ok_tools)
         if tools is None:
             return (f"tool_policy.tools trống (= mọi tool, có Task/subagent) — khung '{caps['profile']}' chỉ cho {fmt_tools(ok_tools)}; "
                     f"liệt kê tool rõ ràng: {fix}")

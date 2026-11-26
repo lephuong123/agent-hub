@@ -1,0 +1,6 @@
+Reading additional input from stdin...
+2026-11-25T06:35:08.642670Z ERROR codex_core::tools::router: error=exec_command failed: CreateProcess { message: "Rejected(\"`\\\"C:\\\\\\\\WINDOWS\\\\\\\\System32\\\\\\\\WindowsPowerShell\\\\\\\\v1.0\\\\\\\\powershell.exe\\\" -Command 'echo hello-x01'` rejected: blocked by policy\")" }
+2026-11-25T06:35:13.101420Z ERROR codex_core::tools::router: error=exec_command failed: CreateProcess { message: "Rejected(\"`\\\"C:\\\\\\\\WINDOWS\\\\\\\\System32\\\\\\\\WindowsPowerShell\\\\\\\\v1.0\\\\\\\\powershell.exe\\\" -Command 'Set-Content -LiteralPath inside.txt -Value A -NoNewline'` rejected: blocked by policy\")" }
+2026-11-25T06:35:17.664005Z ERROR codex_core::tools::router: error=exec_command failed: CreateProcess { message: "Rejected(\"`\\\"C:\\\\\\\\WINDOWS\\\\\\\\System32\\\\\\\\WindowsPowerShell\\\\\\\\v1.0\\\\\\\\powershell.exe\\\" -Command \\\"Set-Content -LiteralPath ..\\\\\\\\outside-ws.txt -Value B -NoNewline\\\"` rejected: blocked by policy\")" }
+2026-11-25T06:35:22.918861Z ERROR codex_core::tools::router: error=exec_command failed: CreateProcess { message: "Rejected(\"`\\\"C:\\\\\\\\WINDOWS\\\\\\\\System32\\\\\\\\WindowsPowerShell\\\\\\\\v1.0\\\\\\\\powershell.exe\\\" -Command 'curl -s -o NUL -w \\\"%{http_code}\\\" https://example.com'` rejected: blocked by policy\")" }
+exit=0 31s

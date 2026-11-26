@@ -159,7 +159,7 @@
 |---|---|---|
 | O1 | **Tự viết vòng lặp agent** (agent loop, tool registry, nén context, provider adapter) | Quyết định chốt #1: runtime = `claude` CLI |
 | O2 | **Gọi Anthropic API trực tiếp** để chạy agent, review hoặc eval | Quyết định chốt #1: mọi lượt LLM đi qua `claude` CLI |
-| O3 | **Đa nhà cung cấp model** (OpenAI, Gemini, model local…) | Phụ thuộc runtime; chỉ chừa interface `AgentRuntime` (NFR-22) |
+| O3 | ~~Đa nhà cung cấp model~~ — **thu hẹp 2026-11-25 (chủ dự án duyệt)**: runtime **theo agent** `claude` / `codex` (OpenAI Codex CLI, gói ChatGPT) / `grok` (Grok Build CLI) nay **trong phạm vi**; vẫn **ngoài** phạm vi: gọi API model trực tiếp, model local, Gemini (`agy` gói cá nhân bị FAQ Antigravity loại trừ — docs/spikes/agy-spike-report.md) | Mỗi runtime là CLI chính thức của nhà cung cấp chạy như tiến trình con, đăng nhập tài khoản của CHÍNH người dùng; hub vẫn không tự viết agent loop (docs/spikes/codex-grok-spike-report.md) |
 | O4 | **Gateway nền tảng chat tổng quát** (Zalo, Discord, nút duyệt tương tác trong Slack…) — **thu hẹp ở 0.8**: Slack thông báo (FR-SG-09) và **Telegram** (FR-TG) nay **trong phạm vi** | Chỉ làm kênh chủ sản phẩm yêu cầu; nút trong Slack cần endpoint công khai (trái O6) |
 | O5 | Chạy phân tán nhiều máy, nhiều hub, HA | Ràng buộc C-04 (1 máy) |
 | O6 | Đa người dùng, chia sẻ hub cho đồng nghiệp, truy cập qua mạng | Đã chốt Q-11: ai cài thì người đó dùng; HTTP chỉ localhost; client chỉ phân biệt read/control (FR-MS-06) |
@@ -220,7 +220,7 @@
 | C-02 | Hub **phụ thuộc phiên bản CLI**. Phiên bản tham chiếu: **2.1.302**. Định dạng `stream-json` và cờ có thể thay đổi giữa các phiên bản (R-01). |
 | C-03 | Chịu **quota / rate limit của tài khoản** Claude đang đăng nhập; mọi agent dùng chung một hạn mức. Số agent đồng thời bị chặn trên bởi hạn mức này, không phải bởi hub. |
 | C-04 | Chạy trên **một máy** (macOS là nền tảng chính — máy hiện tại là darwin; Linux là thứ yếu). Không HA, không phân tán. |
-| C-05 | Không tự viết agent loop, không gọi API trực tiếp, không đa provider (O1–O3). |
+| C-05 | Không tự viết agent loop, không gọi API trực tiếp (O1–O2). Đa provider chỉ qua CLI chính thức của nhà cung cấp làm runtime theo agent (`claude`, `codex`, `grok` — O3 đã thu hẹp 2026-11-25); mọi tool vẫn đi qua guard của hub (kênh duyệt động: hook/permission tool với Claude, `codex app-server` requestApproval, ACP `session/request_permission` với Grok). |
 | C-06 | Mức tự cải thiện theo **quyết định bổ sung lần 2** (thay quyết định #2): agent **tự** áp dụng thay đổi tri thức tầng agent/team/global, hồ sơ USER, xoá/gộp/archive skill (xoá mềm), sửa cấu hình agent (model, SOUL, toolsets, MCP, limits) — không cần người duyệt. Bù an toàn: xoá mềm, ledger + snapshot, eval gate, canary, tự rollback, giới hạn tần suất, digest. **Chỉ thao tác phá huỷ** cần người (FR-SG). Agent không được sửa chính sách an toàn. |
 | C-07 | `--bare` chỉ nhận auth qua `ANTHROPIC_API_KEY` hoặc `apiKeyHelper` (OAuth/keychain không được đọc) — đã thấy trong `claude --help`. Với tài khoản OAuth, hub **không được** dùng `--bare` làm cơ chế cô lập mặc định. |
 | C-08 | Tài liệu (BRD…), `instructions` MCP, resource hướng dẫn và thông báo TUI viết **tiếng Việt**; mã định danh (tên tool, cờ, field) giữ tiếng Anh. **Persona (SOUL), skill, memory của agent viết bằng tiếng Anh** (đã chốt Q-14). |

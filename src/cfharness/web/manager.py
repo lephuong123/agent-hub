@@ -711,10 +711,35 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
         "manager.set", lambda f: {"agent_id": _req(f, "agent_id", "agent")},
         lambda r, f: f"Đã chỉ định {f.get('agent_id')} làm điều phối viên", confirm=mgr_set_confirm, danger=True,
         goto=lambda r, f: "/manager")
+    actions["manager_create"] = Action(
+        "agent.create_from_template", _mgr_create_params,
+        lambda r, f: f"Đã tạo {f.get('agent_id')} ({_RT_LABEL.get(str(f.get('runtime')), 'Claude')}) và chỉ định làm điều phối viên",
+        call=_mgr_create, danger=True, goto=lambda r, f: "/manager")
     actions["manager_unset"] = Action(
         "manager.set", lambda f: {"agent_id": None}, "Đã huỷ chỉ định điều phối viên — hub không còn điều phối viên",
         confirm=lambda f: f"Huỷ chỉ định điều phối viên {f.get('current') or ''}?\nAgent vẫn còn (chỉ mất vai trò); nhịp tick dừng, "
                           "tin chat/Telegram không còn được chuyển cho nó.", danger=True, goto=lambda r, f: "/manager")
+
+
+_RT_LABEL = {"claude": "Claude", "codex": "ChatGPT (Codex)", "grok": "Grok"}
+
+
+def _mgr_create_params(f: Any) -> dict[str, Any]:
+    """Form "tạo điều phối viên mới": runtime claude|codex|grok — THÊM lựa chọn (agent cũ vẫn chỉ định được ở form trên)."""
+    rt = str(f.get("runtime") or "claude")
+    if rt not in _RT_LABEL:
+        raise ValueError("runtime phải là claude, codex hoặc grok")
+    aid = str(f.get("agent_id") or "").strip()
+    if not aid:
+        raise ValueError("cần mã agent")
+    name = " ".join(str(f.get("name") or "").split())[:60] or "Điều phối viên"
+    return {"id": aid, "template": "manager", "overrides": {"name": name, "runtime": rt}}
+
+
+async def _mgr_create(request: Any, p: dict[str, Any]) -> Any:
+    ag = await rpc(request, "agent.create_from_template", p, audit=True)
+    await rpc(request, "manager.set", {"agent_id": p["id"]}, audit=True)
+    return ag
 
 
 def routes() -> list[Any]:

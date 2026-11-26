@@ -181,10 +181,11 @@ async def test_manager_and_agents_cannot_change_capabilities(d):
     with pytest.raises(HubError):
         await tool(d, rid, "config_set", {"key": "manager.capabilities", "value": val})
     assert d.hub.config.get("manager.capabilities.tools") is None
-    # web không sửa được khoá này
+    # web: khoá BẢO VỆ — chỉ qua config_set_protected (máy chạy hub + xác nhận 2 bước), form thường không đổi được
     from cfharness.web.settings_schema import BY_KEY
 
-    assert not any(k.startswith(("manager.capabilities", "manager.web_domains", "manager.allow_hermes")) for k in BY_KEY)
+    mk = [k for k in BY_KEY if k.startswith(("manager.capabilities", "manager.web_domains", "manager.allow_hermes"))]
+    assert mk and all(BY_KEY[k].protected for k in mk)
     assert "manager" in SECURITY_KEYS
 
 

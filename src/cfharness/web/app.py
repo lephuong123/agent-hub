@@ -55,6 +55,7 @@ HTMX = "htmx-2.0.4.min.js"
 HEARTBEAT_S = 15.0
 CHANNEL = "web"
 MODELS = ("sonnet", "opus", "haiku", "fable")
+RUNTIME_CHOICES = (("claude", "claude (mặc định)"), ("codex", "codex — gói ChatGPT"), ("grok", "grok — Grok Build"))
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 PERMISSION_MODES = ("default", "acceptEdits", "plan", "auto", "dontAsk", "manual")
 BROWSERS = ("none", "playwright", "auto", "chrome")  # tool_policy.browser (Claude in Chrome — browser.py)
@@ -869,6 +870,7 @@ async def _agent_form_ctx(request: Request, agent: dict[str, Any] | None, values
         lim = agent.get("limits") or {}
         v = {
             "id": agent["id"], "name": agent.get("name"), "role": agent.get("role"), "description": agent.get("description"),
+            "runtime": agent.get("runtime") or "claude",
             "model": agent.get("model"), "effort": agent.get("effort") or "", "permission_mode": tp.get("permission_mode") or "",
             "browser": tp.get("browser") or "",
             "tools": ", ".join(tp.get("tools") or []),
@@ -887,7 +889,7 @@ async def _agent_form_ctx(request: Request, agent: dict[str, Any] | None, values
     if values is None or "connectors_extra" not in v:
         v["connectors_extra"] = ", ".join(x for x in v["connector_slugs"] if x not in opt_slugs)
     return {"nav": "agents", "agent": agent, "templates": templates_, "v": v, "error": error, "models": MODELS, "efforts": EFFORTS,
-            "modes": PERMISSION_MODES, "browsers": BROWSERS, **conn}
+            "modes": PERMISSION_MODES, "browsers": BROWSERS, "runtimes": RUNTIME_CHOICES, **conn}
 
 
 _CONNECTOR_TOOL_RE = re.compile(r"^mcp__claude_ai_([A-Za-z0-9_-]+?)__")
@@ -977,6 +979,11 @@ def agent_changes(form: FormData, *, creating: bool, from_template: bool) -> dic
                 continue
             else:
                 ch[k] = val
+    rt_kind = str(form.get("runtime") or "").strip()
+    if rt_kind and rt_kind not in dict(RUNTIME_CHOICES):
+        raise ValueError(f"runtime '{rt_kind}' không hợp lệ (chỉ {', '.join(dict(RUNTIME_CHOICES))})")
+    if rt_kind and (rt_kind != "claude" or not creating):  # form không có ô (client cũ) → giữ nguyên
+        ch["runtime"] = rt_kind
     eff = str(form.get("effort") or "").strip()
     if eff or not sparse:
         ch["effort"] = eff or None
@@ -1461,16 +1468,29 @@ async def _tab_safety(request: Request) -> dict[str, Any]:
     return {"estop": await rpc(request, "estop.get"), "gates": await _gates_mode(request)}
 
 
+def _local(request: Request) -> bool:
+    """Web đang dùng trên CHÍNH máy chạy hub → khoá bảo vệ sửa được (qua link public: chỉ xem)."""
+    from .file_pages import is_local_request
+
+    try:
+        return is_local_request(request)
+    except Exception:  # noqa: BLE001 — fail-closed: không xác định được = coi như public (chỉ xem)
+        return False
+
+
 async def _tab_accounts(request: Request) -> dict[str, Any]:
     status = await rpc(request, "hub.status")
+    # khối "Tài khoản Claude" (web/account_pages.py) + công tắc connector (main #235) + thẻ ChatGPT (Codex)/Grok vẽ NGAY từ cache
     groups = _settings.view(await rpc(request, "config.get") or {})["groups"]
-    return {"status": status, **await _account_pages.accounts_ctx(request, status),  # khối "Tài khoản Claude" (web/account_pages.py)
-            "conn_group": next((g for g in groups if g["id"] == "connectors"), None)}  # công tắc connector dưới khối connector
+    return {"status": status, **await _account_pages.accounts_ctx(request, status), **await _rt_account_pages.ctx(request),
+            "conn_group": next((g for g in groups if g["id"] == "connectors"), None),
+            "groups": [g for g in groups if g["id"] == "runtimes"], "cfg_local": _local(request)}
 
 
 async def _tab_config(request: Request) -> dict[str, Any]:
     cfg = _settings.view(await rpc(request, "config.get") or {})  # danh mục khoá + kiểu ô (web/settings_schema.py)
-    return {"groups": [g for g in cfg["groups"] if g["id"] not in ("notify", "connectors")]}
+    # khoá bảo vệ ở Bảo mật & thiết bị; runtime codex/grok ở Tài khoản AI; connector dưới khối connector (Tài khoản AI)
+    return {"groups": [g for g in cfg["groups"] if g["id"] not in ("notify", "security", "runtimes", "connectors")], "cfg_local": _local(request)}
 
 
 async def _tab_notifications(request: Request) -> dict[str, Any]:
@@ -1493,7 +1513,8 @@ async def _tab_secrets(request: Request) -> dict[str, Any]:
 
 
 async def _tab_security(request: Request) -> dict[str, Any]:
-    return {"trusted": _devices_view(request), "readonly": _settings.view(await rpc(request, "config.get") or {})["readonly"]}
+    cfg = _settings.view(await rpc(request, "config.get") or {})
+    return {"trusted": _devices_view(request), "groups": [g for g in cfg["groups"] if g["id"] == "security"], "cfg_local": _local(request)}
 
 
 async def _tab_system(request: Request) -> dict[str, Any]:
@@ -1639,6 +1660,27 @@ async def _config_set(request: Request, p: dict[str, Any]) -> Any:
                 raise RpcError(-32003, "Thay đổi này nới lỏng bảo vệ file — chỉ đổi được khi dùng web trên chính máy chạy hub "
                                        "(hoặc `cfharness config set` trong terminal). Qua link public chỉ được siết lại.")
     return await rpc(request, "config.set", p, audit=True)
+
+
+PROTECTED_LOCAL_ONLY = ("Khoá bảo vệ chỉ đổi được khi dùng web trên CHÍNH máy chạy hub (không qua link public/tunnel) — "
+                        "hoặc `cfharness config set` trong terminal.")
+
+
+async def _config_set_protected(request: Request, p: dict[str, Any]) -> Any:
+    """Khoá BẢO VỆ (settings_schema `protected`: guard, sandbox, hồ sơ phê duyệt, khung điều phối viên, runtime, web public…) — có thể
+    nới lỏng lớp bảo vệ: CHỈ nhận khi web dùng trên chính máy chạy hub; qua link public bị từ chối (chỉ xem). Đã qua xác nhận 2 bước."""
+    from .file_pages import is_local_request
+
+    if not is_local_request(request):
+        raise RpcError(-32003, PROTECTED_LOCAL_ONLY)
+    return await rpc(request, "config.set", p, audit=True)
+
+
+def _protected_step2(f: FormData) -> str:
+    key, value = _settings.parse_form(f, protected=True)
+    s = _settings.BY_KEY[key]
+    return (f"Khoá bảo vệ «{s.label}» ({key}) → {_settings.show(value)}.\n\nThay đổi này có thể NỚI LỎNG lớp bảo vệ của hub "
+            "(agent được làm nhiều hơn mà không hỏi bạn). Có hiệu lực ngay cho run mới, được ghi nhật ký kiểm toán. Chắc chắn đổi?")
 
 
 def _run_goto(res: Any, form: FormData) -> str | None:
@@ -1825,6 +1867,10 @@ ACTIONS: dict[str, Action] = {
     "config_set": Action("config.set", lambda f: dict(zip(("key", "value"), _settings.parse_form(f))),
                          lambda r, f: f"Đã đặt {f.get('key')} = {json.dumps((r or {}).get(f.get('key')), ensure_ascii=False)}",
                          confirm=lambda f: f"Đổi cấu hình {f.get('key')} thành '{_settings.show(_settings.parse_form(f)[1])}'?", call=_config_set),
+    "config_set_protected": Action("config.set", lambda f: dict(zip(("key", "value"), _settings.parse_form(f, protected=True))),
+                                   lambda r, f: f"Đã đổi khoá bảo vệ {f.get('key')}",
+                                   confirm=lambda f: f"Đổi khoá bảo vệ {f.get('key')} thành '{_settings.show(_settings.parse_form(f, protected=True)[1])}'?",
+                                   step2=_protected_step2, danger=True, call=_config_set_protected),
     "secret_set": Action("secret.set", lambda f: {"name": _req(f, "name", "tên secret"), "value": _req(f, "value", "giá trị")},
                          lambda r, f: f"Đã lưu secret {r.get('name')} (giá trị không bao giờ hiển thị lại)",
                          confirm=lambda f: f"Lưu secret {f.get('name')}? Nếu đã có secret cùng tên, giá trị cũ bị GHI ĐÈ.", danger=True, secret_fields=("value",)),
@@ -2384,6 +2430,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_memory_routes(),
         *_slack_pages.routes(),  # /partials/slack/pending — wizard Slack 2 chiều
         *_update_pages.routes(),  # /update, /partials/update — nút "Cập nhật hệ thống"
+        *_rt_account_pages.routes(),  # /partials/runtime-accounts — thẻ tài khoản ChatGPT (Codex) / Grok
         *_filehub_pages.routes(),  # /partials/filehub[/lane] + /filehub/open — thẻ "Không gian số" ở Cài đặt (filehub/)
         *_backup_pages.routes(),  # /partials/backup — thẻ "Sao lưu" ở Cài đặt (backup.py)
         *_support_pages.routes(),  # /partials/support + /support + tải gói một lần — "Gói chẩn đoán" (support_bundle.py, L7)
@@ -2417,6 +2464,11 @@ _slack_pages.register_actions(ACTIONS, Action, _req)
 from . import account_pages as _account_pages  # noqa: E402
 
 _account_pages.register_actions(ACTIONS, Action, _req)
+
+# Tài khoản ChatGPT (Codex) / Grok (runtime/accounts.py): rtacct_login / cancel / logout / refresh / config + thẻ ở Cài đặt → Tài khoản
+from . import runtime_account_pages as _rt_account_pages  # noqa: E402
+
+_rt_account_pages.register_actions(ACTIONS, Action, _req)
 
 # Nút "Cập nhật hệ thống" (updater.py): update_start + thẻ ở đầu Cài đặt, trang /update
 from . import update_pages as _update_pages  # noqa: E402

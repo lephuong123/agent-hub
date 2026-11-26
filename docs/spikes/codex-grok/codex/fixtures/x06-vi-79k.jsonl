@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a21173-90b2-7fb1-91d1-9509cb6c525a"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"DÒNG ĐẦU: Hệ thống điều phối agent — kiểm tra dấu: ắ ằ ẳ ẵ ặ ố ồ ổ ỗ ộ ứ ừ ử ữ ự ỹ Đ đ\nDÒNG CUỐI: Người dùng ở Hà Nội và Thành phố Hồ Chí Minh — ưu tiên tiếng Việt chuẩn ẫ ỡ ượ"}}
+{"type":"turn.completed","usage":{"input_tokens":33975,"cached_input_tokens":9600,"cache_write_input_tokens":0,"output_tokens":103,"reasoning_output_tokens":14}}

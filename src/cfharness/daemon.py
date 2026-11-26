@@ -169,6 +169,10 @@ class Daemon:
         from .accounts.rpc import register_rpc as _register_accounts
 
         _register_accounts(self)
+        # Tài khoản runtime codex/grok (trang Cài đặt): runtime_account.status|detect|login_start|login_cancel|logout (runtime/accounts.py)
+        from .runtime.accounts import register_rpc as _register_runtime_accounts
+
+        _register_runtime_accounts(self)
         # Cập nhật cfharness lên bản phát hành mới nhất: update.check|status|start (updater.py — tự bọc audit update.start)
         from .updater import register_rpc as _register_update
 

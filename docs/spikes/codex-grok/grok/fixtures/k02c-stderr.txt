@@ -1,0 +1,1 @@
+permission required: Execute `Remove-Item -Recurse -Force sandbox-dummy` was not run, as a headless run cannot ask for approval

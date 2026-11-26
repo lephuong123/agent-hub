@@ -85,8 +85,10 @@ def test_human_only_and_integrity_protected(hub, fakehome):
 
     assert "config.set" in auth.HUMAN_ONLY and "config.set" not in auth.MANAGER_ALLOWED
     assert "workspace.confine" in integ.SECURITY_KEYS
-    assert "workspace.confine.root" not in settings_schema.BY_KEY  # không sửa được từ web (chỉ hiển thị)
-    assert any(k == "workspace.confine.root" for k, _ in settings_schema.READONLY)
+    # khoá BẢO VỆ: web chỉ sửa qua config_set_protected (máy chạy hub + xác nhận 2 bước) — form thường không đổi được
+    assert settings_schema.BY_KEY["workspace.confine.root"].protected
+    with pytest.raises(ValueError):
+        settings_schema.parse_form({"key": "workspace.confine.root", "value": ""})
     _confine(hub, fakehome)
     hub.integrity.check()
     # agent (giả sử lách sandbox) sửa tay config.yaml để gỡ giam → bị khôi phục; khoá thường sửa tay vẫn được nhận

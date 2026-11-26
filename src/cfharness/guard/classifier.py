@@ -82,6 +82,21 @@ _WIN_BS_PATH = re.compile(r"(?<![\w$])[A-Za-z]:\\[^\s'\"`;|&<>(){}]*")
 SPECIAL_FILES = ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/zero", "/dev/fd/")
 DISK_DEV = re.compile(r"^/dev/(r?disk\d|sd[a-z]|nvme|hd[a-z]|mmcblk|xvd|vd[a-z]|md\d|dm-)")
 DELETE_CMDS = {"rm", "unlink", "shred", "srm", "wipe", "gshred", "grm", "trash", "trash-put", "rmtrash"}
+# PowerShell cmdlet/alias + cmd.exe (Codex trên Windows chạy lệnh bằng PowerShell) → loại thao tác (Classifier.ps_cmd). `rm`/`mv`/`cp`/
+# `cat`… trùng tên lệnh POSIX đi nhánh POSIX (cờ `-r…` vẫn được hiểu là đệ quy).
+PS_KINDS: dict[str, str] = {
+    **{k: "delete" for k in ("remove-item", "ri", "del", "erase", "rd", "rmdir", "remove-itemproperty", "rp")},
+    **{k: "overwrite" for k in ("clear-content", "clc", "set-content", "sc", "out-file", "clear-item", "cli")},
+    **{k: "append" for k in ("add-content", "ac")},
+    **{k: "create" for k in ("new-item", "ni")},
+    **{k: "move" for k in ("move-item", "mi", "move")},
+    **{k: "copy" for k in ("copy-item", "cpi", "copy", "xcopy", "robocopy")},
+    **{k: "rename" for k in ("rename-item", "rni", "ren", "rename")},
+}
+PS_PATH_PARAMS = ("-path", "-literalpath", "-lp", "-pspath", "-filepath", "-fullname")
+PS_VALUE_PARAMS = frozenset(PS_PATH_PARAMS + ("-p", "-include", "-exclude", "-filter", "-destination", "-d", "-value", "-encoding",
+                                              "-stream", "-credential", "-itemtype", "-type", "-name", "-newname", "-inputobject",
+                                              "-width", "-delimiter", "-readcount", "-totalcount", "-tail"))
 HUB_FORBIDDEN_SUB = {"approve", "deny"}
 SYSTEMCTL_PERSIST_VERBS = {"enable", "reenable", "start", "restart", "try-restart", "reload-or-restart", "try-reload-or-restart", "link", "edit",
                            "preset", "preset-all", "add-wants", "add-requires", "set-environment", "import-environment", "unmask", "revert"}
@@ -1857,6 +1872,8 @@ class BashAnalyzer:
             else:
                 self.hit("write", "build_tool", None, "")
             return
+        if self.ps_cmd(base, args, unknown_targets):  # PowerShell / cmd.exe (Codex trên Windows chạy lệnh bằng PowerShell)
+            return
         if base in DELETE_CMDS:
             self.delete_cmd(base, args, unknown_targets)
             return
@@ -2373,6 +2390,100 @@ class BashAnalyzer:
         self.hit("write", "generic_cmd", None, "")
 
     # -------------------------------------------------------------- groups
+    def ps_cmd(self, base: str, args: list[shell.Word], unknown_targets: bool) -> bool:
+        """Cmdlet/alias PowerShell + lệnh cmd.exe xoá/ghi đè/di chuyển (Codex trên Windows gửi lệnh PowerShell; parser shell coi
+        `Remove-Item` là lệnh lạ → "ghi" thường, KHÔNG hỏi người). Dịch sang CÙNG logic đích của `rm`/`truncate`/`mv`/`cp`:
+        đối số `-Path/-LiteralPath/-Destination/-NewName` + vị trí; `-Recurse`/`-r…`/`/s` = đệ quy; cờ cmd `/x`. Không đích (đích từ
+        pipeline `… | Remove-Item`) → phá huỷ không xác định. Trả True khi đã xử lý."""
+        b = base.lower()
+        if b.endswith(".exe"):
+            b = b[:-4]
+        kind = PS_KINDS.get(b)
+        if kind is None:
+            return False
+        texts = [a.text for a in args]
+        low = [t.lower() for t in texts]
+        recursive = any(t.startswith("-r") or t in ("/s",) for t in low)
+        if b in ("rmdir", "rd") and not recursive and not any(t.startswith(("-", "/")) and len(t) > 1 for t in low):
+            return False  # `rmdir x` kiểu POSIX (chỉ thư mục rỗng) — nhánh rmdir sẵn có
+        named: dict[str, list[shell.Word]] = {}
+        pos: list[shell.Word] = []
+        i = 0
+        while i < len(args):
+            t, lt = texts[i], low[i]
+            if lt.startswith("-") and len(lt) > 1:
+                name, _, inline = lt.partition(":")
+                if name in PS_VALUE_PARAMS:
+                    if inline:
+                        named.setdefault(name, []).append(shell.Word(t.split(":", 1)[1]))
+                    elif i + 1 < len(args):
+                        named.setdefault(name, []).append(args[i + 1])
+                        i += 1
+                i += 1
+                continue
+            if re.fullmatch(r"/[a-z?]", lt):  # cờ cmd.exe (/s /q /y /f)
+                i += 1
+                continue
+            pos.append(args[i])
+            i += 1
+        paths = [w for k in PS_PATH_PARAMS for w in named.get(k, [])]
+        if kind == "delete":
+            targets = paths + pos
+            what = f"{base}{' -Recurse' if recursive else ''}"
+            if unknown_targets or not targets:
+                self.hit("destructive", "delete_unknown_targets", "file", f"{what} với đích lấy từ pipeline — không xác định được")
+                return True
+            self._delete_targets(what, targets, recursive)
+            return True
+        if kind in ("overwrite", "append", "create"):
+            targets = paths or pos[:1]
+            if not targets:
+                self.hit("uncertain", "ps_write_unknown", "file", f"{base} không rõ đích")
+                return True
+            force = "-force" in low
+            for a in targets:
+                p = self.path(a)
+                if p is None:
+                    self.hit("uncertain", "ps_write_dynamic", "file", f"{base} đích động", [a.literal])
+                elif kind == "append" or (kind == "create" and not force) or ("-append" in low):
+                    self.check_write_target(p, base)
+                else:
+                    self.check_overwrite_target(p, base)
+            return True
+        # move / copy / rename → như mv / cp (nguồn có sẵn chuyển ra ngoài workspace = phá huỷ; ghi đè đích được bảo vệ)
+        srcs = paths or pos[:1]
+        if kind == "rename":
+            newname = (named.get("-newname") or pos[1:2] or [None])[0]
+            if not srcs or newname is None:
+                self.hit("uncertain", "ps_move_unknown", "file", f"{base} không rõ nguồn/tên mới")
+                return True
+            sp = self.path(srcs[0])
+            dst = shell.Word(os.path.join(os.path.dirname(sp), newname.text)) if sp and not newname.dynamic else newname
+            self.mv_cp("mv", [srcs[0], dst], unknown_targets)
+            return True
+        dst = (named.get("-destination") or named.get("-d") or (pos[1:2] if not paths else pos[:1]) or [None])[0]
+        if not srcs or dst is None:
+            self.hit("uncertain", "ps_move_unknown", "file", f"{base} không rõ nguồn/đích")
+            return True
+        flags = [shell.Word("-r")] if recursive and kind == "copy" else []
+        self.mv_cp("mv" if kind == "move" else "cp", [*flags, *srcs, dst], unknown_targets)
+        return True
+
+    def _delete_targets(self, what: str, targets: list[shell.Word], recursive: bool) -> None:
+        for a in targets:
+            if a.dynamic:
+                self.hit("uncertain", "delete_dynamic_target", "file", f"{what} với đích động ({a.literal or '$…'})", [a.literal])
+                continue
+            if a.glob and self.cwd is None and not _isabs(a.text):
+                self.hit("uncertain", "delete_unknown_cwd", "file", f"{what} glob khi không biết thư mục hiện tại")
+                continue
+            exp = self.expand(a)
+            if exp is None:
+                self.hit("uncertain", "delete_unknown_cwd", "file", f"{what} đường dẫn tương đối khi không biết thư mục hiện tại", [a.literal])
+                continue
+            for p in exp:
+                self.check_delete_target(p, what, recursive)
+
     def delete_cmd(self, base: str, args: list[shell.Word], unknown_targets: bool) -> None:
         targets, opts_done = [], False
         for a in args:

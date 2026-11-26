@@ -1,0 +1,111 @@
+
+  Environment
+  └ Version: 1.0.92 [unknown]
+  └ CWD: C:\Users\LeQuyPhuong\AppData\Local\cfh-spike2\ws-k09
+  └ Project trusted: no
+
+  Project Instructions (None)
+
+  Permissions
+  └ Source: (none)
+  └ 0 loaded, 0 skipped
+
+  Login Policy
+  └ disable_api_key_auth: (unset)
+  └ force_login_team_uuid: (none)
+  └ api_key_auth_disabled: false
+
+  Skills (43)
+  └ built-in-browser                    user [claude] [disabled]
+  └ computer-use                        user [claude] [disabled]
+  └ chrome-browser                      user [claude] [disabled]
+  └ deep-research                       user [claude] [disabled]
+  └ browser-automation                  user [claude] [disabled]
+  └ cf-mui-v9-convert                   user [claude] [disabled]
+  └ cf-mui-v9-qa-audit                  user [claude] [disabled]
+  └ cf-vuln                             user [claude] [disabled]
+  └ game-development                    user [claude] [disabled]
+  └ chorus-calls                        user [claude] [disabled]
+  └ code-to-business-language           user [claude] [disabled]
+  └ csdl-vb-cchc-wiki                   user [claude] [disabled]
+  └ docs                                user [claude] [disabled] [collides with /docs → /user:docs]
+  └ google-workspace                    user [claude] [disabled]
+  └ import-memory                       user [claude] [disabled]
+  └ incident-postmortem                 user [claude] [disabled]
+  └ jira-discovery-description          user [claude] [disabled]
+  └ morning                             user [claude] [disabled]
+  └ access-protected-vercel-deployment  plugin: vercel [claude] [disabled]
+  └ ai-gateway                          plugin: vercel [claude] [disabled]
+  └ ai-sdk                              plugin: vercel [claude] [disabled]
+  └ ai-sdk                              plugin: vercel [claude] [disabled]
+  └ auth                                plugin: vercel [claude] [disabled]
+  └ bootstrap                           plugin: vercel [claude] [disabled]
+  └ botid                               plugin: vercel [claude] [disabled]
+  └ build-agents                        plugin: vercel [claude] [disabled]
+  └ cdn-caching                         plugin: vercel [claude] [disabled]
+  └ chat-sdk                            plugin: vercel [claude] [disabled]
+  └ client-side-security                plugin: vercel [claude] [disabled]
+  └ create-a-backend                    plugin: vercel [claude] [disabled]
+  └ custom-metrics                      plugin: vercel [claude] [disabled]
+  └ daemons                             plugin: vercel [claude] [disabled]
+  └ deployments-cicd                    plugin: vercel [claude] [disabled]
+  └ domains                             plugin: vercel [claude] [disabled]
+  └ env-vars                            plugin: vercel [claude] [disabled]
+  └ eve                                 plugin: vercel [claude] [disabled]
+  └ flags-sdk                           plugin: vercel [claude] [disabled]
+  └ is-agentic                          plugin: vercel [claude] [disabled]
+  └ knowledge-update                    plugin: vercel [claude] [disabled]
+  └ marketplace                         plugin: vercel [claude] [disabled] [collides with /marketplace → /vercel:marketplace]
+  └ microfrontends                      plugin: vercel [claude] [disabled]
+  └ offload-to-sandbox                  plugin: vercel [claude] [disabled]
+  └ queues                              plugin: vercel [claude] [disabled]
+
+  Agents (6)
+  └ general-purpose  builtin
+  └ explore          builtin
+  └ plan             builtin
+  └ vuln-fixer       user
+  └ vuln-triager     user
+  └ vuln-verifier    user
+
+  Plugins (1)
+  └ vercel (user, enabled)  25 skills, hooks, 1 MCPs
+
+  Marketplaces (None)
+
+  MCP Servers (5)
+  └ vercel (http)          plugin: vercel
+  └ playwright (stdio)     ~/.claude.json [claude] [disabled]
+  └ video-context (stdio)  ~/.claude.json [claude] [disabled]
+  └ fast-browser (stdio)   ~/.claude.json [claude] [disabled]
+  └ csdl-van-ban (http)    ~/.claude.json [claude] [disabled]
+
+  LSP Servers (None)
+
+  Hooks (1)
+  └ file  plugin: vercel [an interactive session waits for folder trust]
+
+  Config Sources
+  └ User: (none)
+  └ Project: (none)
+
+  Experiments (None)
+
+  Harness Compatibility
+  └ cursor
+    └ skills     OFF  (env)
+    └ rules      OFF  (env)
+    └ agents     OFF  (env)
+    └ mcps       OFF  (env)
+    └ hooks      OFF  (env)
+    └ sessions   on   (default)
+  └ claude
+    └ skills     OFF  (env)
+    └ rules      OFF  (env)
+    └ agents     OFF  (env)
+    └ mcps       OFF  (env)
+    └ hooks      OFF  (env)
+    └ sessions   on   (default)
+  └ codex
+    └ sessions   on   (default)
+
