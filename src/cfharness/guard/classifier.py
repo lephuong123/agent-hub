@@ -1283,7 +1283,9 @@ def classify_mcp(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -> Verdi
     from ..mcp_client.claude_source import tool_server_name
 
     hub_names = {tool_server_name(n) for n in ctx.hub_mcp_servers} | {tool_server_name(n) for n in _names.HUB_MCP_SERVER_NAMES}
-    if server in hub_names:
+    # so theo TIỀN TỐ `<tên server>__`: tên server sau khi claude chuẩn hoá có thể chứa "__" (vd "My Hub (local)" → "My_Hub__local_"),
+    # tách ở "__" đầu tiên sẽ ra server sai → lọt luật (bắt được khi viết test)
+    if server in hub_names or any(rest.startswith(n + "__") for n in hub_names):
         # H-18: MCP server trỏ về CHÍNH hub trong cấu hình claude (theo lệnh/URL loopback cổng của hub, hoặc tên dành riêng) — MỌI
         # tool (hub_run, hub_cancel, hub_approve…) = điều khiển hub bằng quyền của người → cấm (agent dùng hub-self của run)
         return Verdict("destructive", "hub_mcp_forbidden", "hub", f"{tool_name}: MCP server của chính hub — agent không được điều khiển hub qua MCP",
