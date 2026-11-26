@@ -1,0 +1,2 @@
+exit=126 elapsed=488s
+NOTE: process did not exit ~6 min after turn.completed; killed manually by spike

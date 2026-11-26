@@ -88,7 +88,7 @@ def test_tools_branch_is_integrity_protected_and_web_readonly():
     from cfharness.web.settings_schema import BY_KEY, READONLY
 
     assert "tools" in SECURITY_KEYS
-    assert "tools.poppler_path" not in BY_KEY and any(k == "tools.poppler_path" for k, _ in READONLY)
+    assert BY_KEY["tools.poppler_path"].protected and READONLY == ()  # khoá bảo vệ: web chỉ qua config_set_protected
     assert {"attachments.pdf.split", "attachments.pdf.split_pages", "attachments.pdf.max_parts"} <= set(BY_KEY)
 
 

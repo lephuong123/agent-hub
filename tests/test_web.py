@@ -393,8 +393,9 @@ async def test_settings_lists_are_dropdowns(env):
     assert 'name="key" value="approval.on_timeout"' in html and '<option value="deny_and_continue"' in html
     assert 'class="msel"' in html and 'type="checkbox" name="value" value="learning.digest" checked' in html
     assert 'type="time" name="value" value="08:00"' in html
-    # khoá bảo mật: chỉ hiện, không có form sửa
-    assert "<code>approval.profile</code>" in html and 'name="key" value="approval.profile"' not in html
+    # khoá BẢO VỆ: form riêng config_set_protected (xác nhận 2 bước), không qua config_set thường
+    i = html.index('name="key" value="approval.profile"')
+    assert html.rfind('action="/do/config_set_protected"', 0, i) > html.rfind('action="/do/config_set"', 0, i)
     # bool / enum / time / multi
     await env.post("/do/config_set", {"key": "digest.enabled", "value": "false", "confirm": "yes"})
     assert env.hub.config.get("digest.enabled") is False

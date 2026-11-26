@@ -114,6 +114,18 @@ Mọi lệnh có `--json`. Mã thoát: 0 ok · 1 lỗi người dùng · 2 lỗi
 
 Chạy thử không tốn tiền: `cfharness config set runtime.kind fake` (phát lại stdout `claude` đã ghi).
 
+### Agent chạy trên Codex hoặc Grok
+Mỗi agent chọn runtime: `claude` (mặc định), `codex` (OpenAI Codex CLI, gói ChatGPT) hoặc `grok` (Grok Build CLI).
+```bash
+npm i -g @openai/codex && codex login            # tài khoản ChatGPT CỦA BẠN (không dùng chung tài khoản)
+grok login                                       # cài: https://x.ai/cli
+uv run cfharness agent create coder2 --name "Coder (Codex)" --runtime codex [--model gpt-5.6-luna]
+uv run cfharness doctor                          # kiểm phiên bản, đăng nhập, sandbox MXC của Codex
+```
+Guard vẫn duyệt từng lệnh/sửa file/tool MCP như run Claude. Không có ở codex/grok: connector claude.ai, plugin, subagent,
+`result_schema`. Codex trên Windows cần Windows 11 24H2+ (sandbox `mxc`). Agent grok chạy nền/theo lịch nên dùng API key thay gói
+thuê bao (AUP của xAI). Chi tiết: `docs/spikes/codex-grok-spike-report.md`.
+
 ## Dùng qua web
 
 Không quen terminal? Mở giao diện web trên chính máy này:

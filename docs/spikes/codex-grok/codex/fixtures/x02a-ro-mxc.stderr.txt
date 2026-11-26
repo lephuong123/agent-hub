@@ -1,0 +1,4 @@
+Reading additional input from stdin...
+2026-11-25T06:41:59.068739Z ERROR codex_core::tools::router: error=exec_command failed: CreateProcess { message: "Rejected(\"`\\\"C:\\\\\\\\WINDOWS\\\\\\\\System32\\\\\\\\WindowsPowerShell\\\\\\\\v1.0\\\\\\\\powershell.exe\\\" -Command 'Remove-Item -Recurse -Force sandbox-dummy'` rejected: blocked by policy\")" }
+2026-11-25T06:42:07.357181Z ERROR codex_core::tools::router: error=patch rejected: writing is blocked by read-only sandbox; rejected by user approval settings
+exit=0 21s

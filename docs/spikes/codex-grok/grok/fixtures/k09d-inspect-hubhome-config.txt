@@ -1,0 +1,84 @@
+
+  Environment
+  └ Version: 1.0.92 [unknown]
+  └ CWD: C:\Users\LeQuyPhuong\AppData\Local\cfh-spike2\ws-k09
+  └ Project trusted: yes
+
+  Project Instructions (None)
+
+  Permissions
+  └ Source: (none)
+  └ 0 loaded, 0 skipped
+
+  Login Policy
+  └ disable_api_key_auth: (unset)
+  └ force_login_team_uuid: (none)
+  └ api_key_auth_disabled: false
+
+  Skills (18)
+  └ built-in-browser            user [claude] [disabled]
+  └ computer-use                user [claude] [disabled]
+  └ chrome-browser              user [claude] [disabled]
+  └ deep-research               user [claude] [disabled]
+  └ browser-automation          user [claude] [disabled]
+  └ cf-mui-v9-convert           user [claude] [disabled]
+  └ cf-mui-v9-qa-audit          user [claude] [disabled]
+  └ cf-vuln                     user [claude] [disabled]
+  └ game-development            user [claude] [disabled]
+  └ chorus-calls                user [claude] [disabled]
+  └ code-to-business-language   user [claude] [disabled]
+  └ csdl-vb-cchc-wiki           user [claude] [disabled]
+  └ docs                        user [claude] [disabled] [collides with /docs → /user:docs]
+  └ google-workspace            user [claude] [disabled]
+  └ import-memory               user [claude] [disabled]
+  └ incident-postmortem         user [claude] [disabled]
+  └ jira-discovery-description  user [claude] [disabled]
+  └ morning                     user [claude] [disabled]
+
+  Agents (6)
+  └ general-purpose  builtin
+  └ explore          builtin
+  └ plan             builtin
+  └ vuln-fixer       user
+  └ vuln-triager     user
+  └ vuln-verifier    user
+
+  Plugins (1)
+  └ vercel (user, disabled)  25 skills, hooks, 1 MCPs
+
+  Marketplaces (None)
+
+  MCP Servers (4)
+  └ playwright (stdio)     ~/.claude.json [claude] [disabled]
+  └ video-context (stdio)  ~/.claude.json [claude] [disabled]
+  └ fast-browser (stdio)   ~/.claude.json [claude] [disabled]
+  └ csdl-van-ban (http)    ~/.claude.json [claude] [disabled]
+
+  LSP Servers (None)
+
+  Hooks (None)
+
+  Config Sources
+  └ User: C:\Users\LeQuyPhuong\AppData\Local\cfh-spike2\grokhome-hub\config.toml
+  └ Project: (none)
+
+  Experiments (None)
+
+  Harness Compatibility
+  └ cursor
+    └ skills     OFF  (config)
+    └ rules      OFF  (config)
+    └ agents     OFF  (config)
+    └ mcps       OFF  (config)
+    └ hooks      OFF  (config)
+    └ sessions   on   (default)
+  └ claude
+    └ skills     OFF  (config)
+    └ rules      OFF  (config)
+    └ agents     OFF  (config)
+    └ mcps       OFF  (config)
+    └ hooks      OFF  (config)
+    └ sessions   on   (default)
+  └ codex
+    └ sessions   on   (default)
+

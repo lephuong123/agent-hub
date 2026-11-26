@@ -3,8 +3,10 @@
 Khoá có tập giá trị cố định (bật/tắt, enum, danh sách chọn nhiều) hiện thành dropdown — không bắt người gõ chữ. Server kiểm lại
 giá trị theo đúng danh mục này (`parse_form`), rồi `config.set` của daemon kiểm tiếp (`config.validate_setting`).
 
-`READONLY`: khoá NỚI LỎNG lớp bảo vệ (guard, sandbox, hồ sơ phê duyệt, khung quyền điều phối viên, runtime, gốc workspace,
-đích telemetry) — web chỉ HIỂN THỊ, đổi bằng `cfharness config set` trong terminal (docs/dev-notes/web.md §2).
+Khoá BẢO VỆ (`protected=True`: guard, sandbox, hồ sơ phê duyệt, khung quyền điều phối viên, runtime, gốc workspace, web public,
+đích telemetry) — có thể NỚI LỎNG lớp bảo vệ nên chỉ sửa được khi web dùng trên CHÍNH máy chạy hub (không qua tunnel/link public), qua
+thao tác riêng `config_set_protected` có xác nhận 2 bước + audit (web/app.py). Qua link public: chỉ xem. `READONLY` (cũ) nay rỗng —
+mọi khoá đều chỉnh được trên UI.
 """
 
 from __future__ import annotations
@@ -16,8 +18,8 @@ from typing import Any
 from starlette.datastructures import FormData
 
 from ..browser import BROWSER_MODES
-from ..config import DEFAULTS, get_path
-from ..guard.profiles import ON_TIMEOUT
+from ..config import DEFAULTS, VALID_PERMISSION_MODES, get_path
+from ..guard.profiles import GATES_MODES, ON_TIMEOUT, PROFILES
 
 MODELS = ("haiku", "sonnet", "opus", "fable")
 NOTIFY_EVENTS: tuple[str, ...] = tuple(DEFAULTS["notify"]["slack"]["events"])
@@ -36,6 +38,7 @@ class Setting:
     nullable: bool = False  # để trống / chọn "(mặc định)" = null
     null_label: str = "(mặc định)"
     min: float | None = None
+    protected: bool = False  # khoá bảo vệ: chỉ sửa trên máy chạy hub, xác nhận 2 bước (config_set_protected)
 
 
 def _s(key: str, label: str, kind: str, hint: str = "", **kw: Any) -> Setting:
@@ -179,37 +182,62 @@ FILES_GROUP = ("files", "Xem / mở file", (
 ))
 GROUPS = GROUPS + (FILES_GROUP,)
 
-# Khoá nới lỏng bảo vệ: web chỉ hiện giá trị + lệnh CLI.
-READONLY: tuple[tuple[str, str], ...] = (
-    ("gates.mode", "Cổng duyệt toàn hệ thống (thẻ Cổng duyệt ở trên)"),
-    ("guard.enabled", "Bật guard (chặn thao tác phá huỷ)"),
-    ("approval.profile", "Hồ sơ phê duyệt"),
-    ("guard.hold_uncertain", "Giữ chờ lệnh không chắc (uncertain)"),
-    ("guard.trust_new_agents", "Trust mặc định cho agent mới"),
-    ("approval.checkpoint_auto_allow", "Tự cho phép phá huỷ có checkpoint"),
-    ("approval.scratch_auto_allow", "Tự cho phép phá huỷ trong scratch/worktree"),
-    ("approval.delegate_to_manager.enabled", "Giao điều phối viên duyệt"),
-    ("guard.second_opinion.enabled", "LLM thứ hai cho uncertain"),
-    ("guard.sandbox.enabled", "Sandbox OS cho Bash"),
-    ("guard.sandbox.allowed_domains", "Domain mạng Bash được ra"),
-    ("guard.sandbox.allow_ssh_agent", "Cho agent dùng ssh-agent (git push)"),
-    ("guard.web.allow_domains", "Domain WebFetch được phép"),
-    ("manager.capabilities.profile", "Khung quyền điều phối viên"),
-    ("manager.web_domains", "WebFetch của điều phối viên"),
-    ("manager.allow_hermes_without_sandbox", "Khung rộng khi không có sandbox (Windows)"),
-    ("workspace.allowed_roots", "Gốc workspace được phép"),
-    ("workspace.confine.root", "Giam agent trong workspace (W)"),
-    ("runtime.kind", "Runtime"),
-    ("runtime.claude.default_permission_mode", "Chế độ quyền mặc định"),
-    ("runtime.claude.chrome.enabled", "Cho dùng Claude in Chrome"),
-    ("tools.poppler_path", "Thư mục poppler (pdftoppm) cho run"),
-    ("web.public_origin", "Địa chỉ web public (tunnel TLS)"),
-    ("web.session_max_age_s", "Tuổi tối đa phiên web (giây)"),
-    ("web.trusted_devices.enabled", "Cho tin cậy thiết bị (web public + TOTP)"),
-    ("web.trusted_devices.ttl_days", "Hạn thiết bị tin cậy (ngày, tuyệt đối)"),
-    ("telemetry.otel.endpoint", "Đích OTLP"),
-    ("telemetry.otel.include_payloads", "Gửi kèm input tool"),
-)
+def _p(key: str, label: str, kind: str, hint: str = "", **kw: Any) -> Setting:
+    return Setting(key, label, kind, hint, protected=True, **kw)
+
+
+_BY_PROFILE = "(theo hồ sơ phê duyệt)"
+# Khoá BẢO VỆ (trước đây chỉ xem — nay sửa được trên UI khi dùng web trên chính máy chạy hub, xác nhận 2 bước)
+PROTECTED_GROUP = ("security", "Bảo vệ & quyền", (
+    _p("gates.mode", "Cổng duyệt toàn hệ thống", "choice", "human = người duyệt; manager = điều phối viên quyết; off = không cổng chờ người",
+       choices=tuple(GATES_MODES)),
+    _p("guard.enabled", "Bật guard (chặn thao tác phá huỷ)", "bool", "tắt = không hook phân loại/hỏi duyệt"),
+    _p("approval.profile", "Hồ sơ phê duyệt", "choice", "strict = hỏi nhiều nhất; autonomous = tự cho nhiều nhất", choices=tuple(PROFILES)),
+    _p("guard.hold_uncertain", "Giữ chờ lệnh không chắc (uncertain)", "bool", nullable=True, null_label=_BY_PROFILE),
+    _p("guard.trust_new_agents", "Trust mặc định cho agent mới", "choice", "full = agent mới chạy không hỏi duyệt", choices=("off", "full")),
+    _p("approval.checkpoint_auto_allow", "Tự cho phép phá huỷ có checkpoint", "bool", nullable=True, null_label=_BY_PROFILE),
+    _p("approval.scratch_auto_allow", "Tự cho phép phá huỷ trong scratch/worktree", "bool", nullable=True, null_label=_BY_PROFILE),
+    _p("approval.delegate_to_manager.enabled", "Giao điều phối viên duyệt", "bool", nullable=True, null_label=_BY_PROFILE),
+    _p("guard.second_opinion.enabled", "LLM thứ hai cho lệnh không chắc", "bool"),
+    _p("guard.sandbox.enabled", "Sandbox OS cho Bash", "bool"),
+    _p("guard.sandbox.allowed_domains", "Domain mạng Bash được ra", "list", "mỗi dòng một domain, vd registry.npmjs.org, *.pypi.org"),
+    _p("guard.sandbox.allow_ssh_agent", "Cho agent dùng ssh-agent (git push)", "bool"),
+    _p("guard.web.allow_domains", "Domain WebFetch được phép (toàn hub)", "list", "trống = không giới hạn"),
+    _p("manager.capabilities.profile", "Khung quyền điều phối viên", "choice",
+       "strict = chỉ đọc (Read/Grep/Glob) + tool hub; hermes = thêm Bash/Write/Edit/Web trong thư mục hội thoại", choices=("strict", "hermes")),
+    _p("manager.web_domains", "WebFetch của điều phối viên", "text", "any = mọi domain; hoặc danh sách domain cách nhau dấu phẩy"),
+    _p("manager.allow_hermes_without_sandbox", "Khung rộng khi không có sandbox OS (Windows)", "bool"),
+    _p("workspace.allowed_roots", "Gốc workspace được phép", "list", "mỗi dòng một thư mục, vd ~/Workspace"),
+    _p("workspace.confine.root", "Giam agent trong workspace (W)", "text", "thư mục gốc; trống = tắt", nullable=True, null_label="(tắt)"),
+    _p("runtime.kind", "Runtime toàn hub", "choice", "fake = phát lại fixture (demo, không gọi model)", choices=("claude", "fake")),
+    _p("runtime.claude.default_permission_mode", "Chế độ quyền mặc định (Claude)", "choice", nullable=True,
+       choices=tuple(VALID_PERMISSION_MODES)),
+    _p("runtime.claude.chrome.enabled", "Cho dùng Claude in Chrome", "bool"),
+    _p("tools.poppler_path", "Thư mục poppler (pdftoppm) cho run", "text", nullable=True),
+    _p("web.public_origin", "Địa chỉ web public (tunnel TLS)", "text", "vd https://an.example.com — trống = chỉ trên máy này", nullable=True,
+       null_label="(chỉ trên máy này)"),
+    _p("web.session_max_age_s", "Tuổi tối đa phiên web (giây)", "int", min=60),
+    _p("web.trusted_devices.enabled", "Cho tin cậy thiết bị (web public + TOTP)", "bool"),
+    _p("web.trusted_devices.ttl_days", "Hạn thiết bị tin cậy (ngày, tuyệt đối)", "int", min=1),
+    _p("telemetry.otel.endpoint", "Đích OTLP", "text"),
+    _p("telemetry.otel.include_payloads", "Gửi kèm input tool", "bool"),
+))
+# runtime codex / grok theo agent (đường dẫn CLI / model / effort ở thẻ tài khoản — Cài đặt › Tài khoản AI)
+RUNTIME_GROUP = ("runtimes", "ChatGPT (Codex) & Grok", (
+    _p("runtime.codex.sandbox", "Sandbox mặc định của Codex", "choice", "agent permission_mode=plan / khung chỉ đọc luôn read-only",
+       choices=("workspace-write", "read-only")),
+    _p("runtime.codex.approval_policy", "Codex hỏi duyệt", "choice", "untrusted = mọi lệnh/patch hỏi guard (khuyên dùng)",
+       choices=("untrusted", "on-request")),
+    _p("runtime.codex.windows_sandbox", "Sandbox Windows của Codex", "choice", "mxc (Windows 11 24H2+) — thiếu thì lệnh đã duyệt chạy ngoài sandbox",
+       choices=("mxc", "elevated")),
+    _p("runtime.codex.mcp_approval_mode", "Tool MCP của hub (Codex)", "choice", "prompt = mọi tool hỏi guard; writes = chỉ tool ghi",
+       choices=("prompt", "writes")),
+    _p("runtime.codex.approval_timeout_s", "Codex: chờ quyết định tối đa (giây)", "int", "hết giờ = từ chối", min=10),
+    _p("runtime.grok.isolate", "Grok: cô lập khỏi cấu hình Claude/Cursor của máy", "bool", "tắt = Grok nạp skill/MCP/hook của Claude Code trên máy"),
+    _p("runtime.grok.approval_timeout_s", "Grok: chờ quyết định tối đa (giây)", "int", "hết giờ = từ chối", min=10),
+))
+GROUPS = GROUPS + (PROTECTED_GROUP, RUNTIME_GROUP)
+READONLY: tuple[tuple[str, str], ...] = ()  # (cũ) mọi khoá bảo vệ nay ở PROTECTED_GROUP
 
 BY_KEY: dict[str, Setting] = {s.key: s for _, _, items in GROUPS for s in items}
 
@@ -224,12 +252,17 @@ def _num(raw: str, s: Setting) -> int | float:
     return v
 
 
-def parse_form(form: FormData) -> tuple[str, Any]:
-    """(key, value) từ form `config_set` — chỉ khoá trong danh mục, giá trị đúng kiểu/lựa chọn."""
+def parse_form(form: FormData, *, protected: bool = False) -> tuple[str, Any]:
+    """(key, value) từ form `config_set` — chỉ khoá trong danh mục, giá trị đúng kiểu/lựa chọn. Khoá bảo vệ CHỈ qua
+    `config_set_protected` (`protected=True`: kiểm máy chạy hub + xác nhận 2 bước) — form thường không đổi được."""
     key = str(form.get("key") or "").strip()
     s = BY_KEY.get(key)
     if s is None:
         raise ValueError(f"khoá '{key}' không sửa được từ web — dùng `cfharness config set` trong terminal")
+    if s.protected and not protected:
+        raise ValueError(f"'{s.label}' là khoá bảo vệ — sửa ở mục Bảo vệ & quyền (chỉ trên máy chạy hub)")
+    if protected and not s.protected:
+        raise ValueError(f"'{s.label}' không phải khoá bảo vệ")
     if s.kind == "list":
         items = [x.strip() for x in str(form.get("value") or "").replace(",", "\n").split("\n")]
         return key, list(dict.fromkeys(x for x in items if x))

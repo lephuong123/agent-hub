@@ -139,8 +139,9 @@ class RunManager:
     def auth_block(self) -> dict[str, Any] | None:
         return self.store.state_get("auth_block")
 
-    def runtime(self) -> AgentRuntime:
-        return self._runtime or make_runtime(self.hub.config.data, getattr(self.hub, "secrets", None))
+    def runtime(self, kind: str | None = None) -> AgentRuntime:
+        """Runtime cho một agent (`agents.runtime`: claude|codex|grok; None = claude). Runtime tiêm vào (test) thắng mọi agent."""
+        return self._runtime or make_runtime(self.hub.config.data, getattr(self.hub, "secrets", None), kind, self.hub.paths.home)
 
     def running_count(self, agent_id: str | None = None, exclude_kind: str | None = None) -> int:
         return sum(1 for a in self.active.values() if (agent_id is None or a.agent_id == agent_id) and (exclude_kind is None or a.kind != exclude_kind))
@@ -698,6 +699,12 @@ class RunManager:
             tp["disallowed_tools"] = list(dict.fromkeys(list(tp.get("disallowed_tools") or []) + list(opts["disallowed_tools"])))
         if trusted and not opts.get("read_only") and tp.get("permission_mode") != "plan":
             tp["permission_mode"] = "bypassPermissions"
+        if is_mgr and (agent.get("runtime") or "claude") != "claude":
+            # điều phối viên chạy codex/grok: khung quyền của người (`manager.capabilities`) ép bằng allowlist tool của run — runtime
+            # (rpcbase.ask) từ chối tool ngoài khung, codex sandbox read-only / tắt web khi khung không có ghi/shell/web
+            caps_tools = list(hub.manager.perms.capabilities().get("tools") or [])
+            cur = tp.get("tools")
+            tp["tools"] = [t for t in cur if t in caps_tools] if isinstance(cur, list) else caps_tools
         # M4-A (FR-RT-10): system prompt = quy ước + SOUL + memory snapshot + chỉ mục skill; run resume/fork dùng lại đúng
         # prompt của session (giữ cache). Run review: chỉ MCP hub-self vai trò learning; run có skill: hub-self knowledge.
         from .learning.runtime import apply_mcp as _learning_mcp, system_prompt_for as _learning_prompt
@@ -898,6 +905,11 @@ class RunManager:
         v = await asyncio.to_thread(runtime.version)
         if runtime.name == "claude" and v is None:
             raise RuntimeError_("không chạy được `claude --version` — kiểm `claude` có trong PATH (cfharness doctor)")
+        if runtime.name in ("codex", "grok"):
+            if v is None:
+                raise RuntimeError_(f"không chạy được `{runtime.name} --version` — cài CLI và đặt runtime.{runtime.name}.binary "
+                                    "(cfharness doctor)")
+            return v  # ma trận phiên bản đã kiểm (tested_versions) chỉ áp cho claude
         tested = self.hub.config.get("runtime.claude.tested_versions") or []
         if v and v not in tested:
             self.warn_cli_version(v, tested)
@@ -948,8 +960,9 @@ class RunManager:
                 ar.lock_key, ar.lock_keys = self.lock_keys(run, agent)
             if not self.locks.try_acquire_many(ar.lock_keys, run["session_id"], run_id):
                 raise HubError(f"thư mục {', '.join(ar.lock_keys)} đang bị khoá bởi run khác (workspace_locked)")
-            runtime = self.runtime()
+            runtime = self.runtime(agent.get("runtime"))
             ar.runtime = runtime
+            claude_rt = runtime.name in ("claude", "fake")  # connector claude.ai / phiên /login chỉ có ở Claude Code
             ropts = run.get("run_opts") or {}
             if ropts.get("workspace_kind") == "filehub" and not ropts.get("filehub_lane"):
                 # run tạo trước H5 trên bản sao của đồng bộ 2 chiều cũ (đã bỏ): không chạy trong bản sao cũ nữa
@@ -964,11 +977,13 @@ class RunManager:
             await _refresh_pdftoppm(hub)  # dò pdftoppm (cache hết hạn → chạy `-v`) trong THREAD: `_prepare_spec` chỉ đọc cache
             acct = self._connector_account()  # đọc MỘT lần cho cả lượt khởi động (account.use giữa chừng không làm các bước lệch nhau)
             self._refresh_claude_redact(acct[1])
-            auto_conn = await self._auto_connectors(runtime, run, agent, ar, acct)
+            auto_conn = await self._auto_connectors(runtime, run, agent, ar, acct) if claude_rt else False
             mcp_dir = self._account_mcp_dir(run, acct)
             spec = self._prepare_spec(run, agent, recall=recall, auto_connectors=auto_conn, connector_dir=acct[1], account=acct[0],
                                       mcp_dir=mcp_dir)
             spec.control_handler = functools.partial(self._control_request, ar)  # CLI 2.1.303+: control_request can_use_tool → guard
+            if not claude_rt:  # codex/grok: mọi lần hỏi quyền đi qua control_handler (không hook/permission-prompt-tool của Claude)
+                spec.connectors = None
             if spec.connectors:
                 spec.auth_mode, spec.claude_config_dir = await self._connector_auth(runtime, agent_id, run_id, acct)
                 if spec.auth_mode == "login":

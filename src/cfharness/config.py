@@ -806,6 +806,30 @@ DEFAULTS: dict[str, Any] = {
     "runtime": {
         # "claude" (thật) hoặc "fake" (phát lại fixture JSONL, cho test/demo không tốn tiền)
         "kind": "claude",
+        # runtime theo agent (`agent.runtime`: claude|codex|grok — plan-codex-grok-runtime, docs/spikes/codex-grok-spike-report.md).
+        # Mỗi người dùng đăng nhập TÀI KHOẢN CỦA CHÍNH HỌ (`codex login` / `grok login`); hub không giữ token của hai CLI này.
+        "codex": {
+            "binary": "codex",
+            "model": None,  # null = model mặc định của tài khoản ChatGPT
+            "effort": "medium",
+            "approval_policy": "untrusted",  # mọi lệnh/patch/tool MCP hỏi hub → guard quyết (KHÔNG đặt "never")
+            "sandbox": "workspace-write",  # agent permission_mode=plan → read-only
+            "windows_sandbox": "mxc",  # Windows 11 24H2+; "unelevated" (javis-os) treo + ghi được ra ngoài cwd (spike X-02)
+            "mcp_approval_mode": "prompt",
+            "config": {},  # ghi đè thêm cho thread/start.config (vd {"features": {"apps": false}} đã mặc định)
+            "env": {},
+            "extra_args": [],
+            "approval_timeout_s": 1800,
+        },
+        "grok": {
+            "binary": "grok",
+            "model": None,  # null = model mặc định của tài khoản (grok-4.7)
+            "effort": "low",  # ACP mặc định "high" — tốn quota (spike K-07)
+            "isolate": True,  # env tắt nạp cấu hình Claude Code/Cursor + bộ nhớ + tự cập nhật (GROK_ISOLATION_ENV)
+            "env": {},  # vd {"GROK_HOME": "<thư mục riêng>"} (rồi `GROK_HOME=… grok login`) để cô lập hẳn khỏi ~/.grok
+            "extra_args": [],
+            "approval_timeout_s": 1800,
+        },
         "fake": {
             "fixture": None,  # null = fixture mẫu đóng gói kèm package
             "line_delay_s": 0.0,
@@ -1035,6 +1059,15 @@ class HubConfig:
         return self.get(key)
 
 
+RUNTIME_CHOICES: dict[str, tuple[Any, ...]] = {
+    "runtime.codex.sandbox": ("workspace-write", "read-only"),
+    "runtime.codex.approval_policy": ("untrusted", "on-request"),  # KHÔNG "never": lệnh/patch không còn hỏi guard
+    "runtime.codex.windows_sandbox": ("mxc", "elevated"),  # KHÔNG "unelevated": treo + ghi được ra ngoài cwd (spike X-02)
+    "runtime.codex.mcp_approval_mode": ("prompt", "writes"),
+    "runtime.grok.isolate": (True, False),
+}
+
+
 def validate_setting(key: str, value: Any) -> None:
     """Kiểm tối thiểu các khoá quan trọng; khoá lạ vẫn cho ghi (mở rộng sau)."""
     if key in ("perf.slow_ms", "perf.window_min", "perf.loop_lag_warn_ms", "perf.loop_stall_dump_s"):  # đo hiệu năng (perf.py)
@@ -1170,6 +1203,21 @@ def validate_setting(key: str, value: Any) -> None:
     elif key in ("learning.review_rate_limit_retries", "learning.review_budget_retries"):
         if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 20:
             raise ValueError(f"{key} phải là số nguyên 0..20")
+    elif key in RUNTIME_CHOICES:
+        if value not in RUNTIME_CHOICES[key]:
+            raise ValueError(f"{key} phải là {'|'.join(str(x) for x in RUNTIME_CHOICES[key])}")
+    elif key in ("runtime.codex.approval_timeout_s", "runtime.grok.approval_timeout_s"):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 10:
+            raise ValueError(f"{key} phải là số nguyên ≥ 10")
+    elif key in ("runtime.codex.effort", "runtime.grok.effort"):
+        if value not in (None, "low", "medium", "high", "xhigh", "max"):
+            raise ValueError(f"{key} phải là low|medium|high|xhigh|max hoặc null")
+    elif key in ("runtime.codex.model", "runtime.grok.model"):
+        if value is not None and (not isinstance(value, str) or not value.strip() or len(value) > 80 or any(c.isspace() for c in value)):
+            raise ValueError(f"{key} phải là id model (không khoảng trắng) hoặc null")
+    elif key in ("runtime.codex.binary", "runtime.grok.binary"):
+        if not isinstance(value, str) or not value.strip() or "\n" in value:
+            raise ValueError(f"{key} phải là tên lệnh hoặc đường dẫn")
     elif key == "runtime.claude.default_permission_mode":
         if value is not None and value not in VALID_PERMISSION_MODES:
             raise ValueError(f"permission mode không hợp lệ; chọn một trong {VALID_PERMISSION_MODES}")

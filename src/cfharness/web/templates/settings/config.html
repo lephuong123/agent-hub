@@ -8,7 +8,7 @@
 <section class="card" id="config">
   <h2>{{ m.icon('settings') }} Cấu hình hệ thống</h2>
   <p class="muted small">Mục có danh sách giá trị cố định chọn bằng dropdown. Cấu hình thông báo ở <a href="/settings/notifications#cfg-notify">Thông báo &amp; kênh</a>;
-    khoá bảo mật (chỉ xem) ở <a href="/settings/security#cfg-security">Bảo mật &amp; thiết bị</a>.</p>
+    khoá bảo vệ (guard, sandbox, khung điều phối viên… — chỉ đổi trên máy chạy hub, xác nhận 2 lần) ở <a href="/settings/security#cfg-security">Bảo mật &amp; thiết bị</a>; runtime ChatGPT/Grok ở <a href="/settings/accounts#rt-settings">Tài khoản AI</a>.</p>
   {% for g in groups %}{{ C.group(g, "/settings/config", open=loop.first) }}{% endfor %}
 </section>
 {% endblock %}

@@ -905,3 +905,51 @@ def test_lease_bash_plain_commit_is_index(tmp_path):
 
     assert [o.kind for o in repo_ops("git commit -m 'x'", str(tmp_path))] == ["index"]
     assert [o.kind for o in repo_ops("git add a.py && git commit -m x", str(tmp_path))] == ["paths", "index"]
+
+
+# --------------------------------------------------------------------------- PowerShell / cmd.exe (Codex trên Windows)
+# Codex gửi lệnh PowerShell; trước đây parser shell coi `Remove-Item` là lệnh lạ → "ghi" thường → CHẠY KHÔNG HỎI (thấy khi chạy thật).
+PS_HELD = [
+    "Remove-Item -Recurse -Force docs",
+    "Remove-Item -LiteralPath docs -Recurse",
+    "Remove-Item -Path:docs -Recurse -Force",
+    "ri -r docs",
+    "Remove-Item README.md",
+    "del /s /q docs",
+    "rd /s /q docs",
+    "rmdir -Recurse docs",
+    "erase README.md",
+    "Get-ChildItem docs | Remove-Item -Recurse",
+    "Clear-Content README.md",
+    "Set-Content -Path README.md -Value x",
+    "Out-File -FilePath README.md -InputObject x",
+    "Move-Item docs C:/elsewhere/docs",
+    "move src C:/tmp/src",
+    "Remove-Item -Force C:/Windows/System32/drivers/etc/hosts",
+]
+PS_FREE = [
+    "Get-ChildItem",
+    "Get-Content README.md",
+    "Add-Content -Path notes.txt -Value x",
+    "New-Item -ItemType File -Path new.txt",
+    "Copy-Item README.md README.copy.md",
+    "Select-String -Path src/app.py -Pattern print",
+    "Rename-Item -Path README.md -NewName gone.md",  # đổi tên TRONG workspace = như `mv a b` (ghi, không phá huỷ)
+]
+
+
+@pytest.mark.parametrize("cmd", PS_HELD)
+def test_powershell_destructive_is_held(env, cmd):
+    v = bash(env, cmd)
+    assert held(v), f"{cmd!r} → {v.verdict}/{v.rule}"
+
+
+@pytest.mark.parametrize("cmd", PS_FREE)
+def test_powershell_benign_not_held(env, cmd):
+    v = bash(env, cmd)
+    assert not held(v), f"{cmd!r} → {v.verdict}/{v.rule}"
+
+
+def test_powershell_delete_of_run_created_file_is_free(env):
+    assert not held(bash(env, "Remove-Item -Recurse -Force build"))  # thư mục run TỰ tạo — như `rm -rf build`
+    assert not held(bash(env, "Remove-Item tmp-run.log"))

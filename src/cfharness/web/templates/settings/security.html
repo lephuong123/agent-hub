@@ -1,5 +1,6 @@
 {% extends "settings/_layout.html" %}
 {% import "_macros.html" as m with context %}
+{% import "settings/_cfg.html" as C with context %}
 {% block title %}Bảo mật & thiết bị · Cài đặt{% endblock %}
 {% block h1 %}Bảo mật &amp; thiết bị{% endblock %}
 {% block sub %}Thiết bị được đăng nhập không cần mã và các khoá bảo vệ của hub.{% endblock %}
@@ -31,14 +32,10 @@
   {% endif %}
 </section>
 <section class="card" id="security-keys">
-  <h2>{{ m.icon('lock') }} Khoá bảo mật</h2>
-  <details class="cfg-group" id="cfg-security" open>
-    <summary>{{ m.icon('shield') }} Bảo mật <span class="muted small">chỉ xem — đổi bằng terminal</span></summary>
-    <p class="muted small">Các khoá này nới lỏng lớp bảo vệ nên web không sửa: chạy <code>cfharness config set &lt;khoá&gt; &lt;giá trị&gt;</code> trong terminal.</p>
-    <table class="tbl stack cfg"><tbody>
-    {% for r in readonly %}<tr><td data-label="Mục"><b>{{ r.label }}</b><div class="muted small"><code>{{ r.key }}</code></div></td>
-      <td data-label="Giá trị"><code>{{ r.value }}</code></td></tr>{% endfor %}
-    </tbody></table>
-  </details>
+  <h2>{{ m.icon('lock') }} Bảo vệ &amp; quyền</h2>
+  <p class="muted small">Các khoá này có thể <b>nới lỏng</b> lớp bảo vệ (guard, sandbox, hồ sơ phê duyệt, khung điều phối viên, web public…).
+    {% if cfg_local %}Đổi được ở đây — mỗi thay đổi cần <b>xác nhận 2 lần</b> và được ghi nhật ký kiểm toán.
+    {% else %}Bạn đang mở web qua link public nên <b>chỉ xem</b>: đổi khi dùng web trên chính máy chạy hub (hoặc <code>cfharness config set</code>).{% endif %}</p>
+  {% for g in groups %}{{ C.group(g, "/settings/security", open=True) }}{% endfor %}
 </section>
 {% endblock %}

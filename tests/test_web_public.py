@@ -98,9 +98,11 @@ def test_public_origin_validation_and_protection(hub_home):
     with pytest.raises(ValueError):
         cfg.set("web.client_ip_header", "x-real-ip")
     assert cfg.set("web.public_origin", "https://an.example.com") == "https://an.example.com"
-    # chỉ người: nhánh web kiểm toàn vẹn, config.set HUMAN_ONLY, điều phối viên không có config.set, web Cài đặt không sửa được
+    # chỉ người: nhánh web kiểm toàn vẹn, config.set HUMAN_ONLY, điều phối viên không có config.set; web Cài đặt: khoá BẢO VỆ (chỉ
+    # trên máy chạy hub + xác nhận 2 bước — config_set_protected; qua link public KHÔNG mở được web ra ngoài)
     assert "web" in SECURITY_KEYS and "config.set" in auth.HUMAN_ONLY and "config.set" not in auth.MANAGER_ALLOWED
-    assert not any(str(k).startswith("web.") for k in BY_KEY)
+    wk = [k for k in BY_KEY if str(k).startswith("web.")]
+    assert wk and all(BY_KEY[k].protected for k in wk)
 
 
 def test_login_url_and_session_lifetime():

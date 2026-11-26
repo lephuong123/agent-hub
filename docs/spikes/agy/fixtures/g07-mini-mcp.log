@@ -1,0 +1,6 @@
+{"in": {"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {"_meta": {"io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}, "url": {}}, "roots": {"listChanged": true}}, "io.modelcontextprotocol/clientInfo": {"name": "antigravity-client", "version": "v1.0.0"}, "io.modelcontextprotocol/protocolVersion": "2026-07-28"}}}}
+{"in": {"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {"clientInfo": {"name": "antigravity-client", "version": "v1.0.0"}, "protocolVersion": "2025-11-25", "capabilities": {"elicitation": {"form": {}, "url": {}}, "roots": {"listChanged": true}}}}}
+{"in": {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}}
+{"in": {"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}}}
+{"in": {"jsonrpc": "2.0", "method": "notifications/roots/list_changed", "params": {}}}
+{"in": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"_meta": {"antigravity.google/artifacts_dir": "C:\\WorkSpace\\agent-hub\\docs\\spikes\\agy\\iso\\gem\\run-app\\brain\\fdef60ea-10ba-4fd5-aa49-58ecd40ceae4", "antigravity.google/conversation_id": "fdef60ea-10ba-4fd5-aa49-58ecd40ceae4", "antigravity.google/root_conversation_id": "fdef60ea-10ba-4fd5-aa49-58ecd40ceae4", "progressToken": "acc724a0-c5b7-4849-9f91-9e2ccd6f4c0e:2"}, "name": "spike_echo", "arguments": {"text": "xin chào"}}}}

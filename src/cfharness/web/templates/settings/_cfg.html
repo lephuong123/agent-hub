@@ -1,16 +1,21 @@
 {#- Một nhóm cấu hình (settings_schema.view → groups[]): mỗi khoá một hàng — nhãn + gợi ý bên trái, ô nhập + nút Lưu bên phải. `next` = URL
-    quay về sau khi lưu (giữ neo #cfg-<id>). -#}
+    quay về sau khi lưu (giữ neo #cfg-<id>). Khoá BẢO VỆ (`s.protected`) → `/do/config_set_protected` (xác nhận 2 bước); qua link public
+    (`cfg_local` sai) chỉ hiện giá trị. -#}
 {% macro group(g, next, open=False) -%}
 <details class="cfg-group" id="cfg-{{ g.id }}"{% if open %} open{% endif %}>
   <summary>{{ g.title }} <span class="muted small">{{ g.rows|length }} mục</span></summary>
   <div class="cfg-rows">
   {% for r in g.rows %}{% set s = r.s %}
   <div class="cfg-row">
-    <div class="cfg-lbl"><b>{{ s.label }}</b><div class="muted small"><code>{{ s.key }}</code>{% if s.hint %} · {{ s.hint }}{% endif %}</div></div>
-    <form method="post" action="/do/config_set" class="cfg-ctl" data-confirm="Đổi {{ s.label }}?">
+    <div class="cfg-lbl"><b>{{ s.label }}</b>{% if s.protected %} <span class="pill warn small">{{ m.icon('shield') }}bảo vệ</span>{% endif %}<div class="muted small"><code>{{ s.key }}</code>{% if s.hint %} · {{ s.hint }}{% endif %}</div></div>
+    {% if s.protected and not cfg_local %}
+    <div class="cfg-ctl"><code>{{ r.value if r.value not in ('', none) else (s.null_label if s.nullable else '—') }}</code>
+      <span class="muted small" title="Khoá bảo vệ chỉ đổi khi dùng web trên chính máy chạy hub">chỉ xem qua link public</span></div>
+    {% else %}
+    <form method="post" action="/do/{{ 'config_set_protected' if s.protected else 'config_set' }}" class="cfg-ctl" data-confirm="Đổi {{ s.label }}?">
       <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="key" value="{{ s.key }}"><input type="hidden" name="next" value="{{ next }}#cfg-{{ g.id }}">
       {% if s.kind == 'bool' %}
-        <select name="value" aria-label="{{ s.label }}"><option value="true" {{ 'selected' if r.value == 'true' }}>Bật</option><option value="false" {{ 'selected' if r.value == 'false' }}>Tắt</option></select>
+        <select name="value" aria-label="{{ s.label }}">{% if s.nullable %}<option value="" {{ 'selected' if r.value == '' }}>{{ s.null_label }}</option>{% endif %}<option value="true" {{ 'selected' if r.value == 'true' }}>Bật</option><option value="false" {{ 'selected' if r.value == 'false' }}>Tắt</option></select>
       {% elif s.kind == 'choice' %}
         <select name="value" aria-label="{{ s.label }}">{% if s.nullable %}<option value="">{{ s.null_label }}</option>{% endif %}
           {% for c in s.choices %}<option value="{{ c }}" {{ 'selected' if r.value == c }}>{{ c }}</option>{% endfor %}
@@ -30,6 +35,7 @@
       {% endif %}
       <button class="btn sm" type="submit">Lưu</button>
     </form>
+    {% endif %}
   </div>
   {% endfor %}
   </div>

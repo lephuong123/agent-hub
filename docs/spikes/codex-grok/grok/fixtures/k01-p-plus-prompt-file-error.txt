@@ -1,0 +1,5 @@
+error: the argument '--single [<PROMPT>]' cannot be used with '--prompt-file <PATH>'
+
+Usage: grok --single [<PROMPT>] --output-format <OUTPUT_FORMAT> --reasoning-effort <EFFORT> [PROMPT]...
+
+For more information, try '--help'.

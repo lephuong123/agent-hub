@@ -1,0 +1,133 @@
+
+  Environment
+  └ Version: 1.0.92 [unknown]
+  └ CWD: C:\Users\LeQuyPhuong\AppData\Local\cfh-spike2\ws-k09
+  └ Project trusted: no
+
+  Project Instructions (None)
+
+  Permissions
+  └ Source: (none)
+  └ 0 loaded, 0 skipped
+
+  Login Policy
+  └ disable_api_key_auth: (unset)
+  └ force_login_team_uuid: (none)
+  └ api_key_auth_disabled: false
+
+  Skills (65)
+  └ built-in-browser                    user [claude]
+  └ computer-use                        user [claude]
+  └ chrome-browser                      user [claude]
+  └ deep-research                       user [claude]
+  └ browser-automation                  user [claude]
+  └ cf-mui-v9-convert                   user [claude]
+  └ cf-mui-v9-qa-audit                  user [claude]
+  └ cf-vuln                             user [claude]
+  └ game-development                    user [claude]
+  └ chorus-calls                        user [claude]
+  └ code-to-business-language           user [claude]
+  └ csdl-vb-cchc-wiki                   user [claude]
+  └ docs                                user [claude] [collides with /docs → /user:docs]
+  └ google-workspace                    user [claude]
+  └ import-memory                       user [claude]
+  └ incident-postmortem                 user [claude]
+  └ jira-discovery-description          user [claude]
+  └ morning                             user [claude]
+  └ build-with-ai                       bundled
+  └ code-review                         bundled
+  └ create-skill                        bundled
+  └ create-workflow                     bundled
+  └ design                              bundled
+  └ docx                                bundled
+  └ execute-plan                        bundled
+  └ game-assets                         bundled
+  └ imagine                             bundled [collides with /imagine → /bundled:imagine]
+  └ implement                           bundled
+  └ learn                               bundled
+  └ long-running-background-tasks       bundled
+  └ pdf                                 bundled
+  └ pptx                                bundled
+  └ pr-babysit                          bundled
+  └ resume-claude                       bundled
+  └ resume-codex                        bundled
+  └ resume-cursor                       bundled
+  └ review                              bundled
+  └ skill-design-principles             bundled
+  └ statusline                          bundled
+  └ threejs-frame-conventions           bundled
+  └ access-protected-vercel-deployment  plugin: vercel [claude]
+  └ ai-gateway                          plugin: vercel [claude]
+  └ ai-sdk                              plugin: vercel [claude]
+  └ ai-sdk                              plugin: vercel [claude]
+  └ auth                                plugin: vercel [claude]
+  └ bootstrap                           plugin: vercel [claude]
+  └ botid                               plugin: vercel [claude]
+  └ build-agents                        plugin: vercel [claude]
+  └ cdn-caching                         plugin: vercel [claude]
+  └ chat-sdk                            plugin: vercel [claude]
+  └ client-side-security                plugin: vercel [claude]
+  └ create-a-backend                    plugin: vercel [claude]
+  └ custom-metrics                      plugin: vercel [claude]
+  └ daemons                             plugin: vercel [claude]
+  └ deployments-cicd                    plugin: vercel [claude]
+  └ domains                             plugin: vercel [claude]
+  └ env-vars                            plugin: vercel [claude]
+  └ eve                                 plugin: vercel [claude]
+  └ flags-sdk                           plugin: vercel [claude]
+  └ is-agentic                          plugin: vercel [claude]
+  └ knowledge-update                    plugin: vercel [claude]
+  └ marketplace                         plugin: vercel [claude] [collides with /marketplace → /vercel:marketplace]
+  └ microfrontends                      plugin: vercel [claude]
+  └ offload-to-sandbox                  plugin: vercel [claude]
+  └ queues                              plugin: vercel [claude]
+
+  Agents (6)
+  └ general-purpose  builtin
+  └ explore          builtin
+  └ plan             builtin
+  └ vuln-fixer       user
+  └ vuln-triager     user
+  └ vuln-verifier    user
+
+  Plugins (1)
+  └ vercel (user, enabled)  25 skills, hooks, 1 MCPs
+
+  Marketplaces (None)
+
+  MCP Servers (5)
+  └ vercel (http)          plugin: vercel
+  └ playwright (stdio)     ~/.claude.json [claude]
+  └ video-context (stdio)  ~/.claude.json [claude]
+  └ fast-browser (stdio)   ~/.claude.json [claude]
+  └ csdl-van-ban (http)    ~/.claude.json [claude]
+
+  LSP Servers (None)
+
+  Hooks (1)
+  └ file  plugin: vercel [an interactive session waits for folder trust]
+
+  Config Sources
+  └ User: C:\Users\LeQuyPhuong\.grok\config.toml
+  └ Project: (none)
+
+  Experiments (None)
+
+  Harness Compatibility
+  └ cursor
+    └ skills     on   (default)
+    └ rules      on   (default)
+    └ agents     on   (default)
+    └ mcps       on   (default)
+    └ hooks      on   (default)
+    └ sessions   on   (default)
+  └ claude
+    └ skills     on   (default)
+    └ rules      on   (default)
+    └ agents     on   (default)
+    └ mcps       on   (default)
+    └ hooks      on   (default)
+    └ sessions   on   (default)
+  └ codex
+    └ sessions   on   (default)
+

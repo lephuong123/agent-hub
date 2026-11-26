@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"01a21162-23dc-72a2-a01c-2f3f958fdc73"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Loaded only 32768 of 129191 bytes from `C:\\WorkSpace\\agent-hub\\AGENTS.md` in environment `local` under the 32768-byte project instruction budget. Trim your project instructions to fit the budget. If you need to keep them all, increase `project_doc_max_bytes`."}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"I’ll execute the four requested steps exactly once each, in order, and report each result without retries or workarounds."}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"FAILED — step 1: shell command hung and was terminated  \nFAILED — step 2: shell command hung and was terminated  \nFAILED — step 3: shell command hung and was terminated  \nFAILED — step 4: shell command hung and was terminated"}}
+{"type":"turn.completed","usage":{"input_tokens":265117,"cached_input_tokens":250368,"cache_write_input_tokens":0,"output_tokens":1129,"reasoning_output_tokens":405}}

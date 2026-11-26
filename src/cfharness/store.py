@@ -1030,10 +1030,18 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS runs_kind_queued ON runs(kind, queued_at);
     CREATE INDEX IF NOT EXISTS events_agent_epoch_seq ON events(agent_id, epoch, seq);
     """,
+    # v37 — runtime theo agent (plan-codex-grok-runtime): NULL = claude (dòng cũ). Python để chạy lại an toàn (cột đã có → bỏ qua)
+    "store.migrate_v37_agents_runtime",
 ]
 
+
+def migrate_v37_agents_runtime(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(agents)")}
+    if "runtime" not in cols:
+        conn.execute("ALTER TABLE agents ADD COLUMN runtime TEXT")
+
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.
-PY_MIGRATION_PREFIXES = ("session_search.", "knowledge.graph.schema.")
+PY_MIGRATION_PREFIXES = ("session_search.", "knowledge.graph.schema.", "store.")
 
 
 def is_py_migration(sql: str) -> bool:

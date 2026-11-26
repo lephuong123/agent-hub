@@ -1,0 +1,216 @@
+Run Grok without the interactive UI
+
+Usage: grok agent [OPTIONS] [COMMAND]
+
+Commands:
+  stdio     Run the agent over stdio
+  headless  Run the agent headlessly over the Grok WebSocket relay
+  serve     Run the agent as a WebSocket server
+  leader    Run as the shared leader process for other clients
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --reauth
+          Run authentication before starting the agent [aliases: ----reauthenticate]
+  -m, --model <MODEL>
+          Model ID to use
+      --reasoning-effort <EFFORT>
+          Reasoning effort for reasoning models [aliases: --effort]
+      --always-approve
+          Auto-approve all tool executions
+      --agent-profile <PATH>
+          Path to an agent profile file
+      --plugin-dir <DIR>
+          Load a plugin from this directory for this process only (repeatable)
+      --leader
+          Connect to a shared leader process instead of starting a new agent
+      --no-leader
+          Start a new agent even when config enables leader mode
+      --grok-ws-origin <GROK_WS_ORIGIN>
+          
+      --grok-ws-url <GROK_WS_URL>
+          
+      --cli-chat-proxy-base-url <CLI_CHAT_PROXY_BASE_URL>
+          Override the CLI chat proxy base URL
+      --xai-api-base-url <XAI_API_BASE_URL>
+          Override the public xAI API base URL
+      --debug
+          Enable debug logging
+      --debug-file <FILE>
+          Write debug logs to FILE
+  -h, --help
+          Print help (see more with 'grok help agent')
+      --leader-socket <PATH>
+          Use a custom leader socket path instead of the default `~/.grok/leader.sock`
+===STDIO
+Run the agent over stdio
+
+Usage: grok agent stdio [OPTIONS]
+
+Options:
+      --debug
+          Enable debug logging
+
+      --debug-file <FILE>
+          Write debug logs to FILE
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+      --leader-socket <PATH>
+          Use a custom leader socket path instead of the default `~/.grok/leader.sock`.
+          
+          A local/branch build can thus run an isolated leader without colliding with the default one already running on the machine. Name it `~/.grok/leader-*.sock` to keep `grok leader list/kill` able to find it; any other location works but won't be auto-discovered. When the leader runs a shared daemon, the daemon listens beside PATH at `PATH.daemon`
+===MODELS
+You are logged in with grok.com.
+
+Default model: grok-4.7
+
+Available models:
+  * grok-4.7 (default)
+===INSPECT
+
+  Environment
+  └ Version: 1.0.92 [unknown]
+  └ CWD: C:\WorkSpace\agent-hub\docs\spikes\codex-grok\grok
+  └ Git root: C:/WorkSpace/agent-hub/
+  └ Project trusted: no
+
+  Project Instructions (None)
+
+  Permissions
+  └ Source: (none)
+  └ 0 loaded, 0 skipped
+
+  Login Policy
+  └ disable_api_key_auth: (unset)
+  └ force_login_team_uuid: (none)
+  └ api_key_auth_disabled: false
+
+  Skills (57)
+  └ built-in-browser                    user [claude]
+  └ computer-use                        user [claude]
+  └ chrome-browser                      user [claude]
+  └ deep-research                       user [claude]
+  └ browser-automation                  user [claude]
+  └ cf-mui-v9-convert                   user [claude]
+  └ cf-mui-v9-qa-audit                  user [claude]
+  └ cf-vuln                             user [claude]
+  └ game-development                    user [claude]
+  └ chorus-calls                        user [claude]
+  └ code-to-business-language           user [claude]
+  └ csdl-vb-cchc-wiki                   user [claude]
+  └ docs                                user [claude] [collides with /docs → /user:docs]
+  └ google-workspace                    user [claude]
+  └ import-memory                       user [claude]
+  └ incident-postmortem                 user [claude]
+  └ jira-discovery-description          user [claude]
+  └ morning                             user [claude]
+  └ build-with-ai                       bundled
+  └ code-review                         bundled
+  └ create-skill                        bundled
+  └ create-workflow                     bundled
+  └ design                              bundled
+  └ docx                                bundled
+  └ execute-plan                        bundled
+  └ game-assets                         bundled
+  └ imagine                             bundled [collides with /imagine → /bundled:imagine]
+  └ implement                           bundled
+  └ learn                               bundled
+  └ long-running-background-tasks       bundled
+  └ pdf                                 bundled
+  └ pptx                                bundled
+  └ access-protected-vercel-deployment  plugin: vercel [claude]
+  └ ai-gateway                          plugin: vercel [claude]
+  └ ai-sdk                              plugin: vercel [claude]
+  └ ai-sdk                              plugin: vercel [claude]
+  └ auth                                plugin: vercel [claude]
+  └ bootstrap                           plugin: vercel [claude]
+  └ botid                               plugin: vercel [claude]
+  └ build-agents                        plugin: vercel [claude]
+  └ cdn-caching                         plugin: vercel [claude]
+  └ chat-sdk                            plugin: vercel [claude]
+  └ client-side-security                plugin: vercel [claude]
+  └ create-a-backend                    plugin: vercel [claude]
+  └ custom-metrics                      plugin: vercel [claude]
+  └ daemons                             plugin: vercel [claude]
+  └ deployments-cicd                    plugin: vercel [claude]
+  └ domains                             plugin: vercel [claude]
+  └ env-vars                            plugin: vercel [claude]
+  └ eve                                 plugin: vercel [claude]
+  └ flags-sdk                           plugin: vercel [claude]
+  └ is-agentic                          plugin: vercel [claude]
+  └ knowledge-update                    plugin: vercel [claude]
+  └ marketplace                         plugin: vercel [claude] [collides with /marketplace → /vercel:marketplace]
+  └ microfrontends                      plugin: vercel [claude]
+  └ offload-to-sandbox                  plugin: vercel [claude]
+  └ queues                              plugin: vercel [claude]
+
+  Agents (6)
+  └ general-purpose  builtin
+  └ explore          builtin
+  └ plan             builtin
+  └ vuln-fixer       user
+  └ vuln-triager     user
+  └ vuln-verifier    user
+
+  Plugins (1)
+  └ vercel (user, enabled)  25 skills, hooks, 1 MCPs
+
+  Marketplaces (None)
+
+  MCP Servers (5)
+  └ vercel (http)          plugin: vercel
+  └ playwright (stdio)     ~/.claude.json [claude]
+  └ video-context (stdio)  ~/.claude.json [claude]
+  └ fast-browser (stdio)   ~/.claude.json [claude]
+  └ csdl-van-ban (http)    ~/.claude.json [claude]
+
+  LSP Servers (None)
+
+  Hooks (1)
+  └ file  plugin: vercel [an interactive session waits for folder trust]
+
+  Config Sources
+  └ User: C:\Users\LeQuyPhuong\.grok\config.toml
+  └ Project: (none)
+
+  Experiments (None)
+
+  Harness Compatibility
+  └ cursor
+    └ skills     on   (default)
+    └ rules      on   (default)
+    └ agents     on   (default)
+    └ mcps       on   (default)
+    └ hooks      on   (default)
+    └ sessions   on   (default)
+  └ claude
+    └ skills     on   (default)
+    └ rules      on   (default)
+    └ agents     on   (default)
+    └ mcps       on   (default)
+    └ hooks      on   (default)
+    └ sessions   on   (default)
+  └ codex
+    └ sessions   on   (default)
+
+===MCP
+Manage MCP server configurations
+
+Usage: grok mcp [OPTIONS] <COMMAND>
+
+Commands:
+  list     List configured MCP servers
+  add      Add or update an MCP server
+  remove   Remove an MCP server
+  enable   Enable an MCP server
+  disable  Disable an MCP server
+  doctor   Diagnose MCP server configuration and connectivity
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --debug                 Enable debug logging
+      --debug-file <FILE>     Write debug logs to FILE
+  -h, --help                  Print help (see more with 'grok help mcp')
+      --leader-socket <PATH>  Use a custom leader socket path instead of the default `~/.grok/leader.sock`

@@ -513,7 +513,7 @@ async def partial_health(request: Request) -> Response:
         st = await rpc(request, "hub.status") or {}
         add("Daemon", True, f"đang chạy · phiên bản {st.get('version')} · {st.get('running', 0)} run chạy, {st.get('queued', 0)} chờ")
         add("Đăng nhập claude", not st.get("auth_block"), "bình thường" if not st.get("auth_block") else
-            "claude chưa đăng nhập — run bị chặn: đổi sang tài khoản khác ở mục Tài khoản Claude (nút Dùng), "
+            "claude chưa đăng nhập — run bị chặn: đổi sang tài khoản khác ở Cài đặt › Tài khoản AI (nút Dùng), "
             "hoặc chạy `claude auth login` rồi `cfharness doctor`")
         acct = st.get("account") if isinstance(st.get("account"), dict) else None
         if acct:
@@ -523,7 +523,7 @@ async def partial_health(request: Request) -> Response:
         rl = st.get("rate_limit")
         if rl:
             add("Giới hạn tốc độ", False, "đang bị giới hạn" + (f" tới {rl.get('until')}" if isinstance(rl, dict) and rl.get("until") else "")
-                + " — muốn chạy tiếp ngay: đổi sang tài khoản khác ở mục Tài khoản Claude (nút Dùng)", "warning")
+                + " — muốn chạy tiếp ngay: đổi sang tài khoản khác ở Cài đặt › Tài khoản AI (nút Dùng)", "warning")
         log_errors = st.get("log_errors") if isinstance(st.get("log_errors"), dict) else {}
         if log_errors:  # L6 (B5): bộ đếm lỗi trong RAM của daemon (từ khi daemon chạy)
             d24, d1 = log_errors.get("24h") or {}, log_errors.get("1h") or {}

@@ -1,0 +1,32 @@
+{
+  "text": "{\"answer\":42}",
+  "stopReason": "end_turn",
+  "sessionId": "01a2116a-be09-7732-8f3e-d9f648d2c35e",
+  "requestId": "b82beb46-12f2-4e3b-a415-e1ae16e4b4c6",
+  "cwd": "C:\\WorkSpace\\agent-hub\\docs\\spikes\\codex-grok\\grok\\work\\k01",
+  "thought": "The user wants me to answer 6*7 and put it in the \"answer\" field according to the JSON schema specified.\n",
+  "usage": {
+    "input_tokens": 45854,
+    "cache_read_input_tokens": 8960,
+    "cache_creation_input_tokens": 0,
+    "output_tokens": 92,
+    "reasoning_tokens": 87,
+    "total_tokens": 54906
+  },
+  "num_turns": 1,
+  "total_cost_usd": 0.09674,
+  "total_cost_usd_ticks": 967400000,
+  "modelUsage": {
+    "grok-4.7": {
+      "inputTokens": 45854,
+      "outputTokens": 92,
+      "cacheReadInputTokens": 8960,
+      "cacheCreationInputTokens": 0,
+      "modelCalls": 1,
+      "costUSD": 0.09674
+    }
+  },
+  "structuredOutput": {
+    "answer": 42
+  }
+}

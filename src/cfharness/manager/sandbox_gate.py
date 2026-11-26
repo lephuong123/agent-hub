@@ -41,8 +41,8 @@ def blocked(caps: dict[str, Any], manager_cfg: Any) -> bool:
 
 
 BLOCK_MSG = ("khung điều phối viên rộng (hermes: Bash/Write/Web) cần sandbox OS — máy này (Windows) không có, nên mặc định bị từ "
-             "chối. Nếu chấp nhận rủi ro, NGƯỜI đặt `cfharness config set manager.allow_hermes_without_sandbox true` trước "
-             "(docs/dev-notes/windows.md)")
+             "chối. Nếu chấp nhận rủi ro, NGƯỜI bật «Khung rộng khi không có sandbox OS (Windows)» ở Cài đặt › Bảo mật & thiết bị "
+             "(trên máy chạy hub) hoặc `cfharness config set manager.allow_hermes_without_sandbox true` trước (docs/dev-notes/windows.md)")
 
 
 def gate(caps: dict[str, Any], manager_cfg: Any) -> dict[str, Any]:

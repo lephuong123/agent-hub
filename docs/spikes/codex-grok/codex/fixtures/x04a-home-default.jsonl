@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a21171-bd0e-7fb3-9c47-aa4a9276cd74"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"OK.\nmcp__traphome"}}
+{"type":"turn.completed","usage":{"input_tokens":11336,"cached_input_tokens":9600,"cache_write_input_tokens":0,"output_tokens":339,"reasoning_output_tokens":325}}
