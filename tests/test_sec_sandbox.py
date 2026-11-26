@@ -150,3 +150,76 @@ def test_guard_off_drops_hook_but_keeps_sandbox_and_static_deny(tmp_path):
     assert s["sandbox"]["enabled"] and sb_path(hub / "policy") in s["sandbox"]["filesystem"]["denyWrite"]
     assert sb_path(token_path(sock)) in s["sandbox"]["filesystem"]["denyRead"]
     assert f"Read(/{rule_path(hub)}/secrets/**)" in s["permissions"]["deny"]
+
+
+# H-18 (mở rộng ở plan-mcp-claude-native PR7, commit 0bc3cd5): server trỏ về CHÍNH hub = điều khiển hub bằng DANH TÍNH NGƯỜI (token của
+# `cfharness mcp serve`) → MỌI tool bị cấm, kể cả tool ĐỌC (đọc run/prompt/chi phí của mọi agent, không truy được agent nào gọi) và tool
+# hub thêm sau này. Agent làm việc với hub qua `hub-self` (ràng run, theo vai trò).
+HUB_TOOLS_ANY = ("hub_status", "hub_runs", "hub_run_show", "hub_agents", "hub_events", "hub_run", "hub_cancel", "hub_steer",
+                 "hub_task_create", "hub_approve", "hub_estop", "a_tool_added_later")
+
+
+@pytest.mark.parametrize("tool", HUB_TOOLS_ANY)
+def test_every_tool_of_detected_hub_server_is_forbidden(tmp_path, tool):
+    ps = PolicyStore(tmp_path / "hub", user_home=tmp_path)
+    ctx = GuardContext(tmp_path, ps.load(), git_probe=False, hub_mcp_servers=frozenset({"ops"}))
+    v = classify(f"mcp__ops__{tool}", {}, ctx)
+    assert v.forbidden and v.rule == "hub_mcp_forbidden", (tool, v)
+
+
+@pytest.mark.parametrize("name", ["cfharness", "agent-hub", "agent_hub", "hub"])
+def test_reserved_hub_names_forbidden_without_detection(tmp_path, name):
+    """Tên dành riêng của hub (`names.HUB_MCP_SERVER_NAMES`) bị chặn kể cả khi không nhận ra theo lệnh/URL (vd bọc qua wrapper)."""
+    ps = PolicyStore(tmp_path / "hub", user_home=tmp_path)
+    ctx = GuardContext(tmp_path, ps.load(), git_probe=False)
+    for tool in ("hub_status", "hub_run", "anything"):
+        v = classify(f"mcp__{name}__{tool}", {}, ctx)
+        assert v.forbidden and v.rule == "hub_mcp_forbidden", (name, tool, v)
+
+
+def test_hub_server_registered_under_unusual_name(tmp_path):
+    """Tên server có ký tự claude thay bằng `_` trong tên tool (`My Hub (local)` → `My_Hub__local_`) vẫn bị nhận ra."""
+    from cfharness.mcp_client.claude_source import tool_server_name
+
+    ps = PolicyStore(tmp_path / "hub", user_home=tmp_path)
+    ctx = GuardContext(tmp_path, ps.load(), git_probe=False, hub_mcp_servers=frozenset({"My Hub (local)"}))
+    tsn = tool_server_name("My Hub (local)")
+    assert tsn == "My_Hub__local_"  # tên đã chuẩn hoá CHỨA "__" — trước đây guard tách sai server/tool ở đây
+    for tool in ("hub_status", "hub_approve", "anything"):
+        v = classify(f"mcp__{tsn}__{tool}", {}, ctx)
+        assert v.forbidden and v.rule == "hub_mcp_forbidden", (tool, v)
+    assert not classify("mcp__My_Hub__search", {}, ctx).forbidden  # server khác chỉ trùng phần đầu tên
+
+
+@pytest.mark.parametrize("tool,safe", [
+    ("task_complete", False), ("task_show", True), ("memory_search", True), ("memory_recall", True), ("team_roster", True),
+])
+def test_hub_self_tools_not_affected_by_hub_server_block(tmp_path, tool, safe):
+    """`hub-self` (MCP của RUN, ràng run_id) KHÔNG bị luật chặn server hub — đó là kênh hợp lệ của agent với hub."""
+    ps = PolicyStore(tmp_path / "hub", user_home=tmp_path)
+    ctx = GuardContext(tmp_path, ps.load(), git_probe=False, hub_mcp_servers=frozenset({"ops", "hub"}))
+    v = classify(f"mcp__hub-self__{tool}", {}, ctx)
+    assert not v.forbidden and v.rule == "hub_self_tool" and (v.verdict == "safe") == safe, (tool, v)
+
+
+@pytest.mark.parametrize("tool", [
+    "mcp__atlassian__getJiraIssue", "mcp__claude_ai_Google_Drive__search_files", "mcp__github__list_repos",
+    "mcp__hubspot__search_contacts", "mcp__my-hub-tools__lookup", "mcp__docs__search", "mcp__playwright__browser_navigate",
+])
+def test_third_party_mcp_not_blocked_by_hub_rules(tmp_path, tool):
+    """MCP bên thứ ba (kể cả tên chứa "hub": github, hubspot…) KHÔNG bị chặn nhầm — agent dùng chung MCP của tài khoản (PR7)."""
+    ps = PolicyStore(tmp_path / "hub", user_home=tmp_path)
+    ctx = GuardContext(tmp_path, ps.load(), git_probe=False, hub_mcp_servers=frozenset({"ops"}))
+    v = classify(tool, {}, ctx)
+    assert not v.forbidden and v.rule == "mcp_third_party", (tool, v)
+
+
+def test_hub_human_only_tool_names_forbidden_on_unrecognised_server(tmp_path):
+    """Server hub đăng ký dưới tên LẠ mà không nhận ra (wrapper, URL qua proxy): tool chỉ-người vẫn bị chặn theo TÊN tool;
+    tool đọc thì không (không phân biệt được với MCP bên thứ ba) — vì vậy lớp nhận diện theo lệnh/URL + gỡ khỏi run là chính."""
+    ps = PolicyStore(tmp_path / "hub", user_home=tmp_path)
+    ctx = GuardContext(tmp_path, ps.load(), git_probe=False)
+    for tool in ("hub_approve", "hub_agent_update", "hub_estop", "hub_team_update", "hub_learn_rollback"):
+        v = classify(f"mcp__weird__{tool}", {}, ctx)
+        assert v.forbidden, (tool, v)
+    assert not classify("mcp__weird__hub_status", {}, ctx).forbidden
