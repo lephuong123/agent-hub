@@ -10,19 +10,28 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
-### Tính năng mới
+---
+
+## v0.2.40 — 2026-11-26
+
+### Agent chạy được trên ChatGPT (Codex) và Grok, không chỉ Claude (#237)
 - **Agent chạy được trên Codex (gói ChatGPT) và Grok Build, không chỉ Claude.** Mỗi agent có trường `runtime`: `claude` (mặc định, như cũ), `codex` hoặc `grok` — chọn ở form agent trên web hoặc `cfharness agent create|edit --runtime codex|grok`. Mỗi người đăng nhập tài khoản của chính mình bằng CLI của nhà cung cấp (`codex login`, `grok login`); hub không lưu token của hai CLI này.
   - **Guard vẫn duyệt từng tool**: mọi lệnh shell, sửa file và tool MCP của run codex/grok đều hỏi hub trước khi chạy (Codex qua `codex app-server`, Grok qua Agent Client Protocol), cùng luật/duyệt như run Claude; lỗi hoặc hết giờ = từ chối. Hub không bao giờ chọn "luôn cho phép" thay người.
   - **Cô lập**: Codex chạy trong sandbox `mxc` của Windows (lệnh đã duyệt vẫn không ghi được ra ngoài thư mục làm việc, không ra mạng), tắt connector ChatGPT và MCP riêng của người dùng; Grok dùng thư mục cấu hình riêng của hub (không nạp skill/MCP/hook/plugin Claude Code của máy) và mượn phiên `grok login`.
   - Dừng và resume phiên hoạt động như run Claude; steer (gửi thêm tin giữa lượt) có ở cả hai — với Grok chưa kiểm được trên CLI thật (hết quota gói free lúc đo). Không có ở codex/grok: connector claude.ai, plugin Claude Code, subagent, `result_schema`, fallback model (agent đặt các trường này sẽ bị từ chối khi chọn runtime khác).
-  - **Cài đặt → Tài khoản AI** (trước là "Tài khoản Claude") có thêm thẻ **ChatGPT (Codex)** và **Grok**: xem CLI + phiên bản, email, gói (Business/Plus…), workspace, hạn mức 5 giờ/tuần; **Đăng nhập bằng mã** (link + mã một lần, trang tự cập nhật khi xong), **Đăng nhập qua trình duyệt** (Codex, khi mở web trên chính máy chạy hub), **Đăng xuất**, đặt đường dẫn CLI (tự dò Volta/npm/`~/.grok/bin`), model và effort mặc định. Hub không nhận token — đăng nhập là phiên của chính CLI.
-  - **Nhiều tài khoản ChatGPT/Grok** như Claude: thêm tài khoản (mỗi tài khoản một thư mục phiên riêng trong hub — Codex `CODEX_HOME`, Grok `auth.json` riêng), **Dùng** để chọn tài khoản cho agent, Kiểm tra / Đăng xuất / Xoá. Trạng thái hiện ngay từ cache, kiểm lại ngầm.
-  - **Điều phối viên chạy ChatGPT hoặc Grok**: trang Điều phối thêm form "tạo điều phối viên mới" chọn Claude / ChatGPT (Codex) / Grok; agent codex/grok chỉ định được (trước bị chặn vì "tool_policy.tools trống"). Khung quyền `manager.capabilities` được ép lúc chạy: tool ngoài khung bị từ chối, Codex sandbox chỉ đọc + tắt web khi khung strict.
-  - **Mọi khoá cấu hình chỉnh được trên UI**: khoá bảo vệ (guard, sandbox, hồ sơ phê duyệt, khung điều phối viên, runtime, web public, telemetry… — trước chỉ xem) nay sửa ở Cài đặt › Bảo mật & thiết bị, nhóm cấu hình ChatGPT/Grok ở Tài khoản AI. Khoá bảo vệ chỉ đổi được khi dùng web trên **chính máy chạy hub**, cần **xác nhận 2 lần** và ghi nhật ký kiểm toán; qua link public chỉ xem. Đường dẫn CLI codex/grok cũng chỉ đổi trên máy chạy hub.
-  - Sửa: ô bật/tắt để trống ("theo hồ sơ phê duyệt") trước hiện nhầm thành "Bật".
-  - **Guard hiểu lệnh PowerShell / cmd.exe** (Codex trên Windows chạy lệnh bằng PowerShell): `Remove-Item`/`ri`/`del`/`erase`/`rd`/`rmdir -Recurse`, `Clear-Content`, `Set-Content`/`Out-File`, `Move-Item`/`Copy-Item`/`Rename-Item`… đi qua cùng kiểm tra đích như `rm`/`truncate`/`mv`/`cp` — trước đây bị coi là "ghi" thường nên xoá file có sẵn của người **không hỏi duyệt** (sandbox chỉ chặn được khi đích ở NGOÀI thư mục làm việc).
-  - `cfharness doctor` kiểm thêm: phiên bản + đăng nhập `codex`/`grok`, sandbox MXC của Codex, cảnh báo `~/.codex/AGENTS.md` (Codex luôn nạp file này, không tắt được).
-  - Chi tiết đo đạc và điều khoản: `docs/spikes/codex-grok-spike-report.md`.
+- **Cài đặt → Tài khoản AI** (trước là "Tài khoản Claude") có thêm thẻ **ChatGPT (Codex)** và **Grok**: xem CLI + phiên bản, email, gói (Business/Plus…), workspace, hạn mức 5 giờ/tuần; **Đăng nhập bằng mã** (link + mã một lần, trang tự cập nhật khi xong), **Đăng nhập qua trình duyệt** (Codex, khi mở web trên chính máy chạy hub), **Đăng xuất**, đặt đường dẫn CLI (tự dò Volta/npm/`~/.grok/bin`), model và effort mặc định. Hub không nhận token — đăng nhập là phiên của chính CLI.
+- **Nhiều tài khoản ChatGPT/Grok** như Claude: thêm tài khoản (mỗi tài khoản một thư mục phiên riêng trong hub — Codex `CODEX_HOME`, Grok `auth.json` riêng), **Dùng** để chọn tài khoản cho agent, Kiểm tra / Đăng xuất / Xoá. Trạng thái hiện ngay từ cache, kiểm lại ngầm.
+- **Điều phối viên chạy ChatGPT hoặc Grok**: trang Điều phối thêm form "tạo điều phối viên mới" chọn Claude / ChatGPT (Codex) / Grok; agent codex/grok chỉ định được (trước bị chặn vì "tool_policy.tools trống"). Khung quyền `manager.capabilities` được ép lúc chạy: tool ngoài khung bị từ chối, Codex sandbox chỉ đọc + tắt web khi khung strict.
+- `cfharness doctor` kiểm thêm: phiên bản + đăng nhập `codex`/`grok`, sandbox MXC của Codex, cảnh báo `~/.codex/AGENTS.md` (Codex luôn nạp file này, không tắt được).
+- Chi tiết đo đạc và điều khoản: `docs/spikes/codex-grok-spike-report.md`.
+
+### Mọi cấu hình chỉnh được trên web (#237)
+- **Mọi khoá cấu hình chỉnh được trên UI**: khoá bảo vệ (guard, sandbox, hồ sơ phê duyệt, khung điều phối viên, runtime, web public, telemetry… — trước chỉ xem) nay sửa ở Cài đặt › Bảo mật & thiết bị, nhóm cấu hình ChatGPT/Grok ở Tài khoản AI. Khoá bảo vệ chỉ đổi được khi dùng web trên **chính máy chạy hub**, cần **xác nhận 2 lần** và ghi nhật ký kiểm toán; qua link public chỉ xem. Đường dẫn CLI codex/grok cũng chỉ đổi trên máy chạy hub.
+
+### Sửa lỗi
+- **Bảo mật — guard hiểu lệnh PowerShell / cmd.exe (#237)**: Codex trên Windows chạy lệnh bằng PowerShell; `Remove-Item`/`ri`/`del`/`erase`/`rd`/`rmdir -Recurse`, `Clear-Content`, `Set-Content`/`Out-File`, `Move-Item`/`Copy-Item`/`Rename-Item`… đi qua cùng kiểm tra đích như `rm`/`truncate`/`mv`/`cp` — trước đây bị coi là "ghi" thường nên xoá file có sẵn của người **không hỏi duyệt** (sandbox chỉ chặn được khi đích ở NGOÀI thư mục làm việc).
+- **Bảo mật — MCP của hub đặt tên có ký tự đặc biệt (#238)**: server MCP trỏ về chính hub đặt tên như `My Hub (local)` (claude chuẩn hoá thành `My_Hub__local_`) bị guard đọc sai tên server nên mọi tool của hub (kể cả `hub_approve`) lọt luật chặn ở lớp guard; nay nhận theo tiền tố tên. Kèm bộ test bao quanh luật chặn MCP của hub.
+- Ô bật/tắt để trống ("theo hồ sơ phê duyệt") trên trang Cài đặt trước hiện nhầm thành "Bật".
 
 ### Lưu ý khi cập nhật
 - Migration DB v37: thêm cột `agents.runtime` (agent cũ = `claude`, không đổi hành vi).
