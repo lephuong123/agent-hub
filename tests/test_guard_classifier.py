@@ -923,9 +923,10 @@ PS_HELD = [
     "Clear-Content README.md",
     "Set-Content -Path README.md -Value x",
     "Out-File -FilePath README.md -InputObject x",
-    "Move-Item docs C:/elsewhere/docs",
-    "move src C:/tmp/src",
-    "Remove-Item -Force C:/Windows/System32/drivers/etc/hosts",
+    "Move-Item docs ../elsewhere/docs",  # chuyển file CÓ SẴN ra ngoài workspace = xoá khỏi repo (như `mv`)
+    "move src ../tmp-src",
+    pytest.param("Remove-Item -Force C:/Windows/System32/drivers/etc/hosts",
+                 marks=pytest.mark.skipif(sys.platform != "win32", reason="đường dẫn Windows — trên POSIX là đường dẫn tương đối")),
 ]
 PS_FREE = [
     "Get-ChildItem",
