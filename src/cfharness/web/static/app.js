@@ -744,3 +744,36 @@
   window.addEventListener("resize", sync);
   sync();
 })();
+
+/* "Nhận thông báo gì" (Cài đặt › Thông báo, form [data-notify-events]): tích nhóm ↔ tích mọi mục; bỏ một mục → bỏ tích nhóm
+ * (indeterminate); đụng tới ô tuỳ chỉnh → tự chọn "Tuỳ chỉnh…". Không JS: form vẫn chạy (nhóm tích = cả nhóm, cộng mục lẻ). */
+(function () {
+  "use strict";
+  function sync(form, gid) {
+    var g = form.querySelector('[data-nev-grp="' + gid + '"]');
+    if (!g) return;
+    var items = form.querySelectorAll('[data-nev-of="' + gid + '"]'), n = 0;
+    for (var i = 0; i < items.length; i++) if (items[i].checked) n++;
+    g.checked = items.length > 0 && n === items.length;
+    g.indeterminate = n > 0 && n < items.length;
+  }
+  document.addEventListener("change", function (e) {
+    var t = e.target, form = t && t.closest && t.closest("form[data-notify-events]");
+    if (!form || t.type !== "checkbox") return;
+    var gid = t.getAttribute("data-nev-grp");
+    if (gid) {
+      var items = form.querySelectorAll('[data-nev-of="' + gid + '"]');
+      for (var i = 0; i < items.length; i++) items[i].checked = t.checked;
+      t.indeterminate = false;
+    } else if (t.getAttribute("data-nev-of")) {
+      sync(form, t.getAttribute("data-nev-of"));
+    }
+    var custom = form.querySelector('input[name="preset"][value="custom"]');
+    if (custom) custom.checked = true;
+  });
+  var forms = document.querySelectorAll("form[data-notify-events]");
+  for (var f = 0; f < forms.length; f++) {
+    var gs = forms[f].querySelectorAll("[data-nev-grp]");
+    for (var j = 0; j < gs.length; j++) sync(forms[f], gs[j].getAttribute("data-nev-grp"));
+  }
+})();

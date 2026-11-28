@@ -1503,9 +1503,12 @@ async def _tab_notifications(request: Request) -> dict[str, Any]:
     except KeyError:
         tg_chats = []
     slack2 = await _slack_pages.slack_ctx(request)  # khối "Slack 2 chiều" (web/slack_pages.py)
-    return {**slack2, "slack": SLACK_WEBHOOK_SECRET in names or "SLACK_BOT_TOKEN" in names, "slack_webhook": SLACK_WEBHOOK_SECRET in names,
+    groups = [g for g in _settings.view(raw)["groups"] if g["id"] == "notify"]
+    nev = _notify_pages.ctx(raw, groups[0] if groups else None)  # "Nhận thông báo gì" (web/notify_pages.py) — hàng events theo kênh vào Nâng cao
+    groups = [{**g, "rows": [r for r in g["rows"] if r["s"].key not in _settings.EVENT_KEYS]} for g in groups]
+    return {**slack2, **nev, "slack": SLACK_WEBHOOK_SECRET in names or "SLACK_BOT_TOKEN" in names, "slack_webhook": SLACK_WEBHOOK_SECRET in names,
             "slack_create_url": SLACK_CREATE_URL, "telegram": "TELEGRAM_BOT_TOKEN" in names, "tg_chats": tg_chats,
-            "groups": [g for g in _settings.view(raw)["groups"] if g["id"] == "notify"]}
+            "groups": groups}
 
 
 async def _tab_secrets(request: Request) -> dict[str, Any]:
@@ -2459,6 +2462,11 @@ _mgr.register_actions(ACTIONS, Action, _req)
 from . import slack_pages as _slack_pages  # noqa: E402
 
 _slack_pages.register_actions(ACTIONS, Action, _req)
+
+# "Nhận thông báo gì" (notify_events.py, plan-chat-setup-web PR4): notify_events = một preset cho cả Slack + Telegram
+from . import notify_pages as _notify_pages  # noqa: E402
+
+_notify_pages.register_actions(ACTIONS, Action, _req)
 
 # Tài khoản Claude (docs/dev-notes/plan-claude-accounts.md): account_use / rename / rm / check / login_* / add_token + khối ở Cài đặt
 from . import account_pages as _account_pages  # noqa: E402

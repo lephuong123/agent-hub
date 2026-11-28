@@ -1621,3 +1621,13 @@ html { overflow-x: clip; }
 .mgr-chat .tx-code-head, .run-read .tx-code-head { padding: 1px 4px 1px 10px; font-size: 11px; }
 .mgr-chat .tx-code-head .tx-copy, .run-read .tx-code-head .tx-copy { padding: 2px 6px; font-size: 11px; min-height: 0; }
 .mgr-chat .tx-code pre, .run-read .tx-code pre { padding: 7px 10px; font-size: 12px; line-height: 1.5; }
+
+/* "Nhận thông báo gì" (settings/_notify_events.html) + multi có nhóm (settings/_cfg.html) */
+.nev-presets { border: 0; padding: 0; margin: 0 0 8px; display: flex; flex-direction: column; gap: 6px; }
+.nev-custom { margin: 6px 0 10px; }
+.nev-custom > summary, .nev-grp > summary { cursor: pointer; }
+.nev-grp { margin: 6px 0 6px 8px; }
+.nev-grp > summary .check { display: inline-flex; }
+.nev-items { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 4px 26px; }
+.msel-grp { margin: 4px 0 8px; }
+.msel-grp > b { display: block; color: var(--muted); }

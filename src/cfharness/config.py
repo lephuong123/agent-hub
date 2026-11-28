@@ -1102,6 +1102,17 @@ def validate_setting(key: str, value: Any) -> None:
             raise ValueError(f"{key} phải là số ≥ 0")
         if key == "perf.window_min" and not 1 <= value <= 60:
             raise ValueError("perf.window_min phải từ 1 tới 60 (dữ liệu chỉ giữ 60 phút trong RAM)")
+    if key in ("notify", "notify.slack", "notify.telegram", "notify.slack.events", "notify.telegram.events"):
+        from . import notify_events  # PR4 plan-chat-setup-web: chỉ nhận loại event kênh gửi được (có nhãn)
+
+        if key.endswith(".events"):
+            notify_events.validate(value)
+        elif isinstance(value, dict):
+            chans = {key.split(".", 1)[1]: value} if key != "notify" else value
+            for ch in notify_events.CHANNELS:
+                sub = chans.get(ch)
+                if isinstance(sub, dict) and "events" in sub:
+                    notify_events.validate(sub["events"])
     if key == "manager" or key.startswith("manager.capabilities"):
         from .manager.permissions import validate_capabilities
 
