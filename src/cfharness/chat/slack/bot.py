@@ -205,6 +205,23 @@ class SlackChatNotifier(QueuedNotifier):
         return {"chats": n}
 
 
+SLACK_ID_RE = re.compile(r"^[A-Z0-9]{6,20}$")
+
+
+def app_id_ok(v: Any) -> bool:
+    return isinstance(v, str) and bool(SLACK_ID_RE.match(v))
+
+
+def app_links(app_id: Any, team_id: Any) -> dict[str, str] | None:
+    """Link thẳng tới trang của app vừa tạo + mở DM với bot. Chỉ dựng khi id đúng dạng Slack (không bao giờ chèn chuỗi lạ vào URL)."""
+    if not app_id_ok(app_id):
+        return None
+    out = {"app_general": f"https://api.slack.com/apps/{app_id}/general", "app_oauth": f"https://api.slack.com/apps/{app_id}/oauth"}
+    if app_id_ok(team_id):
+        out["dm"] = f"https://slack.com/app_redirect?app={app_id}&team={team_id}"
+    return out
+
+
 class SlackBot(ChatBot):
     NAME = "slack"
     LABEL = "Slack"
@@ -1114,5 +1131,15 @@ class SlackBot(ChatBot):
         out.update({"interactive": bool(c.get("interactive")), "app_token": self.app_token() is not None, "team_id": c.get("team_id"), "team": self.info.get("team"),
                     "bot_user_id": self.info.get("bot_user_id"), "allowed_chat_ids": sorted(self.allowed()),
                     "allowed_user_ids": sorted(str(x) for x in (c.get("allowed_user_ids") or [])), "slash_command": self.slash(),
-                    "connected_at": self.info.get("connected_at"), "open_modals": self.modals.count()})
-        return out
+                    "connected_at": self.info.get("connected_at"), "open_modals": self.modals.count(),
+                    "token_team_id": self.info.get("team_id")})
+        out.update(self.app_links())
+        return self.with_diagnosis(out)
+
+    # ------------------------------------------------------------------ app Slack đã biết (slack.verify_bot — plan-chat-setup-web PR3)
+    APP = "slack.app"
+
+    def app_links(self) -> dict[str, Any]:
+        """`{app_id, links}` từ `hub_state slack.app` (ghi ở `slack.verify_bot`). Id kiểm dạng TRƯỚC khi dựng URL; chưa biết → None."""
+        rec = self._state(self.APP)
+        return {"app_id": rec.get("app_id") if app_id_ok(rec.get("app_id")) else None, "links": app_links(rec.get("app_id"), rec.get("team_id"))}

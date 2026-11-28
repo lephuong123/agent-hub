@@ -2,7 +2,7 @@
 
 Hỗ trợ: getMe, deleteWebhook, setMyCommands, getUpdates (long poll có offset/timeout), sendMessage (cả reply_markup
 inline / keyboard / force_reply), answerCallbackQuery, editMessageReplyMarkup, editMessageText, sendChatAction, sendDocument,
-getFile + GET /file/bot<token>/<path> (tệp người gửi: `add_file`). Token sai → 401. Test bơm update bằng `user_message()` / `press()` và đọc tin bot gửi bằng `sent()`.
+getFile + GET /file/bot<token>/<path> (tệp người gửi: `add_file`). getWebhookInfo/deleteWebhook (`webhook_url` đặt sẵn → getUpdates trả 409 như Telegram thật tới khi deleteWebhook). Token sai → 401. Test bơm update bằng `user_message()` / `press()` và đọc tin bot gửi bằng `sent()`.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ class FakeTelegram:
         self.files: dict[str, bytes] = {}  # file_id → nội dung (tệp/ảnh người gửi)
         self.downloads: list[str] = []  # file_path đã bị tải (GET /file/...)
         self.cond = threading.Condition()
+        self.webhook_url = ""  # khác rỗng → getUpdates 409 Conflict (telegram.repair gỡ)
         self.hubs: list[Any] = []  # hub của daemon test (fixture gắn) — tra nonce nút → id approval/câu hỏi
         outer = self
 
@@ -97,6 +98,14 @@ class FakeTelegram:
             self.cond.notify_all()
         if method == "getMe":
             return 200, {"ok": True, "result": {"id": 42, "is_bot": True, "username": "hub_test_bot", "first_name": "Hub"}}
+        if method == "getWebhookInfo":
+            return 200, {"ok": True, "result": {"url": self.webhook_url, "pending_update_count": 0}}
+        if method == "deleteWebhook":
+            self.webhook_url = ""
+            return 200, {"ok": True, "result": True}
+        if method == "getUpdates" and self.webhook_url:
+            return 409, {"ok": False, "error_code": 409,
+                         "description": "Conflict: can't use getUpdates method while webhook is active; use deleteWebhook to delete the webhook first"}
         if method == "getUpdates":
             off = int(body.get("offset") or 0)
             deadline = time.monotonic() + min(float(body.get("timeout") or 0), 2.0)

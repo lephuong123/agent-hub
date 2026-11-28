@@ -7,6 +7,8 @@
 - `telegram.allow {chat_id}` / `telegram.revoke {chat_id}` → sửa allowlist `notify.telegram.allowed_chat_ids`.
 - `telegram.disable {forget_token?}` → tắt kênh (tuỳ chọn xoá token khỏi secret store).
 - `telegram.test {text?}` → gửi thử tới mọi chat trong allowlist.
+- `telegram.repair {}` → `getWebhookInfo` + `deleteWebhook{drop_pending_updates:false}` bằng token đã lưu (lỗi 409 "webhook is active"),
+  khởi động lại long polling; `{ok, had_webhook}`.
 Mọi method trừ `status` ∈ `auth.HUMAN_ONLY` (agent không tự ghép chat của nó vào allowlist / lấy token).
 """
 
@@ -25,7 +27,7 @@ log = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from ..daemon import Daemon
 
-MUTATING_TELEGRAM = frozenset({"telegram.setup", "telegram.allow", "telegram.revoke", "telegram.disable", "telegram.test"})
+MUTATING_TELEGRAM = frozenset({"telegram.setup", "telegram.allow", "telegram.revoke", "telegram.disable", "telegram.test", "telegram.repair"})
 TOKEN_RE = re.compile(r"^\d{3,}:[A-Za-z0-9_-]{20,}$")
 CHAT_RE = re.compile(r"^-?\d{1,20}$")
 
@@ -108,6 +110,7 @@ def register_rpc(d: "Daemon") -> None:
             hub.config.set("notify.telegram.allowed_chat_ids", cur)
         if bot.pairing is not None:
             bot.pairing = None  # mã ghép nối dùng một lần
+        bot.record_peer(cid, uid or None, (info or {}).get("name"), (info or {}).get("username"))
         _audit("telegram.allow", p, {"chat_id": cid, "user_id": uid, "paired": bool(info)})
         welcome = None
         api = bot.api()
@@ -123,6 +126,7 @@ def register_rpc(d: "Daemon") -> None:
         cid = _chat(p)
         cur = [str(x) for x in (bot.cfg().get("allowed_chat_ids") or []) if str(x) != cid]
         hub.config.set("notify.telegram.allowed_chat_ids", cur)
+        bot.forget_peer(cid)
         _audit("telegram.revoke", p, {"chat_id": cid})
         return {"allowed_chat_ids": cur}
 
@@ -131,6 +135,7 @@ def register_rpc(d: "Daemon") -> None:
         forgot = False
         if p.get("forget_token"):
             forgot = bool(hub.secrets.delete(_name()))  # type: ignore[attr-defined]
+            bot.forget_peers()
         bot.pairing = None
         bot.kick()
         _audit("telegram.disable", p, {"forget_token": forgot})
@@ -141,7 +146,24 @@ def register_rpc(d: "Daemon") -> None:
         _audit("telegram.test", p, {"sent": r.get("sent"), "chats": r.get("chats")})
         return r
 
+    async def repair(p: dict[str, Any]) -> dict[str, Any]:
+        """Gỡ webhook đang chặn long polling (Telegram 409 "can't use getUpdates method while webhook is active"). Không bỏ tin đang chờ."""
+        api = bot.api(ignore_enabled=True)
+        if api is None:
+            raise HubError("chưa có token bot — kết nối Telegram trước (dán token từ @BotFather)")
+        try:
+            info = await api.call("getWebhookInfo")
+            had = bool((info or {}).get("url")) if isinstance(info, dict) else False
+            await api.call("deleteWebhook", {"drop_pending_updates": False})
+        except TelegramError as e:
+            raise HubError(f"Telegram từ chối / không kết nối được: {clip(e, 300)}") from None
+        bot.info["last_error"] = None
+        bot.kick()
+        _audit("telegram.repair", p, {"had_webhook": had})
+        return {"ok": True, "had_webhook": had}
+
     d.methods.update({
+        "telegram.repair": repair,
         "telegram.status": lambda p: bot.status(),
         "telegram.setup": setup,
         "telegram.pending": pending,

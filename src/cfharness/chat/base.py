@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from ..aiotasks import track
 from .. import auth as _auth
 from ..events import TERMINAL_RUN_EVENTS, HubEvent, iso
+from ..hub_freeze import frozen
 from ..notify.base import clip
 from ..notify.telegram import CHUNK, MAX_CHUNKS, CallbackStore, esc, fit, full_action, is_heavy, split_chunks, to_plain
 
@@ -324,6 +325,48 @@ class ChatBot:
     def _state(self, key: str) -> dict[str, Any]:
         v = self.hub.store.state_get(key) or {}
         return v if isinstance(v, dict) else {}
+
+    # ------------------------------------------------------------------ người được phép có tên (plan-chat-setup-web 3.4)
+    PEER_NAME_MAX = 60
+
+    def peers_key(self) -> str:
+        return f"{self.NAME}.peers"
+
+    def record_peer(self, chat_id: Any, user_id: Any = None, name: Any = None, username: Any = None) -> dict[str, Any]:
+        """Ghi `{chat_id, user_id, name, username, at}` vào `hub_state <kênh>.peers` (theo chat_id) lúc `allow`. Tên/username là DỮ LIỆU
+        người ngoài: một dòng đã làm sạch (`termsafe.one_line`), ≤ 60 ký tự; giữ tên cũ khi lần này không có."""
+        from ..termsafe import one_line
+
+        def _clean(v: Any) -> str | None:
+            t = one_line(v, self.PEER_NAME_MAX) if v not in (None, "") else ""
+            return t or None
+
+        peers = self._state(self.peers_key())
+        old = peers.get(str(chat_id)) if isinstance(peers.get(str(chat_id)), dict) else {}
+        rec = {"chat_id": str(chat_id), "user_id": str(user_id) if user_id not in (None, "") else old.get("user_id"),
+               "name": _clean(name) or old.get("name"), "username": _clean(str(username).lstrip("@") if username else None) or old.get("username"),
+               "at": old.get("at") or time.time()}
+        peers[str(chat_id)] = rec
+        self.hub.store.state_set(self.peers_key(), peers)
+        return rec
+
+    def forget_peer(self, chat_id: Any) -> None:
+        peers = self._state(self.peers_key())
+        if peers.pop(str(chat_id), None) is not None:
+            self.hub.store.state_set(self.peers_key(), peers)
+
+    def forget_peers(self) -> None:
+        if self.hub.store.state_get(self.peers_key()) is not None:
+            self.hub.store.state_set(self.peers_key(), {})
+
+    def peers(self) -> list[dict[str, Any]]:
+        """Mỗi chat trong allowlist một mục (chat thêm tay/trước khi có tính năng này: name/username None), mới nhất trước."""
+        rec = self._state(self.peers_key())
+        out = []
+        for cid in self.allowed():
+            r = rec.get(cid) if isinstance(rec.get(cid), dict) else {}
+            out.append({"chat_id": cid, "user_id": r.get("user_id"), "name": r.get("name"), "username": r.get("username"), "at": r.get("at")})
+        return sorted(out, key=lambda x: (-(x["at"] or 0), x["chat_id"]))
 
     def _watch(self, run_id: str, chat_id: Any, thread: Any = _FROM_CTX) -> None:
         """Theo dõi run để báo kết quả vào `chat_id`. `thread`: tin để trả lời (Slack kênh chung: kết quả vào đúng thread) — không
@@ -1177,7 +1220,16 @@ class ChatBot:
             "pairing_active": bool(pr and time.time() <= pr["exp"]),
             "active_buttons": self.callbacks.count(),
             "watching_runs": len(self._state(self.WATCH)),
+            "frozen": bool(frozen(self.hub)),
+            "peers": self.peers(),
         }
+
+    def with_diagnosis(self, out: dict[str, Any]) -> dict[str, Any]:
+        """Gắn `diagnosis` (chat/diagnose.py — hàm thuần trên chính dict trạng thái) — lớp con gọi SAU khi điền đủ trường."""
+        from .diagnose import diagnose
+
+        out["diagnosis"] = diagnose(self.NAME, out)
+        return out
 
     # ================================================================== lớp con cài (vận chuyển)
     def _make_notifier(self) -> Any:  # pragma: no cover - lớp con

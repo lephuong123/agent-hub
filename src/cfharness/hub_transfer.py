@@ -134,7 +134,9 @@ SYNC_ONLY_KEYS = ("sync_binary", "sync_min_version", "device_name", "local_paren
                   "secret_scan_max_bytes", "mode")
 FILEHUB_STATE = "import_filehub"
 # Thêm cho `clone` (2 hub cùng chạy): trạng thái kênh chat của bot máy nguồn (nút/tin/map hội thoại) + run hẹn tự resume
-CLONE_STATE = ("pending_resume", "auto_resume_pending")
+# người được phép có tên + app Slack đã biết (plan-chat-setup-web): clone bỏ token Telegram/Slack → bỏ luôn; move giữ (tiền tố bên dưới
+# cũng phủ — ghi rõ để bỏ tiền tố sau này không làm rò)
+CLONE_STATE = ("pending_resume", "auto_resume_pending", "telegram.peers", "slack.peers", "slack.app")
 CLONE_STATE_PREFIXES = ("telegram.", "slack.")
 # Task sẽ được dispatcher tự chạy tiếp → ở bản nhân bản: chặn lại (người gỡ chặn ở máy muốn chạy)
 CLONE_BLOCK_TASK_STATUSES = ("triage", "ready", "running", "review")

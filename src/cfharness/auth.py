@@ -86,9 +86,11 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # V2-N1: bề mặt quản trị luồng CLI thêm sau (revert về revision cũ = nâng quyền; purge = xoá vĩnh viễn; archive/pause = DoS)
         "agent.archive", "agent.revert", "agent.pause", "agent.resume", "trash.restore", "trash.purge", "task.archive", "task.reassign",
         # Telegram (chat/rpc.py): token bot, allowlist chat, gửi tin — agent không được tự ghép chat của nó vào allowlist
-        "telegram.setup", "telegram.pending", "telegram.allow", "telegram.revoke", "telegram.disable", "telegram.test",
+        "telegram.setup", "telegram.pending", "telegram.allow", "telegram.revoke", "telegram.disable", "telegram.test", "telegram.repair",
         # Slack 2 chiều (chat/slack/rpc.py): như Telegram — token bot/app, allowlist DM + người, gửi tin
-        "slack.setup", "slack.pending", "slack.allow", "slack.revoke", "slack.disable", "slack.test",
+        "slack.verify_bot", "slack.setup", "slack.pending", "slack.allow", "slack.revoke", "slack.disable", "slack.test",
+        # gửi thử thông báo (guard/rpc.py): `channels` gửi qua bot Telegram/Slack tới chat trong allowlist — như telegram.test|slack.test
+        "notify.test",
         # M7: chỉ định điều phối viên (cấp quyền manager), nhắn/tick manager (agent khác không được "ra lệnh" cho manager)
         "manager.set", "manager.chat", "manager.tick",
         # lưu trữ/khôi phục hội thoại điều phối viên (xoá mềm `archived_at`) — dọn lịch sử của người, agent/điều phối viên không được
