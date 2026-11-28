@@ -311,8 +311,21 @@ def cmd_notify(ctx: Any) -> int:
         from ..chat.slack.cli import cmd_slack
 
         return cmd_slack(ctx)
-    r = ctx.call("notify.test", {"text": ctx.args.text})
-    ctx.out(r, "đã gửi Slack" if r.get("sent") else f"không gửi: {r.get('reason')}")
+    chans = getattr(ctx.args, "channel", None)
+    if not chans:  # như cũ: chỉ Slack một chiều
+        r = ctx.call("notify.test", {"text": ctx.args.text})
+        ctx.out(r, "đã gửi Slack" if r.get("sent") else f"không gửi: {r.get('reason')}")
+        return 0 if r.get("sent") else 1
+    r = ctx.call("notify.test", {"text": ctx.args.text, "channels": "all" if "all" in chans else list(dict.fromkeys(chans))})
+    lines = []
+    for ch, res in (r.get("channels") or {}).items():
+        if res.get("skipped"):
+            lines.append(f"  {ch}: bỏ qua — {res.get('reason')}")
+        elif res.get("sent"):
+            lines.append(f"  {ch}: đã gửi" + (f" ({res['chats']} chat)" if res.get("chats") else ""))
+        else:
+            lines.append(f"  {ch}: không gửi — {res.get('reason')}")
+    ctx.out(r, "\n".join(lines) or "không có kênh nào")
     return 0 if r.get("sent") else 1
 
 
@@ -452,6 +465,8 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     ns = n.add_subparsers(dest="action", required=True)
     nt = ns.add_parser("test", parents=[common])
     nt.add_argument("--text")
+    nt.add_argument("--channel", action="append", choices=["all", "slack_webhook", "slack", "telegram"],
+                    help="gửi thử qua kênh này (lặp lại được; all = mọi kênh đã cấu hình). Không ghi → Slack một chiều như cũ")
     from ..chat.cli import add_notify_parsers as _add_telegram
 
     _add_telegram(ns, common)  # notify telegram setup|status|test|disable|allow|revoke

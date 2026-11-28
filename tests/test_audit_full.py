@@ -278,8 +278,8 @@ SERVICE_AUDITED = {
     "manager.conversation_read": "chỉ đánh dấu đã xem (UI), không đổi trạng thái nghiệp vụ — cố ý không audit",
     "file.open": "fileview.register_rpc tự ghi audit (không bao giờ nội dung file)",
     "web.notify": "web_events tự ghi audit theo loại sự kiện (danh sách trắng)",
-    **{f"telegram.{m}": "chat/rpc._audit tự ghi (gỡ token)" for m in ("setup", "allow", "revoke", "disable", "test")},
-    **{f"slack.{m}": "chat/slack/rpc tự ghi (gỡ token)" for m in ("setup", "allow", "revoke", "disable", "test")},
+    **{f"telegram.{m}": "chat/rpc._audit tự ghi (gỡ token)" for m in ("setup", "allow", "revoke", "disable", "test", "repair")},
+    **{f"slack.{m}": "chat/slack/rpc tự ghi (gỡ token)" for m in ("verify_bot", "setup", "allow", "revoke", "disable", "test")},
 }
 
 

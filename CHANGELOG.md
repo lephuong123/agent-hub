@@ -10,6 +10,8 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+- **Kết nối Telegram/Slack — phần nền cho trang Cài đặt mới** (plan-chat-setup-web): `cfharness notify test --channel all|telegram|slack|slack_webhook` gửi thử tới đúng kênh (không ghi `--channel` = Slack một chiều như cũ); trạng thái Telegram/Slack có chẩn đoán dễ hiểu (token bị thu hồi, bot chạy ở nơi khác / còn webhook, dán nhầm loại token Slack, thiếu app token…) và danh sách người được phép kèm tên; RPC mới `slack.verify_bot` (dán riêng bot token, hub nhớ app để dẫn link thẳng tới trang tạo App-Level Token + mở DM với bot) và `telegram.repair` (gỡ webhook đang chặn bot). `notify.test` giờ chỉ người gọi được (như `telegram.test`/`slack.test`).
+
 ---
 
 ## v0.2.40 — 2026-11-26

@@ -427,3 +427,17 @@ def test_auth_classifier_and_sandbox_protect_transfer(tmp_path):
     for sub in ("exports", "imports", "filehub"):
         assert any(x.rstrip("/").endswith(f"/{sub}") for x in fs["denyRead"]) and any(x.rstrip("/").endswith(f"/{sub}") for x in fs["denyWrite"])
         assert any(f"{sub}/**" in r and r.startswith("Read(") for r in secret_read_deny_rules(Path(home), Path(home) / "hub.sock"))
+
+
+def test_chat_peers_and_slack_app_dropped_on_clone_kept_on_move():
+    """plan-chat-setup-web: tên người được phép (`telegram.peers`/`slack.peers`) + app Slack đã biết (`slack.app`) đi theo token —
+    clone bỏ token Telegram/Slack nên bỏ luôn; move giữ."""
+    import sqlite3
+
+    assert {"telegram.peers", "slack.peers", "slack.app"} <= set(T.CLONE_STATE)
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE hub_state(key TEXT PRIMARY KEY, value TEXT)")
+    for k in ("telegram.peers", "slack.peers", "slack.app", "keep_me"):
+        conn.execute("INSERT INTO hub_state VALUES (?, '{}')", (k,))
+    assert set(T._state_keys(conn, "clone")) == {"telegram.peers", "slack.peers", "slack.app"}
+    assert T._state_keys(conn, "move") == []

@@ -385,4 +385,4 @@ class TelegramBot(ChatBot):
         out = super().status()
         out["bot_username"] = self.info.get("bot_username")
         out["allowed_chat_ids"] = sorted(self.allowed())
-        return out
+        return self.with_diagnosis(out)

@@ -1,6 +1,9 @@
 """RPC `slack.*` trên daemon (gọi `register_rpc(daemon)` trong `Daemon.__init__`, sau bước bọc audit → tự ghi audit).
 
 - `slack.status {}` → trạng thái (KHÔNG bao giờ trả token).
+- `slack.verify_bot {bot_token}` → (wizard web từng bước) kiểm `auth.test` + `bots.info` → lưu CHỈ bot token, nhớ `hub_state slack.app`
+  `{app_id, team_id, team, bot_user_id}`; trả `{team, team_id, bot_user_id, bot_name, app_id, links{app_general, app_oauth, dm}}`.
+  Bước sau gọi `slack.setup {app_token}` (bot token lấy từ secret store).
 - `slack.setup {bot_token?, app_token?}` → kiểm `auth.test` (bot) + `apps.connections.open` (app), lưu secret store, ghim `team_id`,
   bật `notify.slack.interactive`, sinh mã ghép nối một lần `{team, bot_user_id, pair_code, pair_ttl_s, slash_command}`.
   Không có token → dùng token đã lưu (sinh mã ghép nối mới).
@@ -20,13 +23,14 @@ from typing import TYPE_CHECKING, Any
 from ...errors import HubError
 from ...notify.base import clip
 from .api import SlackApi, SlackError
+from .bot import app_id_ok, app_links
 
 log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ...daemon import Daemon
 
-MUTATING_SLACK = frozenset({"slack.setup", "slack.allow", "slack.revoke", "slack.disable", "slack.test"})
+MUTATING_SLACK = frozenset({"slack.verify_bot", "slack.setup", "slack.allow", "slack.revoke", "slack.disable", "slack.test"})
 BOT_TOKEN_RE = re.compile(r"^xoxb-[A-Za-z0-9-]{20,}$")
 APP_TOKEN_RE = re.compile(r"^xapp-[A-Za-z0-9-]{20,}$")
 CHAT_RE = re.compile(r"^[CDG][A-Z0-9]{6,20}$")
@@ -93,6 +97,47 @@ def register_rpc(d: "Daemon") -> None:
         return {"team": me.get("team"), "team_id": team, "bot_user_id": me.get("user_id"), "bot_name": me.get("user"),
                 "pair_code": pair["code"], "pair_ttl_s": pair["ttl_s"], "slash_command": bot.slash(), "allowed_chat_ids": sorted(bot.allowed())}
 
+    async def verify_bot(p: dict[str, Any]) -> dict[str, Any]:
+        """Bước 2 của wizard: chỉ bot token (xoxb-). `bots.info` (scope users:read của manifest) → `app_id` để dựng link thẳng tới
+        trang App-Level Tokens + mở DM với bot. Workspace khác workspace đã ghim → từ chối như `setup`."""
+        bt = p.pop("bot_token", None)  # bỏ khỏi params ngay — không vào audit/log
+        bt = str(bt).strip() if bt else ""
+        if not BOT_TOKEN_RE.match(bt):
+            raise HubError("bot token không đúng dạng xoxb-… (OAuth & Permissions → Bot User OAuth Token)")
+        c = bot.cfg()
+        api = SlackApi(str(c.get("api_base") or "https://slack.com/api"), bt, None, timeout=float(c.get("timeout_s") or 15))
+        try:
+            me = await api.call("auth.test")
+            app_id = None
+            if me.get("bot_id"):
+                try:
+                    app_id = ((await api.call("bots.info", {"bot": str(me["bot_id"])})).get("bot") or {}).get("app_id")
+                except SlackError as e:  # thiếu scope users:read (manifest cũ) → không có link thẳng, vẫn lưu token
+                    log.info("Slack: bots.info lỗi (%s) — bỏ qua link tới app", clip(e, 120))
+        except SlackError as e:
+            raise HubError(f"Slack từ chối bot token: {clip(e, 300)}") from None
+        finally:
+            await api.aclose()
+        team = str(me.get("team_id") or "")
+        pinned = c.get("team_id")
+        if pinned and team and str(pinned) != team:
+            raise HubError(f"token thuộc workspace khác ({team}) với workspace đã ghép ({pinned}) — `slack disable --forget-token` trước")
+        app_id = str(app_id) if app_id_ok(app_id) else None
+        team_ok = team if app_id_ok(team) else None
+        bn, _an = _names()
+        hub.secrets.set(bn, bt)  # type: ignore[attr-defined]  # 0600 + đăng ký che theo giá trị
+        from ...termsafe import one_line
+
+        rec = {"app_id": app_id, "team_id": team_ok, "team": one_line(me.get("team") or "", 80) or None,
+               "bot_user_id": str(me.get("user_id") or "") or None}
+        hub.store.state_set(bot.APP, rec)
+        bot.info["team"] = me.get("team")
+        bot.info["bot_user_id"] = me.get("user_id")
+        bot.kick()
+        _audit("slack.verify_bot", p, {"team_id": team, "bot_user_id": me.get("user_id"), "app_id": app_id})
+        return {"team": rec["team"], "team_id": team, "bot_user_id": rec["bot_user_id"], "bot_name": me.get("user"), "app_id": app_id,
+                "links": app_links(app_id, team_ok)}
+
     def pending(p: dict[str, Any]) -> list[dict[str, Any]]:
         return bot.pending(p.get("code"))
 
@@ -124,9 +169,14 @@ def register_rpc(d: "Daemon") -> None:
             hub.config.set("notify.slack.allowed_chat_ids", cur)
         if bot.pairing is not None:
             bot.pairing = None  # mã ghép nối dùng một lần
+        name, username = (info or {}).get("name"), (info or {}).get("username")
+        api = bot.api()
+        if not name and api is not None:  # thêm tay / tên chưa kịp điền lúc ghép nối → users.info (cache, lỗi → không tên)
+            u = await bot._user_info(api, uid)
+            name, username = u.get("real_name") or (u.get("name") if u.get("name") != uid else None), u.get("username")
+        bot.record_peer(cid, uid, name, username)
         _audit("slack.allow", p, {"chat_id": cid, "user_id": uid, "paired": bool(info)})
         welcome = None
-        api = bot.api()
         if api is not None:
             try:
                 await bot._send(api, cid, "Đã kết nối cfharness. Bạn sẽ nhận yêu cầu duyệt (có nút), lỗi lặp, digest… tại đây.\n\n" + bot.help_text())
@@ -148,6 +198,7 @@ def register_rpc(d: "Daemon") -> None:
         if gone & set(users):
             users = [u for u in users if u not in gone]
             hub.config.set("notify.slack.allowed_user_ids", users)
+        bot.forget_peer(cid)
         _audit("slack.revoke", p, {"chat_id": cid, "user_ids": sorted(gone)})
         return {"allowed_chat_ids": cur, "allowed_user_ids": users}
 
@@ -159,6 +210,8 @@ def register_rpc(d: "Daemon") -> None:
             forgot = bool(hub.secrets.delete(an))  # type: ignore[attr-defined]
             forgot = bool(hub.secrets.delete(bn)) or forgot  # type: ignore[attr-defined]  # cả bot token (chế độ bot một chiều cũng mất)
             hub.config.set("notify.slack.team_id", None)
+            bot.forget_peers()  # quên token = bắt đầu lại từ đầu: tên người + app đã biết cũng bỏ
+            hub.store.state_set(bot.APP, {})
         bot.pairing = None
         bot.kick()
         _audit("slack.disable", p, {"forget_token": forgot})
@@ -171,6 +224,7 @@ def register_rpc(d: "Daemon") -> None:
 
     d.methods.update({
         "slack.status": lambda p: bot.status(),
+        "slack.verify_bot": verify_bot,
         "slack.setup": setup,
         "slack.pending": pending,
         "slack.allow": allow,
