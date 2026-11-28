@@ -22,7 +22,9 @@
           {% if r.value and r.value not in s.choices %}<option value="{{ r.value }}" selected>{{ r.value }}</option>{% endif %}</select>
       {% elif s.kind == 'multi' %}
         <details class="msel"><summary aria-label="{{ s.label }}">{{ r.value|length }}/{{ r.choices|length }} đã chọn</summary>
-          <div class="msel-list">{% for c in r.choices %}<label class="check small"><input type="checkbox" name="value" value="{{ c }}" {{ 'checked' if c in r.value }}> <code>{{ c }}</code></label>{% endfor %}</div></details>
+          <div class="msel-list">{% if r.groups %}{% for g in r.groups %}<div class="msel-grp"><b class="small">{{ g.title }}</b>
+            {% for it in g.entries %}<label class="check small" title="{{ it.event }}"><input type="checkbox" name="value" value="{{ it.event }}" {{ 'checked' if it.checked }}> {{ it.label }}</label>{% endfor %}</div>{% endfor %}
+          {% else %}{% for c in r.choices %}<label class="check small"><input type="checkbox" name="value" value="{{ c }}" {{ 'checked' if c in r.value }}> <code>{{ c }}</code></label>{% endfor %}{% endif %}</div></details>
       {% elif s.kind == 'list' %}
         <details class="msel"><summary aria-label="{{ s.label }}">{{ r.count }} mục</summary>
           <textarea name="value" rows="8" spellcheck="false" aria-label="{{ s.label }}" placeholder="{{ s.hint }}">{{ r.value }}</textarea></details>

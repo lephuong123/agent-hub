@@ -88,6 +88,7 @@
   </details>
   {% endif %}
 </section>
+{% include "settings/_notify_events.html" %}
 {% for g in groups %}<section class="card" id="notify-cfg">
   <h2>{{ m.icon('settings') }} Cấu hình thông báo</h2>
   {{ C.group(g, "/settings/notifications", open=True) }}
