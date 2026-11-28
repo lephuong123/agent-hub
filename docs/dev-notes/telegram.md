@@ -163,3 +163,16 @@ lệnh, phải hiện nguyên văn.
   định, bật thì hợp lệ + cùng chữ thấy được + bỏ qua khối có code + nối đúng cờ), `tests/tg_html.py` (thêm: `blockquote` chỉ ở cấp
   ngoài cùng, thuộc tính `expandable` không giá trị; `tappable_commands(html)` tìm `/lệnh` còn bấm được trên chữ thấy được, ngoài
   `pre`/`code`/URL). Chưa kiểm trên Telegram thật: hiển thị expandable, và việc U+2060 chặn được lệnh trên mọi ứng dụng.
+
+## Wizard trên web (2026-11-28 — plan-chat-setup-web.md PR1 + PR6)
+- `web/telegram_pages.py` + `templates/settings/telegram.html` + `_telegram_pending.html`: trang `/settings/notifications/telegram` (bước theo
+  `telegram.status`: `token` → `pair` → `done`, `off` khi đã tắt), partial `/partials/telegram/pending` (poll 3 s, không gia hạn phiên). Chỉ gọi RPC
+  `telegram.*` sẵn có. Thao tác `tg_setup|tg_pair|tg_allow|tg_allow_confirm|tg_revoke|tg_test|tg_disable` trong `ACTIONS`.
+- Token: `secret_fields`, ô password, không vào `Session.extra`; lần đầu không trang xác nhận (form gửi sẵn `confirm=yes`), đã có token thì phải tích
+  `overwrite` — `_setup` hỏi lại `telegram.status` trước khi gửi nên token vừa được lưu ở nơi khác vẫn không bị ghi đè ngầm.
+- Q2: `tg_allow` không có trang xác nhận nhưng CHỈ cho chat riêng đang ở danh sách chờ (`telegram.pending` hỏi lại ngay trước `telegram.allow`);
+  nhóm và thêm chat bằng id = `tg_allow_confirm` (luôn xác nhận).
+- Mã ghép nối ở `Session.extra["telegram_pair"]`; deep link chỉ dựng từ username `[A-Za-z0-9_]` + mã 8 hex; QR = SVG `segno` dựng ở server từ đúng link
+  đó (`telegram_pages.qr_svg`, kiểm lại bằng regex), kèm cảnh báo không chia sẻ màn hình. Tên/username người nhắn: `termsafe.one_line` ≤ 60, autoescape.
+- Trang Thông báo & kênh: dòng Telegram đọc `telegram.status` (lỗi / đã tắt / đang hoạt động) thay vì "secret tồn tại", link sang wizard.
+- Test: `tests/test_web_telegram.py`. Chưa làm (PR khác của plan): tên người được phép (`telegram.peers`), chẩn đoán lỗi + `telegram.repair`, thẻ kênh.

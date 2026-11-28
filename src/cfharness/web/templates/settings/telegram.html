@@ -1,0 +1,123 @@
+{#- Wizard "Kết nối Telegram" (/settings/notifications/telegram, web/telegram_pages.py): 1 tạo bot → 2 dán token → 3 ghép nối điện thoại → Xong.
+    tg_stage: down | token | off | pair | done. Token không bao giờ được render lại; tên người nhắn chỉ autoescape. -#}
+{% extends "settings/_layout.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Telegram · Thông báo & kênh · Cài đặt{% endblock %}
+{% block h1 %}Kết nối Telegram{% endblock %}
+{% block sub %}Nhận yêu cầu duyệt, lỗi, digest trên điện thoại — duyệt bằng nút, nhắn điều phối viên. <a href="/settings/notifications">← Thông báo &amp; kênh</a>{% endblock %}
+{% block body %}
+{% set t = tg or {} %}
+{% set NEXT = "/settings/notifications/telegram" %}
+{% if tg_stage == "down" %}
+<p class="banner warn">{{ m.icon('alert') }} Daemon chưa có Telegram (<code>telegram.status</code>) — cập nhật cfharness rồi khởi động lại daemon.</p>
+{% else %}
+
+{% if tg_stage in ("pair", "done", "off") %}
+<section class="card" id="tg-status">
+  <div class="card-head"><h2>{{ m.icon('chat') }} Bot{% if t.bot_username %} @{{ t.bot_username }}{% endif %}</h2>
+    {% if tg_stage == "off" %}<span class="pill muted">đã tắt</span>
+    {% elif t.last_error %}<span class="pill danger">{{ m.icon('alert') }}lỗi kết nối</span>
+    {% elif t.polling %}<span class="pill ok">{{ m.icon('dot', 'pulse') }}đang hoạt động</span>
+    {% else %}<span class="pill warn">{{ m.icon('clock') }}đang kết nối…</span>{% endif %}</div>
+  <dl class="kv cols">
+    <div><dt>Liên lạc lần cuối</dt><dd>{{ m.rel(t.last_poll_at) }}{% if t.last_error %}<div class="small danger-t">{{ t.last_error }}</div>{% endif %}</dd></div>
+    <div><dt>Đã gửi</dt><dd>{{ t.sent or 0 }} tin{% if t.failed %} · <span class="danger-t">{{ t.failed }} lỗi</span>{% endif %}</dd></div>
+  </dl>
+  {% if tg_stage == "off" %}
+  <div class="row gap wrap-row">
+    {{ m.act("tg_pair", "Bật lại (dùng token đã lưu)", {}, "btn primary", next=NEXT, ic="play") }}
+    {{ m.act("tg_disable", "Xoá token", {"forget": "1"}, "btn sm danger", confirm="Tắt Telegram VÀ XOÁ token bot? Muốn bật lại phải dán token lần nữa.", next=NEXT) }}
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if tg_stage == "done" %}
+<section class="card" id="tg-done">
+  <h2>{{ m.icon('check') }} Đã kết nối</h2>
+  <p class="muted small">Thông báo duyệt, lỗi lặp, digest… sẽ tới các chat dưới đây. Nhắn chữ thường cho bot = nhắn điều phối viên.</p>
+  <h3 class="small">Chat được phép</h3>
+  <table class="tbl"><tbody>
+    {% for c in t.allowed_chat_ids or [] %}<tr><td><code>{{ c }}</code> <span class="muted small">{{ 'nhóm' if c.startswith('-') else 'chat riêng' }}</span></td>
+      <td class="actions">{{ m.act("tg_revoke", "Gỡ", {"chat_id": c}, "btn sm ghost", confirm="Gỡ chat " ~ c ~ "? Chat này không nhận thông báo và không điều khiển được cfharness nữa.", next=NEXT) }}</td></tr>
+    {% endfor %}
+  </tbody></table>
+  <div class="row gap wrap-row">
+    {{ m.act("tg_test", "Gửi tin thử", {}, "btn primary", next=NEXT, ic="send") }}
+    {{ m.act("tg_pair", "Thêm điện thoại / tạo mã mới", {}, "btn sm", next=NEXT, ic="plus") }}
+    {{ m.act("tg_disable", "Tắt Telegram", {}, "btn sm ghost", confirm="Tắt Telegram? Bot ngừng nhận lệnh và gửi thông báo. Bật lại không cần dán token.", next=NEXT) }}
+    {{ m.act("tg_disable", "Tắt và xoá token", {"forget": "1"}, "btn sm danger", confirm="Tắt Telegram VÀ XOÁ token bot? Muốn bật lại phải dán token lần nữa.", next=NEXT) }}
+  </div>
+</section>
+{% endif %}
+
+{% if tg_stage == "pair" %}
+<section class="card" id="tg-step3">
+  <h2><span class="pill">3</span> Ghép nối điện thoại</h2>
+  {% if t.pairing_active %}
+    {% include "_telegram_pending.html" %}
+  {% else %}
+    <p class="muted small">Tạo mã ghép nối một lần, rồi mở bot trong Telegram và bấm <b>Start</b>.</p>
+    {{ m.act("tg_pair", "Tạo mã ghép nối", {}, "btn primary", next=NEXT, ic="plus") }}
+  {% endif %}
+  {% if t.allowed_chat_ids %}<p class="muted small">Đã có {{ t.allowed_chat_ids|length }} chat được phép — <a href="#tg-advanced">quản lý bên dưới</a>.</p>{% endif %}
+</section>
+{% if t.allowed_chat_ids %}
+<section class="card" id="tg-chats">
+  <h2>Chat được phép</h2>
+  <table class="tbl"><tbody>
+    {% for c in t.allowed_chat_ids %}<tr><td><code>{{ c }}</code></td>
+      <td class="actions">{{ m.act("tg_revoke", "Gỡ", {"chat_id": c}, "btn sm ghost", confirm="Gỡ chat " ~ c ~ "? Chat này không nhận thông báo và không điều khiển được cfharness nữa.", next=NEXT) }}</td></tr>
+    {% endfor %}
+  </tbody></table>
+  {{ m.act("tg_test", "Gửi tin thử", {}, "btn sm", next=NEXT, ic="send") }}
+</section>
+{% endif %}
+{% endif %}
+
+{% set fresh = tg_stage == "token" %}
+<details class="card" id="tg-setup"{% if fresh %} open{% endif %}>
+  <summary><h2 class="inline-h">{{ 'Tạo bot và dán token' if fresh else 'Đổi bot / dán token mới' }}</h2></summary>
+  <section id="tg-step1">
+    <h3><span class="pill">1</span> Tạo bot với @BotFather</h3>
+    <ol class="small">
+      <li><a class="btn sm" href="{{ tg_botfather }}" target="_blank" rel="noopener noreferrer">{{ m.icon('external') }}<span>Mở @BotFather</span></a> trong Telegram.</li>
+      <li>Gửi lệnh:
+        <div class="tx-code tg-copy"><div class="tx-code-head"><span class="tx-lang">lệnh</span><button type="button" class="tx-copy">Sao chép</button></div><pre>/newbot</pre></div></li>
+      <li>Đặt tên tuỳ ý, rồi username kết thúc bằng <code>bot</code>, vd:
+        <div class="tx-code tg-copy"><div class="tx-code-head"><span class="tx-lang">username</span><button type="button" class="tx-copy">Sao chép</button></div><pre>{{ tg_name_hint }}</pre></div></li>
+      <li>BotFather trả về token dạng <code>123456:ABC…</code> — copy nguyên dòng đó.</li>
+    </ol>
+  </section>
+  <section id="tg-step2">
+    <h3><span class="pill">2</span> Dán token</h3>
+    <p class="muted small">Hub kiểm token với Telegram, lưu vào secret store (agent không đọc được) rồi chuyển sang bước ghép nối. Token không bao giờ hiện lại.</p>
+    <form method="post" action="/do/tg_setup" class="form" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ NEXT }}"><input type="hidden" name="confirm" value="yes">
+      <label>Token bot <input name="token" type="password" required autocomplete="off" spellcheck="false" placeholder="123456789:AA…" pattern="{{ tg_token_pattern }}" title="Token từ @BotFather, dạng <số>:<chuỗi>"></label>
+      {% if not fresh %}<label class="check small"><input type="checkbox" name="overwrite" value="yes" required> Ghi đè token cũ (<code>TELEGRAM_BOT_TOKEN</code>) — bot cũ ngừng hoạt động với hub này</label>{% endif %}
+      <div class="row end"><button class="btn primary" type="submit">Kiểm tra + kết nối</button></div>
+    </form>
+  </section>
+  {% if fresh %}<section><h3 class="muted"><span class="pill muted">3</span> Ghép nối điện thoại</h3><p class="muted small">Sau khi dán token.</p></section>{% endif %}
+</details>
+
+{% if not fresh %}
+<details class="card" id="tg-advanced">
+  <summary><h2 class="inline-h">Nâng cao</h2></summary>
+  <p class="small"><b>Nhóm Telegram</b> — hiện {{ 'đang BẬT' if tg_allow_groups else 'đang tắt' }} (<code>notify.telegram.allow_groups</code>).
+    Bật ở <a href="/settings/notifications#notify-cfg">Cấu hình thông báo</a>, thêm bot vào nhóm, tạo mã mới rồi gõ <code>/start &lt;mã&gt;</code> trong nhóm.
+    Mọi thông báo sẽ vào nhóm; chỉ người gõ mã (và người bạn thêm) mới bấm được nút duyệt.</p>
+  <p class="small"><b>Thêm chat bằng id</b> (khi đã biết id, không qua ghép nối — luôn có bước xác nhận):</p>
+  <form method="post" action="/do/tg_allow_confirm" class="form" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ NEXT }}">
+    <div class="fgrid">
+      <label>Chat id <input name="chat_id" required inputmode="numeric" pattern="-?[0-9]{1,20}" placeholder="123456789"></label>
+      <label>User id (bắt buộc với nhóm) <input name="user_id" inputmode="numeric" pattern="[0-9]{1,20}" placeholder="123456789"></label>
+    </div>
+    <div class="row end"><button class="btn sm" type="submit">Thêm…</button></div>
+  </form>
+</details>
+{% endif %}
+{% endif %}
+{% endblock %}
