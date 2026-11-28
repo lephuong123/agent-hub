@@ -1,0 +1,30 @@
+{#- "Nhận thông báo gì" (web/notify_pages.py, notify_events.py): một preset áp cho CẢ Slack và Telegram. Chạy không cần JS:
+    "Tuỳ chỉnh…" là <details>; nhóm tích = cả nhóm, cộng mục tích lẻ. static/app.js chỉ đồng bộ nhóm ↔ mục + tự chọn "Tuỳ chỉnh…". -#}
+{% import "_macros.html" as m with context %}
+{% import "settings/_cfg.html" as C with context %}
+{% if nev %}
+<section class="card" id="notify-events">
+  <h2>{{ m.icon('bell') }} Nhận thông báo gì</h2>
+  <p class="muted small">Một lựa chọn áp cho cả Slack và Telegram. Câu hỏi của agent luôn được gửi tới kênh chat, không phụ thuộc lựa chọn này.</p>
+  {% if nev.differ %}<p class="banner warn small">{{ m.icon('alert') }} Slack và Telegram đang nhận khác nhau ({{ nev.counts.slack }} / {{ nev.counts.telegram }} loại). Lưu ở đây sẽ áp cùng một lựa chọn cho cả hai — muốn giữ riêng thì dùng <a href="#cfg-notify-events">Nâng cao</a>.</p>{% endif %}
+  <form method="post" action="/do/notify_events" class="form nev-form" data-notify-events>
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/settings/notifications#notify-events">
+    <fieldset class="nev-presets"><legend class="sr-only">Kiểu nhận thông báo</legend>
+      {% for pid, plabel, phint in nev.presets %}<label class="check"><input type="radio" name="preset" value="{{ pid }}" {{ 'checked' if nev.shared == pid }}> <b>{{ plabel }}</b> <span class="muted small">{{ phint }}</span></label>{% endfor %}
+    </fieldset>
+    <details class="nev-custom"{% if nev.shared == 'custom' %} open{% endif %}>
+      <summary>Tuỳ chỉnh theo nhóm <span class="muted small">(chọn "Tuỳ chỉnh…" ở trên rồi tích)</span></summary>
+      {% for g in nev.groups %}{% if g.id != 'other' %}
+      <details class="nev-grp">
+        <summary><label class="check"><input type="checkbox" name="grp" value="{{ g.id }}" data-nev-grp="{{ g.id }}" {{ 'checked' if g.all }}> <b>{{ g.title }}</b></label>
+          <span class="muted small">{{ g.hint }} · {{ g.n }}/{{ g.total }}</span></summary>
+        <div class="nev-items">{% for it in g.entries %}<label class="check small" title="{{ it.event }}"><input type="checkbox" name="ev" value="{{ it.event }}" data-nev-of="{{ g.id }}" {{ 'checked' if it.checked }}> {{ it.label }}</label>{% endfor %}</div>
+      </details>
+      {% endif %}{% endfor %}
+      <p class="muted small">Tích ô nhóm = nhận mọi loại trong nhóm. Muốn bỏ một loại: bỏ tích ô nhóm rồi chỉ tích các loại cần nhận.</p>
+    </details>
+    <div class="row end"><button class="btn" type="submit">Lưu cho cả hai kênh</button></div>
+  </form>
+  {% if nev.adv.rows %}{{ C.group(nev.adv, "/settings/notifications") }}{% endif %}
+</section>
+{% endif %}

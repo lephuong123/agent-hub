@@ -11,6 +11,7 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 ## Chưa phát hành
 
 - **Kết nối Telegram ngay trên web, không cần terminal** (Cài đặt → Thông báo & kênh → Telegram, `/settings/notifications/telegram`): 3 bước — mở @BotFather (nút + chép sẵn `/newbot`, gợi ý tên bot), dán token (hub kiểm với Telegram, lưu vào secret store, không bao giờ hiện lại), ghép nối điện thoại bằng nút "Mở Telegram và bấm Start" hoặc **mã QR** (mở web trên máy tính → quét bằng điện thoại). Người vừa nhắn mã hiện thành thẻ "Đây là tôi — cho phép" (một lần bấm, bot gửi tin chào). Màn "Đã kết nối" có Gửi tin thử, gỡ chat, tạo mã mới, tắt / tắt và xoá token; nhóm Telegram và thêm chat bằng id ở "Nâng cao". Trạng thái Telegram ở trang Thông báo & kênh giờ đọc trạng thái thật của bot (token bị thu hồi / lỗi kết nối không còn hiện xanh).
+- **Cài đặt › Thông báo & kênh: chọn "Nhận thông báo gì" bằng một cú bấm.** Bốn lựa chọn — *Chỉ việc cần tôi* / *Khuyên dùng* (= mặc định) / *Tất cả* / *Tuỳ chỉnh…* — áp cho cả Slack và Telegram; tuỳ chỉnh theo nhóm (Cần bạn · Lỗi & ngân sách · Học & digest · Bảo mật · Thư mục chung), mở ra từng loại có nhãn tiếng Việt thay cho mã `approval.open`… Tuỳ chỉnh riêng từng kênh vẫn có trong "Nâng cao". `config set notify.<kênh>.events` nay từ chối loại sự kiện hub không gửi được (gõ nhầm tên không còn lặng lẽ tắt thông báo).
 
 ---
 
