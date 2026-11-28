@@ -12,7 +12,7 @@
   <section class="set-group" aria-label="{{ gtitle }}">
     <h2 class="set-group-h">{{ gtitle }}</h2>
     <ul class="set-list">{% for key, href, ic, label, desc, anchors in items %}
-      <li>{% for a in anchors %}<span id="{{ a }}" class="set-anchor"></span>{% endfor %}<a href="{{ href }}" class="set-row">{{ m.icon(ic) }}<span class="set-t"><b>{{ label }}</b><span class="set-d">{{ desc }}</span></span>{{ m.icon('chev-right', 'set-chev') }}</a></li>{% endfor %}
+      <li>{% for a in anchors %}<span id="{{ a }}" class="set-anchor"></span>{% endfor %}<a href="{{ href }}" class="set-row">{{ m.icon(ic) }}<span class="set-t"><b>{{ label }}</b><span class="set-d">{{ set_desc[key] if set_desc is defined and key in set_desc else desc }}</span></span>{{ m.icon('chev-right', 'set-chev') }}</a></li>{% endfor %}
     </ul>
   </section>
   {% endfor %}

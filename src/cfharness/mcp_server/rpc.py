@@ -39,6 +39,7 @@ MUTATING = frozenset(
         "mcp.run", "mcp.agent_create",
         "secret.set", "secret.rm",
         "feedback.record",
+        "notify.test",  # gửi tin ra Slack/Telegram (guard/rpc.py) — ai bấm gửi thử, kênh nào
         # M2
         "run.steer", "agent.create_from_template", "run.takeover_record",
         # M3

@@ -1,25 +1,44 @@
-{#- Ghép nối Slack 2 chiều (partial /partials/slack/pending, poll 3 s khi đang ghép nối): mã một lần + người chờ xác nhận → slack.allow. -#}
+{#- Ghép nối Slack (partial /partials/slack/pending, poll 3 s khi đang ghép nối): "Mở DM với bot" + mã một lần + người chờ xác nhận.
+    Tên/username là DỮ LIỆU người ngoài (đã một dòng ≤ 60 ký tự ở slack_pages.person) — chỉ autoescape, không |safe.
+    DM vừa ghép nối → slack2_allow (không trang xác nhận, web hỏi lại slack.pending); kênh chung → slack2_allow_confirm (luôn xác nhận). -#}
 {% import "_macros.html" as m with context %}
 {% set active = slack2 and slack2.pairing_active %}
+{% set NEXTP = "/settings/notifications/slack" %}
 <div id="slack2-pending"{% if active %} hx-get="/partials/slack/pending" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
 {% if active %}
   <div class="pairbox">
     {% if slack2_pair %}
+      {% if slack2_links and slack2_links.dm %}
+      <p><a class="btn primary lg" href="{{ slack2_links.dm }}" target="_blank" rel="noopener noreferrer">{{ m.icon('chat') }}<span>Mở DM với bot</span></a></p>
+      <p class="small">Trong DM với bot, nhắn:</p>
+      {% else %}
       <p>{{ m.icon('chat') }} Mở Slack → DM với bot <b>cfharness</b> (mục <b>Apps</b> → cfharness → tab <b>Messages</b>) và nhắn:</p>
-      <p class="pair-code"><code>ghepnoi {{ slack2_pair.code }}</code></p>
+      {% endif %}
+      <div class="tx-code pair-copy"><div class="tx-code-head"><span class="tx-lang">mã ghép nối</span><button type="button" class="tx-copy">Sao chép</button></div><pre>ghepnoi {{ slack2_pair.code }}</pre></div>
       <p class="muted small">Mã dùng một lần, còn khoảng {{ (slack2_pair.left_s // 60) + 1 }} phút. Hoặc gõ <code>{{ slack2_pair.slash or '/cfh' }} ghepnoi {{ slack2_pair.code }}</code>. Người nhắn sẽ hiện bên dưới — bạn xác nhận từng người.</p>
+      <p class="small warn-t">{{ m.icon('alert') }} Đừng chia sẻ màn hình lúc này — mã ghép nối cho phép người khác xin quyền điều khiển hub.</p>
     {% else %}
       <p class="muted small">Đang có mã ghép nối được tạo ở nơi khác (CLI / tab khác). Người đã nhắn mã hiện bên dưới; cần mã mới thì bấm "Tạo mã ghép nối mới".</p>
     {% endif %}
     {% if slack2_pending %}
-      <table class="tbl stack"><tbody>
-      {% for p in slack2_pending %}<tr>
-        <td data-label="Người"><b>{{ p.name or p.username or p.user_id }}</b> <span class="muted small"><code>{{ p.user_id }}</code> · DM <code>{{ p.chat_id }}</code></span></td>
-        <td class="actions">{{ m.act("slack2_allow", "Xác nhận", {"chat_id": p.chat_id, "user_id": p.user_id, "name": p.name or p.username or ""}, "btn sm ok", ic="check",
-              confirm="Cho phép " ~ (p.name or p.username or p.user_id) ~ " (" ~ p.user_id ~ ") điều khiển cfharness qua DM Slack? Người này sẽ duyệt được thao tác phá huỷ, giao việc, bật/tắt ESTOP.",
-              next="/settings/notifications#slack2") }}</td>
-      </tr>{% endfor %}
-      </tbody></table>
+      <div class="tg-people">
+      {% for p in slack2_pending %}
+        <article class="xcard tg-person">
+          <div class="t"><b>{{ p.name or ('@' ~ p.username if p.username else 'Người dùng Slack') }}</b>{% if p.username and p.name %} <span class="muted">@{{ p.username }}</span>{% endif %}
+            · <span class="muted small">{% if p.dm %}DM <code>{{ p.chat_id }}</code>{% else %}kênh <code>{{ p.chat_id }}</code>{% endif %}{% if p.user_id %} · <code>{{ p.user_id }}</code>{% endif %}</span></div>
+          <p class="muted small">Chỉ cho phép nếu đúng là bạn (hoặc người bạn tin): người này sẽ duyệt được thao tác phá huỷ, giao việc, bật/tắt ESTOP.</p>
+          <div class="row gap">
+          {% if p.dm %}
+            {{ m.act("slack2_allow", "Đây là tôi — cho phép", {"chat_id": p.chat_id, "user_id": p.user_id, "name": p.name or p.username}, "btn sm ok", ic="check", next=NEXTP) }}
+          {% else %}
+            {{ m.act("slack2_allow_confirm", "Cho phép kênh này", {"chat_id": p.chat_id, "user_id": p.user_id, "name": p.name or p.username}, "btn sm ok", ic="check",
+                 confirm="Cho phép kênh " ~ p.chat_id ~ " (người gõ: " ~ (p.name or p.username or p.user_id) ~ ") điều khiển cfharness qua Slack? Mọi thông báo vào kênh; chỉ người được phép bấm được nút.",
+                 next=NEXTP) }}
+          {% endif %}
+          </div>
+        </article>
+      {% endfor %}
+      </div>
     {% else %}
       <p class="muted small">{{ m.icon('clock') }} Chưa ai nhắn mã — trang tự cập nhật.</p>
     {% endif %}

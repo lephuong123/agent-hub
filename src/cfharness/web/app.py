@@ -38,6 +38,7 @@ from ..errors import BLOCKED
 from ..events import TERMINAL_RUN_EVENTS
 from ..paths import HubPaths
 from ..rpc import METHOD_NOT_FOUND, DaemonUnavailable, RpcError
+from ..termsafe import one_line
 from ..tui.client import AsyncHubClient, subscribe
 from ..tui.model import STATUS_ORDER
 from . import desktop as _desktop
@@ -840,7 +841,10 @@ async def overview(request: Request) -> Response:
         fresh = bool(((await rpc(request, "hub.transfer_status")) or {}).get("fresh"))
     except RpcError:
         fresh = False
-    return await render(request, "overview.html", {**data, "nav": "overview", "agents": agents, "mgr": mgr, "fresh": fresh})
+    # chưa kênh chat nào hoạt động → thẻ "Nhận yêu cầu duyệt trên điện thoại" (plan-chat-setup-web §3.4; ẩn được — app.js, localStorage)
+    chans = await chat_channels(request)
+    chat_cta = not any(c["state"] == "ok" for c in chans) and not all(c["state"] == "unknown" for c in chans)
+    return await render(request, "overview.html", {**data, "nav": "overview", "agents": agents, "mgr": mgr, "fresh": fresh, "chat_cta": chat_cta})
 
 
 async def home(request: Request) -> Response:
@@ -1454,7 +1458,8 @@ async def audit_page(request: Request) -> Response:
 # /settings = trang danh mục (điện thoại: danh sách → vào chi tiết; app.js chuyển link cũ /settings#<id> sang tab mới). Mỗi tab chỉ gọi đúng RPC
 # nó cần. Nhóm cấu hình "notify" nằm ở tab Thông báo & kênh; khoá bảo mật chỉ xem ở tab Bảo mật & thiết bị.
 async def settings_index(request: Request) -> Response:
-    return await render(request, "settings/index.html", {"nav": "settings"})
+    # dòng "Thông báo & kênh" mô tả theo trạng thái THẬT của hai kênh (hai RPC trạng thái trong RAM của daemon — rẻ)
+    return await render(request, "settings/index.html", {"nav": "settings", "set_desc": {"settings_notifications": P.channels_summary(await chat_channels(request))}})
 
 
 async def _gates_mode(request: Request) -> str:
@@ -1494,18 +1499,31 @@ async def _tab_config(request: Request) -> dict[str, Any]:
 
 
 async def _tab_notifications(request: Request) -> dict[str, Any]:
-    from ..config import get_path
-
     raw = await rpc(request, "config.get") or {}
-    names = {s.get("name") for s in await rpc(request, "secret.list") or []}
-    try:
-        tg_chats = get_path(raw, "notify.telegram.allowed_chat_ids") or []
-    except KeyError:
-        tg_chats = []
-    slack2 = await _slack_pages.slack_ctx(request)  # khối "Slack 2 chiều" (web/slack_pages.py)
-    return {**slack2, "slack": SLACK_WEBHOOK_SECRET in names or "SLACK_BOT_TOKEN" in names, "slack_webhook": SLACK_WEBHOOK_SECRET in names,
-            "slack_create_url": SLACK_CREATE_URL, "telegram": "TELEGRAM_BOT_TOKEN" in names, "tg_chats": tg_chats,
-            "groups": [g for g in _settings.view(raw)["groups"] if g["id"] == "notify"]}
+    tg, sl = await gather_ordered(_telegram_pages.tab_status(request), _slack_pages.tab_status(request))  # trạng thái THẬT (+ diagnosis)
+    groups = [g for g in _settings.view(raw)["groups"] if g["id"] == "notify"]
+    nev = _notify_pages.ctx(raw, groups[0] if groups else None)  # "Nhận thông báo gì" (web/notify_pages.py) — hàng events theo kênh vào Nâng cao
+    rows = [r for g in groups for r in g["rows"] if r["s"].key not in _settings.EVENT_KEYS]
+
+    def _pick(prefix: str) -> list[dict[str, Any]]:
+        return [r for r in rows if r["s"].key.startswith(prefix)]
+
+    # thẻ kênh (plan-chat-setup-web §3.1): một trạng thái/kênh từ present.channel_state; cấu hình riêng kênh vào "Nâng cao" của thẻ
+    chan_groups = {"telegram": {"id": "notify-telegram", "title": "Nâng cao — Telegram", "rows": _pick("notify.telegram.")},
+                   "slack": {"id": "notify-slack", "title": "Nâng cao — Slack", "rows": _pick("notify.slack.")}}
+    general = [{**g, "rows": [r for r in rows if not r["s"].key.startswith(("notify.telegram.", "notify.slack."))]} for g in groups]
+    return {**nev, "tg": tg, "slack2": sl, "chans": channel_states(tg, sl), "chan_groups": chan_groups, "groups": general}
+
+
+def channel_states(tg: dict[str, Any] | None, sl: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """[Telegram, Slack] theo `present.channel_state` — dùng chung cho thẻ kênh, trang Hoạt động, danh mục Cài đặt."""
+    return [P.channel_state("telegram", tg), P.channel_state("slack", sl, webhook=bool((sl or {}).get("webhook")))]
+
+
+async def chat_channels(request: Request) -> list[dict[str, Any]]:
+    """Đọc `telegram.status` + `slack.status` (rẻ: trạng thái trong RAM của daemon) → trạng thái hiển thị hai kênh."""
+    tg, sl = await gather_ordered(_telegram_pages.tab_status(request), _slack_pages.tab_status(request))
+    return channel_states(tg, sl)
 
 
 async def _tab_secrets(request: Request) -> dict[str, Any]:
@@ -1703,6 +1721,43 @@ async def _slack_connect(request: Request, p: dict[str, Any]) -> dict[str, Any]:
     return await rpc(request, "notify.test", {"text": ":white_check_mark: cfharness đã kết nối Slack — thông báo sẽ đến kênh này"}, audit=True)
 
 
+NOTIFY_TEST_CHANNELS = {"slack_webhook": "Slack (webhook)", "slack": "Slack 2 chiều", "telegram": "Telegram"}
+
+
+def _notify_test_params(f: FormData) -> dict[str, Any]:
+    """"Gửi thử" (plan-chat-setup-web Q4): `channel=all` (mặc định) → mọi kênh đang bật; một kênh → đúng kênh đó. RPC `notify.test{channels}`
+    (CLI `cfharness notify test` không đổi: không truyền `channels` = Slack một chiều như cũ)."""
+    ch = str(f.get("channel") or "all")
+    if ch != "all" and ch not in NOTIFY_TEST_CHANNELS:
+        raise ValueError("kênh gửi thử không hợp lệ")
+    return {"channels": "all" if ch == "all" else [ch]}
+
+
+def _notify_test_line(ch: str, r: dict[str, Any]) -> str:
+    label = NOTIFY_TEST_CHANNELS.get(ch, ch)
+    if r.get("sent"):
+        n = r.get("chats")
+        return f"{label}: đã gửi" + (f" ({n} chat)" if isinstance(n, int) else "")
+    return f"{label}: {'bỏ qua' if r.get('skipped') else 'lỗi'} — {one_line(r.get('reason') or '?', 160)}"
+
+
+async def _notify_test(request: Request, p: dict[str, Any]) -> dict[str, Any]:
+    r = await rpc(request, "notify.test", p, audit=True) or {}
+    chans = r.get("channels") if isinstance(r.get("channels"), dict) else {}
+    if not r.get("sent"):  # không kênh nào nhận được → báo lỗi (flash đỏ), nêu lý do từng kênh
+        tried = {k: v for k, v in chans.items() if isinstance(v, dict) and not v.get("skipped")}
+        if not tried:
+            raise RpcError(-32000, "Chưa có kênh nào đang bật — kết nối Telegram hoặc Slack trước")
+        raise RpcError(-32000, "Gửi thử chưa được: " + " · ".join(_notify_test_line(k, v) for k, v in tried.items()))
+    return r
+
+
+def _notify_test_ok(r: Any, f: FormData) -> str:
+    chans = (r or {}).get("channels") or {}
+    lines = [_notify_test_line(k, v) for k, v in chans.items() if isinstance(v, dict) and not v.get("skipped")]
+    return "Gửi thử — " + " · ".join(lines) if lines else "Đã gửi tin thử"
+
+
 def _slack_ok(r: Any, f: FormData) -> str:
     r = r or {}
     if r.get("sent"):
@@ -1876,7 +1931,7 @@ ACTIONS: dict[str, Action] = {
                          confirm=lambda f: f"Lưu secret {f.get('name')}? Nếu đã có secret cùng tên, giá trị cũ bị GHI ĐÈ.", danger=True, secret_fields=("value",)),
     "secret_rm": Action("secret.rm", lambda f: {"name": _req(f, "name")}, lambda r, f: f"Đã xoá secret {f.get('name')}", confirm=lambda f: f"Xoá secret {f.get('name')}?",
                         danger=True),
-    "notify_test": Action("notify.test", lambda f: {"text": "cfharness: thử thông báo từ giao diện web"}, lambda r, f: f"Đã gửi thử: {json.dumps(r, ensure_ascii=False)[:200]}"),
+    "notify_test": Action("notify.test", _notify_test_params, _notify_test_ok, call=_notify_test),
     "slack_connect": Action("secret.set", _slack_webhook, _slack_ok, secret_fields=("webhook",), call=_slack_connect,
                             confirm=f"Lưu Slack webhook vào secret {SLACK_WEBHOOK_SECRET}? Nếu đã có, URL cũ bị GHI ĐÈ.", danger=True),
     "auth_reset": Action("auth.reset", lambda f: {}, "Đã xoá cờ 'claude chưa đăng nhập' — run sẽ chạy lại"),
@@ -2428,7 +2483,8 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_office_routes(),
         *_skill_routes(),
         *_memory_routes(),
-        *_slack_pages.routes(),  # /partials/slack/pending — wizard Slack 2 chiều
+        *_slack_pages.routes(),  # /settings/notifications/slack + /partials/slack/pending — trang Slack (stepper 4 bước)
+        *_telegram_pages.routes(),  # /settings/notifications/telegram + /partials/telegram/pending — wizard Telegram
         *_update_pages.routes(),  # /update, /partials/update — nút "Cập nhật hệ thống"
         *_rt_account_pages.routes(),  # /partials/runtime-accounts — thẻ tài khoản ChatGPT (Codex) / Grok
         *_filehub_pages.routes(),  # /partials/filehub[/lane] + /filehub/open — thẻ "Không gian số" ở Cài đặt (filehub/)
@@ -2459,6 +2515,16 @@ _mgr.register_actions(ACTIONS, Action, _req)
 from . import slack_pages as _slack_pages  # noqa: E402
 
 _slack_pages.register_actions(ACTIONS, Action, _req)
+
+# Wizard Telegram (docs/dev-notes/plan-chat-setup-web.md PR1): tg_setup / pair / allow / allow_confirm / revoke / test / disable + trang riêng
+from . import telegram_pages as _telegram_pages  # noqa: E402
+
+_telegram_pages.register_actions(ACTIONS, Action, _req)
+
+# "Nhận thông báo gì" (notify_events.py, plan-chat-setup-web PR4): notify_events = một preset cho cả Slack + Telegram
+from . import notify_pages as _notify_pages  # noqa: E402
+
+_notify_pages.register_actions(ACTIONS, Action, _req)
 
 # Tài khoản Claude (docs/dev-notes/plan-claude-accounts.md): account_use / rename / rm / check / login_* / add_token + khối ở Cài đặt
 from . import account_pages as _account_pages  # noqa: E402

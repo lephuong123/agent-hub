@@ -1,0 +1,150 @@
+{#- Trang "Kết nối Slack" (/settings/notifications/slack, web/slack_pages.py): stepper 1 tạo app → 2 dán bot token → 3 dán app token → 4 ghép nối
+    → quản lý. slack2_stage: down | app | app_token | off | pair | done. Token không bao giờ được render lại; tên người chỉ autoescape.
+    Neo cũ: #slack (webhook một chiều) → #webhook (Nâng cao), #slack2 → đầu trang. -#}
+{% extends "settings/_layout.html" %}
+{% import "_macros.html" as m with context %}
+{% import "settings/_chat.html" as CH with context %}
+{% block title %}Slack · Thông báo & kênh · Cài đặt{% endblock %}
+{% block h1 %}Kết nối Slack{% endblock %}
+{% block sub %}Duyệt thao tác bằng nút, giao việc bằng <code>{{ slack2_slash }}</code>, nhắn điều phối viên — ngay trong DM Slack. <a href="/settings/notifications">← Thông báo &amp; kênh</a>{% endblock %}
+{% block body %}
+{% set s2 = slack2 or {} %}
+{% set NEXT = "/settings/notifications/slack" %}
+{% set stg = slack2_stage %}
+<span id="slack2" class="set-anchor"></span>
+{% if stg == "down" %}
+<p class="banner warn">{{ m.icon('alert') }} Daemon chưa có Slack 2 chiều (<code>slack.status</code>) — cập nhật cfharness rồi khởi động lại daemon.</p>
+{% else %}
+
+{% if stg in ("pair", "done", "off") or slack2_chan.state == "error" %}{{ CH.diag(slack2_chan, s2.last_error, NEXT) }}{% endif %}
+
+{% if stg in ("pair", "done", "off") %}
+<section class="card" id="slack-manage">
+  <div class="card-head"><h2>{{ m.icon('chat') }} Slack{% if s2.team %} · {{ s2.team }}{% endif %}</h2>
+    <span class="pill {{ slack2_chan.tone }}">{% if slack2_chan.state == 'ok' %}{{ m.icon('dot', 'pulse') }}{% endif %}{{ slack2_chan.pill }}</span></div>
+  <dl class="kv cols">
+    <div><dt>Workspace</dt><dd>{% if s2.team_id %}<code>{{ s2.team_id }}</code>{% else %}—{% endif %}</dd></div>
+    <div><dt>Bot</dt><dd>{% if s2.bot_user_id %}<code>{{ s2.bot_user_id }}</code>{% else %}—{% endif %} <span class="muted small">lệnh <code>{{ s2.slash_command or slack2_slash }}</code></span></dd></div>
+    <div><dt>Kết nối</dt><dd>{% if s2.polling %}Socket Mode · từ {{ m.rel(s2.connected_at) }}{% elif stg == 'off' %}đã tắt{% else %}chưa nối{% endif %}</dd></div>
+    <div><dt>Đã gửi</dt><dd>{{ s2.sent or 0 }} tin{% if s2.failed %} · <span class="danger-t">{{ s2.failed }} lỗi</span>{% endif %}</dd></div>
+  </dl>
+  {% if stg != "off" %}
+  <h3 class="small">Người được phép</h3>
+  {{ CH.peers(slack2_peers, "slack2_revoke", NEXT, "slack") }}
+  {% endif %}
+  <div class="row gap wrap-row">
+    {% if stg == "off" %}
+      {{ m.act("slack2_pair", "Bật lại (dùng token đã lưu)", {}, "btn primary", next=NEXT, ic="play") }}
+    {% else %}
+      {% if stg == "done" %}{{ m.act("slack2_test", "Gửi tin thử", {}, "btn primary", next=NEXT, ic="send") }}{% endif %}
+      {{ m.act("slack2_pair", "Thêm người / tạo mã mới", {}, "btn sm", next=NEXT, ic="plus") }}
+      {{ m.act("slack2_disable", "Tắt Slack 2 chiều", {}, "btn sm ghost", confirm="Tắt Slack 2 chiều? Bot ngắt Socket Mode; webhook một chiều (nếu có) vẫn chạy. Bật lại không cần dán token.", next=NEXT) }}
+    {% endif %}
+    {{ m.act("slack2_disable", "Tắt và xoá token", {"forget": "1"}, "btn sm danger", confirm="Tắt Slack 2 chiều VÀ XOÁ bot token + app token? Muốn bật lại phải dán token lần nữa.", next=NEXT) }}
+  </div>
+</section>
+{% endif %}
+
+{% if stg == "pair" %}
+<section class="card" id="slack-step4">
+  <h2><span class="pill">4</span> Ghép nối tài khoản Slack của bạn</h2>
+  {% if s2.pairing_active %}
+    {% include "_slack_pending.html" %}
+  {% else %}
+    <p class="muted small">Tạo mã ghép nối một lần, mở DM với bot rồi nhắn mã.</p>
+    {{ m.act("slack2_pair", "Tạo mã ghép nối", {}, "btn primary", next=NEXT, ic="plus") }}
+  {% endif %}
+</section>
+{% endif %}
+
+{% set early = stg in ("app", "app_token") %}
+<details class="card slack-steps" id="slack-setup"{% if early %} open{% endif %}>
+  <summary><h2 class="inline-h">{{ 'Cài app Slack — từng bước' if early else 'Đổi token / cài lại app' }}</h2></summary>
+  <ol class="stepper">
+    <li class="{{ 'done' if stg != 'app' else 'now' }}"><span>1</span> Tạo app</li>
+    <li class="{{ 'done' if stg != 'app' else 'now' }}"><span>2</span> Bot token</li>
+    <li class="{{ 'now' if stg == 'app_token' else ('done' if stg != 'app' else '') }}"><span>3</span> App token</li>
+    <li class="{{ 'now' if stg == 'pair' else ('done' if stg in ('done', 'off') else '') }}"><span>4</span> Ghép nối</li>
+  </ol>
+
+  <section id="slack-step1">
+    <h3><span class="pill{{ ' muted' if stg != 'app' }}">1</span> Tạo app Slack</h3>
+    <p class="muted small">App là của riêng bạn (manifest điền sẵn: Socket Mode, nút bấm, tab Messages, lệnh <code>{{ slack2_slash }}</code>). Workspace bắt admin duyệt app thì cần chờ duyệt.</p>
+    <p><a class="btn{{ ' primary' if stg == 'app' }}" href="{{ slack2_create_url }}" target="_blank" rel="noopener noreferrer">{{ m.icon('external') }}<span>Tạo app Slack 2 chiều</span></a> → chọn workspace → <b>Create</b>.</p>
+    <form method="post" action="/do/slack2_slash" class="form inline-form" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ NEXT }}#slack-step1">
+      <label class="small">Nhiều người cùng workspace? Đặt lệnh riêng TRƯỚC khi tạo app <input name="slash" value="{{ slack2_slash }}" required pattern="{{ slack2_slash_pattern }}" spellcheck="false" title="Bắt đầu bằng /, chữ thường/số/-/_, vd /cfh-ten"></label>
+      <button class="btn sm" type="submit">Đổi lệnh</button>
+    </form>
+  </section>
+
+  <section id="slack-step2">
+    <h3><span class="pill{{ ' muted' if stg != 'app' }}">2</span> Cài vào workspace + dán Bot token</h3>
+    <ol class="small">
+      <li>Trong trang app: <b>Install to Workspace</b> → <b>Allow</b>.</li>
+      <li>Mở <b>OAuth &amp; Permissions</b>{% if slack2_links.app_oauth %} (<a href="{{ slack2_links.app_oauth }}" target="_blank" rel="noopener noreferrer">mở thẳng</a>){% endif %} → copy <b>Bot User OAuth Token</b> (<code>xoxb-…</code>).</li>
+    </ol>
+    <form method="post" action="/do/slack2_verify" class="form" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ NEXT }}"><input type="hidden" name="confirm" value="yes">
+      <label>Bot token <input name="bot_token" type="password" required autocomplete="off" spellcheck="false" placeholder="xoxb-…" pattern="{{ slack2_bot_pattern }}" title="Bot User OAuth Token, dạng xoxb-…"></label>
+      {% if s2.configured %}<label class="check small"><input type="checkbox" name="overwrite" value="yes" required> Ghi đè bot token cũ (<code>SLACK_BOT_TOKEN</code>)</label>{% endif %}
+      <p class="muted small">Hub kiểm token với Slack, lưu vào secret store (agent không đọc được). Token không bao giờ hiện lại.</p>
+      <div class="row end"><button class="btn{{ ' primary' if stg == 'app' }}" type="submit">Kiểm tra bot token</button></div>
+    </form>
+  </section>
+
+  <section id="slack-step3">
+    <h3><span class="pill{{ ' muted' if stg != 'app_token' }}">3</span> Tạo App-Level Token + dán</h3>
+    {% if stg == "app" %}<p class="muted small">Sau bước 2 — hub sẽ dẫn link thẳng tới đúng trang của app.</p>{% endif %}
+    <ol class="small">
+      <li>{% if slack2_links.app_general %}<a class="btn sm{{ ' primary' if stg == 'app_token' }}" href="{{ slack2_links.app_general }}" target="_blank" rel="noopener noreferrer">{{ m.icon('external') }}<span>Mở Basic Information của app</span></a>{% else %}Trong trang app, mở <b>Basic Information</b>{% endif %} → cuộn tới <b>App-Level Tokens</b> → <b>Generate Token and Scopes</b>.</li>
+      <li>Đặt tên tuỳ ý, <b>Add Scope</b> → <code>connections:write</code> → <b>Generate</b> → copy token <code>xapp-…</code>.</li>
+    </ol>
+    <form method="post" action="/do/slack2_app" class="form" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ NEXT }}"><input type="hidden" name="confirm" value="yes">
+      <label>App token <input name="app_token" type="password" required autocomplete="off" spellcheck="false" placeholder="xapp-…" pattern="{{ slack2_app_pattern }}" title="App-Level Token (connections:write), dạng xapp-…"{% if stg == 'app' %} disabled{% endif %}></label>
+      {% if s2.app_token %}<label class="check small"><input type="checkbox" name="overwrite" value="yes" required> Ghi đè app token cũ (<code>SLACK_APP_TOKEN</code>)</label>{% endif %}
+      <div class="row end"><button class="btn{{ ' primary' if stg == 'app_token' }}" type="submit"{% if stg == 'app' %} disabled{% endif %}>Kết nối Socket Mode</button></div>
+    </form>
+  </section>
+
+  {% if stg in ("app", "app_token") %}<section><h3 class="muted"><span class="pill muted">4</span> Ghép nối</h3><p class="muted small">Sau bước 3: mở DM với bot và nhắn mã ghép nối.</p></section>{% endif %}
+</details>
+
+<details class="card" id="slack-advanced">
+  <summary><h2 class="inline-h">Nâng cao</h2></summary>
+  <section id="webhook"><span id="slack" class="set-anchor"></span>
+    <h3>Chỉ nhận thông báo vào một kênh (webhook)</h3>
+    {% if slack_webhook %}<p><span class="pill ok">{{ m.icon('check') }}đã có webhook</span> <span class="muted small">secret <code>SLACK_WEBHOOK_URL</code>.</span>
+      {% if slack_webhook_yields %}<span class="pill muted">đang nhường</span> <span class="muted small">Slack 2 chiều đang chạy — thông báo đi DM có nút, webhook không gửi trùng.</span>{% endif %}</p>{% endif %}
+    <p class="muted small">Một chiều: chờ duyệt, guard chặn, run lỗi, digest — không duyệt bằng nút được. Khi Slack 2 chiều chạy, webhook nhường.</p>
+    <ol class="small">
+      <li><a class="btn sm" href="{{ slack_create_url }}" target="_blank" rel="noopener noreferrer">Tạo app Slack (webhook, điền sẵn)</a> → chọn workspace → <b>Create</b>.</li>
+      <li><b>Install to Workspace</b> → chọn kênh (hoặc DM cho chính bạn) → <b>Allow</b>.</li>
+      <li>Mở <b>Incoming Webhooks</b>, copy URL <code>hooks.slack.com/services/…</code> rồi dán vào đây:</li>
+    </ol>
+    <form method="post" action="/do/slack_connect" class="form" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ NEXT }}#webhook">
+      <label>Webhook URL <input name="webhook" type="password" required placeholder="hooks.slack.com/services/…" autocomplete="off"></label>
+      <label class="check small"><input type="checkbox" name="confirm" value="yes" required> Lưu vào secret <code>SLACK_WEBHOOK_URL</code> (ghi đè URL cũ nếu có)</label>
+      <div class="row end"><button class="btn" type="submit">Kết nối + gửi thử</button></div>
+    </form>
+    {% if slack_webhook %}{{ m.act("secret_rm", "Ngắt webhook", {"name": "SLACK_WEBHOOK_URL"}, "btn sm ghost", confirm="Ngắt webhook Slack (xoá secret SLACK_WEBHOOK_URL)?", next=NEXT ~ "#webhook") }}{% endif %}
+  </section>
+  {% if stg in ("pair", "done") %}
+  <section id="slack-add">
+    <h3>Thêm bằng id</h3>
+    <p class="small muted">Khi đã biết id (không qua ghép nối — luôn có bước xác nhận). Kênh chung cần bật <code>notify.slack.allow_channels</code> (<a href="/settings/notifications#cfg-notify-slack">Nâng cao Slack</a>).</p>
+    <form method="post" action="/do/slack2_allow_confirm" class="form" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ NEXT }}">
+      <div class="fgrid">
+        <label>DM / kênh <input name="chat_id" required pattern="[CDG][A-Z0-9]{6,20}" placeholder="D0123ABCD" spellcheck="false"></label>
+        <label>User id <input name="user_id" required pattern="[UW][A-Z0-9]{6,20}" placeholder="U0123ABCD" spellcheck="false"></label>
+      </div>
+      <div class="row end"><button class="btn sm" type="submit">Thêm…</button></div>
+    </form>
+  </section>
+  {% endif %}
+</details>
+{% endif %}
+{% endblock %}

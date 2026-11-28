@@ -18,11 +18,13 @@ from typing import Any
 from starlette.datastructures import FormData
 
 from ..browser import BROWSER_MODES
-from ..config import DEFAULTS, VALID_PERMISSION_MODES, get_path
+from ..config import VALID_PERMISSION_MODES, get_path
 from ..guard.profiles import GATES_MODES, ON_TIMEOUT, PROFILES
+from ..notify_events import KNOWN_EVENTS, grouped as _grouped_events
 
 MODELS = ("haiku", "sonnet", "opus", "fable")
-NOTIFY_EVENTS: tuple[str, ...] = tuple(DEFAULTS["notify"]["slack"]["events"])
+NOTIFY_EVENTS: tuple[str, ...] = KNOWN_EVENTS  # nhãn + nhóm ở notify_events.py
+EVENT_KEYS = ("notify.slack.events", "notify.telegram.events")
 ACTION_CLASSES = ("file", "db", "mcp", "git", "hub", "system", "policy")
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _ITEM = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
@@ -341,7 +343,10 @@ def view(cfg: dict[str, Any]) -> dict[str, Any]:
             if s.kind == "multi":
                 cur: Any = [str(x) for x in (v or [])]
                 extra = [x for x in cur if x not in s.choices]  # giá trị người đặt tay ngoài danh mục: vẫn hiện, bỏ tích = gỡ
-                rows.append({"s": s, "value": cur, "choices": list(s.choices) + extra})
+                row = {"s": s, "value": cur, "choices": list(s.choices) + extra}
+                if s.key in EVENT_KEYS:  # sự kiện thông báo: hiện theo nhóm + nhãn tiếng Việt thay mã thô
+                    row["groups"] = _grouped_events(cur)
+                rows.append(row)
             elif s.kind == "list":
                 rows.append({"s": s, "value": "\n".join(str(x) for x in (v or [])), "count": len(v or [])})
             elif s.kind == "bool":

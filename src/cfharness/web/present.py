@@ -1294,3 +1294,123 @@ def mgr_conv(c: dict[str, Any]) -> dict[str, Any]:
     return {"id": cid, "channel": c.get("channel"), "updated_at": c.get("updated_at") or c.get("last_at") or c.get("created_at"),
             "created_at": c.get("created_at"), "count": n if isinstance(n, int) else (len(n) if isinstance(n, list) else c.get("message_count")),
             "title": first_line(str(c.get("title") or c.get("preview") or ""), 60)}
+
+
+# ============================================================================ kênh chat (Telegram / Slack) — plan-chat-setup-web §3.1
+CHANNEL_PAGES = {"telegram": "/settings/notifications/telegram", "slack": "/settings/notifications/slack"}
+CHANNEL_LABELS = {"telegram": "Telegram", "slack": "Slack"}
+CHANNEL_STATES = ("ok", "pairing", "setup", "error", "off", "unknown")
+_CH_TONE = {"ok": "ok", "pairing": "warn", "setup": "warn", "error": "danger", "off": "muted", "unknown": "muted"}
+_CH_PILL = {"ok": "hoạt động", "pairing": "chờ ghép nối", "setup": "thiếu bước", "error": "lỗi", "off": "chưa kết nối"}
+_TG_BOT_RE = _re.compile(r"^[A-Za-z0-9_]{3,64}$")
+_CH_ID_RE = _re.compile(r"^-?[A-Za-z0-9]{1,24}$")
+
+
+def epoch_iso(v: Any) -> str | None:
+    """Epoch (bot ghi `time.time()`) hoặc chuỗi ISO → ISO cho `m.rel`; sai dạng → None."""
+    if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+        try:
+            return datetime.fromtimestamp(float(v)).astimezone().isoformat(timespec="seconds")
+        except (OverflowError, OSError, ValueError):
+            return None
+    return v if isinstance(v, str) and parse_ts(v) is not None else None
+
+
+def chat_peers(peers: Any) -> list[dict[str, Any]]:
+    """`status.peers` → hàng "Tên (@username) · thời điểm · id · Gỡ". Tên/username là DỮ LIỆU người ngoài: một dòng ≤ 60 ký tự, bỏ ký tự
+    điều khiển/bidi (`termsafe.one_line`; template vẫn autoescape). Id chỉ nhận đúng dạng (số Telegram / D…, C…, U… của Slack)."""
+    from ..termsafe import one_line
+
+    out = []
+    for p in peers if isinstance(peers, list) else []:
+        if not isinstance(p, dict):
+            continue
+        cid = str(p.get("chat_id") or "")
+        if not _CH_ID_RE.match(cid):
+            continue
+        uid = str(p.get("user_id") or "")
+        out.append({"chat_id": cid, "user_id": uid if _CH_ID_RE.match(uid) else "",
+                    "name": one_line(p.get("name") or "", 60), "username": one_line(str(p.get("username") or "").lstrip("@"), 60),
+                    "at": epoch_iso(p.get("at")), "group": cid.startswith("-") or cid[:1] in ("C", "G")})
+    return out
+
+
+def channel_state(kind: str, status: dict[str, Any] | None, *, webhook: bool = False) -> dict[str, Any]:
+    """MỘT trạng thái hiển thị cho kênh chat — dùng chung cho thẻ kênh (Thông báo & kênh), trang Hoạt động và danh mục Cài đặt.
+
+    Dựa trên `status.diagnosis` (chat/diagnose.py, daemon tính trên chính `telegram.status`/`slack.status`); `status is None` = daemon không
+    trả lời / chưa có kênh → `unknown`. `webhook` (chỉ Slack): webhook một chiều đang cấu hình — 2 chiều chưa chạy mà có webhook thì vẫn `ok`
+    ("chỉ thông báo"). Trả `{kind, label, page, state, tone, pill, message, action, fix, bot, people, last_contact, configured, test_channel}`;
+    `fix` = `{label, href}` (sang đúng bước của trang kênh) | `{label, act, fields, next}` (thao tác `ACTIONS`) | None. Không chữ tự do nào
+    từ dịch vụ ngoài (`message` = câu tiếng Việt của diagnose; tên bot đã kiểm dạng, workspace một dòng)."""
+    from ..termsafe import one_line
+
+    if kind not in CHANNEL_PAGES:
+        raise ValueError(f"kênh không hỗ trợ: {kind}")
+    label, page = CHANNEL_LABELS[kind], CHANNEL_PAGES[kind]
+    out: dict[str, Any] = {"kind": kind, "label": label, "page": page, "fix": None, "bot": None, "people": 0, "last_contact": None,
+                           "configured": False, "action": None, "test_channel": None, "webhook": bool(webhook)}
+    if status is None:
+        out.update(state="unknown", tone="muted", pill="không rõ", message=f"Daemon chưa trả lời trạng thái {label} — thử tải lại trang.")
+        return out
+    st = status if isinstance(status, dict) else {}
+    if isinstance(st.get("diagnosis"), dict):
+        dg = st["diagnosis"]
+    else:  # daemon cũ chưa gắn diagnosis → tự tính bằng cùng hàm thuần
+        from ..chat.diagnose import diagnose
+
+        dg = diagnose(kind, st)
+    state = str(dg.get("state") or ("off" if not st.get("configured") else "setup"))
+    if state not in _CH_PILL:
+        state = "setup"
+    action = dg.get("action")
+    msg = str(dg.get("message_vi") or "")
+    if kind == "telegram":
+        bot = st.get("bot_username")
+        out["bot"] = f"@{bot}" if isinstance(bot, str) and _TG_BOT_RE.match(bot) else None
+    else:
+        out["bot"] = one_line(st.get("team") or "", 60) or None
+    out.update(configured=bool(st.get("configured")), people=len(st.get("allowed_chat_ids") or []), action=action,
+               last_contact=epoch_iso(dg.get("last_contact")))
+    pill = _CH_PILL[state]
+    if state == "off" and action == "enable":
+        pill = "đã tắt"
+    elif state == "off" and dg.get("code") == "frozen":
+        pill = "đã chuyển máy"
+    elif state == "setup" and dg.get("code") == "connecting":
+        pill = "đang kết nối…"
+    if kind == "slack" and webhook and state in ("off", "setup") and action in ("setup", "app_token", "enable"):
+        # 2 chiều chưa chạy nhưng webhook một chiều có → vẫn nhận thông báo (không duyệt bằng nút được)
+        state, pill = "ok", "chỉ thông báo"
+        msg = "Đang nhận thông báo vào một kênh Slack (webhook một chiều) — kết nối 2 chiều để duyệt bằng nút ngay trong Slack."
+        out["test_channel"] = "slack_webhook"
+        action = None  # không có gì hỏng — "Quản lý" trên thẻ dẫn tới trang Slack để nâng lên 2 chiều
+    elif state == "ok":
+        out["test_channel"] = kind
+    out.update(state=state, tone=_CH_TONE[state], pill=pill, message=msg or f"{label}: {pill}.", action=action, fix=_channel_fix(kind, action, page))
+    return out
+
+
+def _channel_fix(kind: str, action: Any, page: str) -> dict[str, Any] | None:
+    """Nút sửa theo `diagnosis.action` — chỉ đích nội bộ cố định / thao tác có tên trong `ACTIONS`."""
+    tg = kind == "telegram"
+    if action == "setup":
+        return {"label": "Kết nối", "href": page}
+    if action == "enable":
+        return {"label": "Bật lại", "act": "tg_pair" if tg else "slack2_pair", "fields": {}, "next": page}
+    if action in ("retoken", "other_instance"):
+        return {"label": "Dán token mới", "href": page + ("#tg-setup" if tg else "#slack-step2")}
+    if action == "app_token" and not tg:
+        return {"label": "Dán app token", "href": page + "#slack-step3"}
+    if action == "repair_webhook" and tg:
+        return {"label": "Gỡ webhook", "act": "tg_repair", "fields": {}, "next": page}
+    if action == "pair":
+        return {"label": "Ghép nối", "href": page + ("#tg-step3" if tg else "#slack-step4")}
+    if action == "reset_team" and not tg:
+        return {"label": "Kết nối lại", "href": page + "#slack-manage"}
+    return None
+
+
+def channels_summary(states: list[dict[str, Any]]) -> str:
+    """Mô tả một dòng cho danh mục Cài đặt (/settings): "Telegram: hoạt động · Slack: chưa kết nối"."""
+    return " · ".join(f"{s['label']}: {s['pill']}" for s in states) or "Telegram, Slack — duyệt yêu cầu trên điện thoại"

@@ -3,7 +3,7 @@
 - Web API (HTTP, thân form như SlackApi gửi): auth.test, apps.connections.open (app token) → URL WebSocket cục bộ, chat.postMessage,
   chat.update, chat.delete, chat.postEphemeral, conversations.open, users.info, files.getUploadURLExternal (+ POST /upload/<id>),
   files.completeUploadExternal, views.open (ghi lại view; `fail_views` → `expired_trigger_id`), conversations.replies (P8: lịch sử
-  thread từ mọi tin đã bơm/bot đã gửi, `thread_seed()` thêm tin cũ). Token sai → `invalid_auth`.
+  thread từ mọi tin đã bơm/bot đã gửi, `thread_seed()` thêm tin cũ). bots.info (→ `app_id`, `fail_bots_info` → `missing_scope`). Token sai → `invalid_auth`.
 - P7: assistant.threads.setStatus (`fail_status` → `method_not_supported_for_channel_type`), reactions.add/remove (`fail_reactions` →
   `missing_scope`); `ratelimit[method] = n` → n lần kế tiếp trả HTTP 429 + `Retry-After: 1` (ghi vào `calls` là `<method>#429`).
 - Tệp người gửi (P4): `user_files()` lưu nội dung và bơm tin `file_share`; GET `/files-pri/<id>/<tên>` trả nội dung khi có bot token
@@ -27,6 +27,8 @@ BOT_TOKEN = "xoxb-1111-2222-fakeBotTokenForTests0123"
 APP_TOKEN = "xapp-1-A111-2222-fakeAppTokenForTests0123"
 TEAM = "T0TEAM001"
 BOT_USER = "U0BOT0001"
+BOT_ID = "B0BOT0001"
+APP_ID = "A0APP00001"
 
 
 class FakeSlack:
@@ -50,6 +52,8 @@ class FakeSlack:
         self.fail_status = False
         self.fail_reactions = False
         self.ratelimit: dict[str, int] = {}
+        self.app_id = APP_ID  # bots.info → app_id (slack.verify_bot); test đổi để thử id lạ
+        self.fail_bots_info = False
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -139,7 +143,13 @@ class FakeSlack:
         if auth != BOT_TOKEN:
             return {"ok": False, "error": "invalid_auth"}
         if method == "auth.test":
-            return {"ok": True, "team_id": self.team, "team": "Thử nghiệm", "user_id": BOT_USER, "user": "cfharness"}
+            return {"ok": True, "team_id": self.team, "team": "Thử nghiệm", "user_id": BOT_USER, "user": "cfharness", "bot_id": BOT_ID}
+        if method == "bots.info":
+            if self.fail_bots_info:
+                return {"ok": False, "error": "missing_scope"}
+            if p.get("bot") != BOT_ID:
+                return {"ok": False, "error": "bot_not_found"}
+            return {"ok": True, "bot": {"id": BOT_ID, "app_id": self.app_id, "user_id": BOT_USER, "name": "cfharness", "deleted": False}}
         if method == "chat.postMessage":
             p["_ts"] = self._ts()  # test đọc lại ts của tin bot gửi
             self._log(str(p.get("channel")), {"type": "message", "user": BOT_USER, "bot_id": "B0BOT0001", "text": self.text_of(p), "ts": p["_ts"],
