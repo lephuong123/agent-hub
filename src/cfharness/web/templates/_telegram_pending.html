@@ -1,0 +1,46 @@
+{#- Ghép nối Telegram (partial /partials/telegram/pending, poll 3 s khi đang ghép nối): deep link + QR + mã một lần, người chờ xác nhận.
+    Tên/username là dữ liệu NGƯỜI NGOÀI (đã một dòng ≤ 60 ký tự ở telegram_pages.person) — chỉ autoescape, không |safe.
+    tg_pair.qr là SVG do server tự dựng từ link đã kiểm (telegram_pages.qr_svg) — Markup. -#}
+{% import "_macros.html" as m with context %}
+{% set active = tg and tg.pairing_active %}
+<div id="tg-pending"{% if active %} hx-get="/partials/telegram/pending" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+{% if active %}
+  <div class="pairbox">
+    {% if tg_pair %}
+      {% if tg_pair.link %}
+      <p><a class="btn primary lg" href="{{ tg_pair.link }}" target="_blank" rel="noopener noreferrer">{{ m.icon('send') }}<span>Mở Telegram và bấm Start</span></a></p>
+      <p class="muted small">Đang mở trang này trên máy tính? Quét mã QR bằng camera điện thoại:</p>
+      {% if tg_pair.qr %}<div class="totp-qr tg-qr">{{ tg_pair.qr }}</div>
+      <p class="small warn-t">{{ m.icon('alert') }} Đừng chia sẻ màn hình lúc này — mã QR và mã ghép nối cho phép người khác xin quyền điều khiển hub.</p>{% endif %}
+      {% endif %}
+      <p class="small">Hoặc mở bot{% if tg_pair.bot %} <b>@{{ tg_pair.bot }}</b>{% endif %} trong Telegram và nhắn:</p>
+      <p class="pair-code"><code>/start {{ tg_pair.code }}</code></p>
+      <p class="muted small">Mã dùng một lần, còn khoảng {{ (tg_pair.left_s // 60) + 1 }} phút. Người nhắn sẽ hiện bên dưới — bạn xác nhận từng người.</p>
+    {% else %}
+      <p class="muted small">Đang có mã ghép nối được tạo ở nơi khác (terminal / tab khác). Người đã nhắn mã hiện bên dưới; cần mã mới thì bấm "Tạo mã ghép nối mới".</p>
+    {% endif %}
+    {% if tg_pending %}
+      <div class="tg-people">
+      {% for p in tg_pending %}
+        <article class="xcard tg-person">
+          <div class="t"><b>{{ p.name or ('@' ~ p.username if p.username else 'Người dùng Telegram') }}</b>{% if p.username and p.name %} <span class="muted">@{{ p.username }}</span>{% endif %}
+            · <span class="muted small">{% if p.group %}chat nhóm <code>{{ p.chat_id }}</code>{% else %}chat riêng <code>{{ p.chat_id }}</code>{% endif %}</span></div>
+          <p class="muted small">Chỉ cho phép nếu đúng là bạn (hoặc người bạn tin): người này sẽ duyệt được thao tác phá huỷ, giao việc, bật/tắt ESTOP.</p>
+          <div class="row gap">
+          {% if p.group %}
+            {{ m.act("tg_allow_confirm", "Cho phép nhóm này", {"chat_id": p.chat_id, "user_id": p.user_id, "name": p.name or p.username}, "btn sm ok", ic="check",
+                 confirm="Cho phép nhóm " ~ p.chat_id ~ " (người gõ: " ~ (p.name or p.username or p.user_id) ~ ") điều khiển cfharness qua Telegram? Mọi thông báo sẽ vào nhóm; chỉ người được phép bấm được nút.",
+                 next="/settings/notifications/telegram") }}
+          {% else %}
+            {{ m.act("tg_allow", "Đây là tôi — cho phép", {"chat_id": p.chat_id, "name": p.name or p.username}, "btn sm ok", ic="check", next="/settings/notifications/telegram") }}
+          {% endif %}
+          </div>
+        </article>
+      {% endfor %}
+      </div>
+    {% else %}
+      <p class="muted small">{{ m.icon('clock') }} Chưa ai nhắn mã — trang tự cập nhật.</p>
+    {% endif %}
+  </div>
+{% endif %}
+</div>

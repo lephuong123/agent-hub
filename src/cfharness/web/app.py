@@ -1494,17 +1494,12 @@ async def _tab_config(request: Request) -> dict[str, Any]:
 
 
 async def _tab_notifications(request: Request) -> dict[str, Any]:
-    from ..config import get_path
-
     raw = await rpc(request, "config.get") or {}
     names = {s.get("name") for s in await rpc(request, "secret.list") or []}
-    try:
-        tg_chats = get_path(raw, "notify.telegram.allowed_chat_ids") or []
-    except KeyError:
-        tg_chats = []
     slack2 = await _slack_pages.slack_ctx(request)  # khối "Slack 2 chiều" (web/slack_pages.py)
+    tg = await _telegram_pages.tab_status(request)  # trạng thái THẬT (telegram.status), không chỉ "secret có tồn tại" (web/telegram_pages.py)
     return {**slack2, "slack": SLACK_WEBHOOK_SECRET in names or "SLACK_BOT_TOKEN" in names, "slack_webhook": SLACK_WEBHOOK_SECRET in names,
-            "slack_create_url": SLACK_CREATE_URL, "telegram": "TELEGRAM_BOT_TOKEN" in names, "tg_chats": tg_chats,
+            "slack_create_url": SLACK_CREATE_URL, "tg": tg,
             "groups": [g for g in _settings.view(raw)["groups"] if g["id"] == "notify"]}
 
 
@@ -2429,6 +2424,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_skill_routes(),
         *_memory_routes(),
         *_slack_pages.routes(),  # /partials/slack/pending — wizard Slack 2 chiều
+        *_telegram_pages.routes(),  # /settings/notifications/telegram + /partials/telegram/pending — wizard Telegram
         *_update_pages.routes(),  # /update, /partials/update — nút "Cập nhật hệ thống"
         *_rt_account_pages.routes(),  # /partials/runtime-accounts — thẻ tài khoản ChatGPT (Codex) / Grok
         *_filehub_pages.routes(),  # /partials/filehub[/lane] + /filehub/open — thẻ "Không gian số" ở Cài đặt (filehub/)
@@ -2459,6 +2455,11 @@ _mgr.register_actions(ACTIONS, Action, _req)
 from . import slack_pages as _slack_pages  # noqa: E402
 
 _slack_pages.register_actions(ACTIONS, Action, _req)
+
+# Wizard Telegram (docs/dev-notes/plan-chat-setup-web.md PR1): tg_setup / pair / allow / allow_confirm / revoke / test / disable + trang riêng
+from . import telegram_pages as _telegram_pages  # noqa: E402
+
+_telegram_pages.register_actions(ACTIONS, Action, _req)
 
 # Tài khoản Claude (docs/dev-notes/plan-claude-accounts.md): account_use / rename / rm / check / login_* / add_token + khối ở Cài đặt
 from . import account_pages as _account_pages  # noqa: E402
