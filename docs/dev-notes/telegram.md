@@ -176,3 +176,17 @@ lệnh, phải hiện nguyên văn.
   đó (`telegram_pages.qr_svg`, kiểm lại bằng regex), kèm cảnh báo không chia sẻ màn hình. Tên/username người nhắn: `termsafe.one_line` ≤ 60, autoescape.
 - Trang Thông báo & kênh: dòng Telegram đọc `telegram.status` (lỗi / đã tắt / đang hoạt động) thay vì "secret tồn tại", link sang wizard.
 - Test: `tests/test_web_telegram.py`. Chưa làm (PR khác của plan): tên người được phép (`telegram.peers`), chẩn đoán lỗi + `telegram.repair`, thẻ kênh.
+
+## Phần nền cho kết nối qua web (2026-11-28, plan-chat-setup-web PR2/PR5)
+- `telegram.repair {}` (HUMAN_ONLY, `MUTATING_TELEGRAM`, tự audit): `getWebhookInfo` → `deleteWebhook{drop_pending_updates:false}` bằng token
+  đã lưu, xoá `last_error`, `kick()` → `{ok, had_webhook}`. Dùng khi poll báo 409 "can't use getUpdates method while webhook is active".
+  (Vòng poll đã tự `deleteWebhook` khi khởi động lại; repair cho trường hợp webhook bị đặt lúc bot đang chạy.)
+- Người được phép có tên: `telegram.allow` ghi `hub_state telegram.peers[chat_id] = {chat_id, user_id, name, username, at}` (tên/username từ
+  lần ghép nối, `termsafe.one_line` ≤ 60 ký tự — dữ liệu người ngoài); `revoke` gỡ mục, `disable{forget_token}` xoá hết. `telegram.status.peers`
+  = một mục cho MỖI chat trong allowlist (chat thêm tay: `name=None`). `telegram.peers` ∈ `hub_transfer.CLONE_STATE` (move giữ).
+- `telegram.status.diagnosis` = `chat/diagnose.diagnose("telegram", status)` (thuần): `{state off|setup|pairing|ok|error, message_vi, action,
+  code, last_contact}`; nhận dạng `last_error` thật (`Unauthorized` → `retoken`, 409 webhook → `repair_webhook`, 409 getUpdates khác →
+  `other_instance`, 429 → `wait`, lỗi mạng/HTTP 5xx → `check_network`). Chuỗi lỗi ngoài không bao giờ chép vào `message_vi`. `status.frozen`.
+- `notify.test {channels: "all" | [slack_webhook|slack|telegram]}` (guard/rpc.py `notify_test`) — `{sent, channels:{<kênh>: {sent, chats?, reason?, skipped?}}}`;
+  không `channels` = như cũ (chỉ Slack một chiều). Nay ∈ HUMAN_ONLY + MUTATING (gửi tin qua bot = như `telegram.test`); CLI `notify test --channel …`
+  (`notify test` vào `HUB_HUMAN_ONLY_CLI`). Hub đóng băng → không gửi kênh nào. Test: `tests/test_chat_setup_backend.py`.

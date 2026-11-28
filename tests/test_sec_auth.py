@@ -562,6 +562,29 @@ async def test_filehub_writes_human_only(home):
         await _stop(d, srv)
 
 
+async def test_chat_setup_rpcs_human_only(home):
+    """plan-chat-setup-web: `slack.verify_bot` (lưu bot token), `telegram.repair` (gỡ webhook), `notify.test{channels}` (gửi tin qua bot
+    tới chat trong allowlist) — agent trong run, kể cả đọc trộm token người, bị từ chối; không ∈ MANAGER_ALLOWED; được bọc audit."""
+    from cfharness.guard.classifier import HUB_HUMAN_ONLY_CLI
+
+    for m in ("slack.verify_bot", "telegram.repair", "notify.test"):
+        assert m in auth.HUMAN_ONLY and m not in auth.MANAGER_ALLOWED and m in auth.all_mutating(), m
+    assert {"telegram", "slack", "test"} <= HUB_HUMAN_ONLY_CLI["notify"]
+    d, srv = await _start(home)
+    try:
+        for m, prm in (("slack.verify_bot", {"bot_token": "xoxb-1111-2222-fakeBotTokenForTests0123"}), ("telegram.repair", {}),
+                       ("notify.test", {"channels": "all"})):
+            run_n, proc_n, go_n = await _start_run(d)
+            rr = await _in_run(go_n, _client_py(home, m, prm, steal_token=True))
+            resp = json.loads(rr["out"].strip().splitlines()[-1])
+            assert resp.get("error", {}).get("code") == -32003, (m, resp)
+            proc_n.wait(5)
+        assert d.hub.secrets.get("SLACK_BOT_TOKEN") is None
+        assert "fakeBotTokenForTests" not in str(d.hub.audit.query(limit=500))
+    finally:
+        await _stop(d, srv)
+
+
 async def test_session_reindex_human_only(home):
     """Dựng lại chỉ mục tìm kiếm hội thoại (session_search.schedule_reindex): agent trong run — kể cả đọc trộm token người — bị từ chối;
     method ghi được bọc audit; CLI `session reindex` bị classifier chặn, `session status` (chỉ số đếm) thì không."""

@@ -270,6 +270,22 @@ Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên works
   quả task sau đó (heartbeat → `notify_owner` vào thread) cũng được dặn như vậy (`_origin_note`). DM giữ như cũ. Đây là lời dặn trong prompt,
   hub không cắt bớt chữ. Test: `tests/test_slack_mentions.py::test_result_only_*`, `::test_mention_reply_result_mode_*`.
 
+## Phần nền cho wizard từng bước (2026-11-28, plan-chat-setup-web PR2/PR3/PR5)
+- `slack.verify_bot {bot_token}` (HUMAN_ONLY, `MUTATING_SLACK`, tự audit, token pop ngay + ∈ `FAILURE_DROP_KEYS`): `auth.test` → `bots.info{bot:
+  bot_id}` (scope `users:read` của manifest) lấy `app_id`; workspace khác `team_id` đã ghim → từ chối như `setup`; lưu CHỈ `SLACK_BOT_TOKEN`
+  và `hub_state slack.app = {app_id, team_id, team, bot_user_id}`. Trả `{team, team_id, bot_user_id, bot_name, app_id, links}`;
+  `links = {app_general: https://api.slack.com/apps/<app>/general, app_oauth: …/oauth, dm: https://slack.com/app_redirect?app=<app>&team=<team>}`
+  chỉ khi id khớp `^[A-Z0-9]{6,20}$` (`bot.app_links`), không thì `None`. `bots.info` lỗi (manifest cũ) → vẫn lưu token, `app_id=None`.
+  Bước sau: `slack.setup {app_token}` (bot token lấy từ secret store — đã hỗ trợ sẵn).
+- `slack.status` thêm `app_id`, `links`, `token_team_id` (workspace của token theo `auth.test`), `peers`, `frozen`, `diagnosis`
+  (`chat/diagnose.py`: `invalid_auth`/`token_revoked` → `retoken` hoặc `app_token` nếu lỗi ở `apps.connections.open`, `not_allowed_token_type`
+  → dán nhầm loại, `missing_scope`, lỗi khác của `apps.connections.open` → coi là Socket Mode chưa bật/app token thiếu scope — Slack không có mã
+  lỗi riêng cho "chưa bật Socket Mode" nên đây là suy luận; thiếu app token → `setup/app_token`; `team_id` ≠ `token_team_id` → `reset_team`).
+- Người được phép có tên: `slack.allow` ghi `hub_state slack.peers[chat_id]` (tên từ ghép nối, thiếu thì `users.info` qua cache `_user_info`);
+  `revoke` gỡ, `disable{forget_token}` xoá hết peers + `slack.app`. `slack.peers`, `slack.app` ∈ `hub_transfer.CLONE_STATE`.
+- Gửi thử chung: `notify.test {channels}` (xem telegram.md). Fake: `tests/slack_fake.py` có `bots.info` (`app_id`, `fail_bots_info`), `auth.test`
+  trả `bot_id`. Test: `tests/test_chat_setup_backend.py`.
+
 ## Chưa làm
 - Nghiệm thu trên workspace Slack thật: chưa chạy (cả tag trong kênh — P6, `setStatus`/tin tiến độ — P7, thread không tag + ngữ cảnh thread — P8) (modal `views.open`, tải `url_private` với `files:read`, tệp từ máy tính + điện thoại).
 

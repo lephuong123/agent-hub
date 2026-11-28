@@ -21,7 +21,7 @@ Chữ ký (MCP server của luồng A gọi `approval.list|approve|deny` với c
   `manager/permissions.check_rpc` + `ApprovalService.manager_decide`): approval `routed_to=manager`, lớp được giao, không phải approval
   của run điều phối viên, không bao giờ `always`. Người dùng `approval.approve|deny` như cũ (quyết được bất kỳ lúc nào).
 - `guard.check` (hook/hub-guard), `guard.test {command|tool+input, cwd?, run_id?}`, `guard.policy`,
-  `guard.protect.list|add|rm`, `notify.test {text?}`, `run.continue {id, prompt}`, `run.resume {id, prompt?}`,
+  `guard.protect.list|add|rm`, `notify.test {text?, channels?: "all"|[slack_webhook|slack|telegram]}` (xem `notify_test`), `run.continue {id, prompt}`, `run.resume {id, prompt?}`,
   `agent.purge {id, confirm}` (confirm phải bằng id — người gõ lại).
 """
 
@@ -88,6 +88,61 @@ def _repo_deny_rm(hub, p: dict[str, Any]) -> dict[str, Any]:
     except Exception:  # best-effort: audit lỗi không che kết quả thao tác đã xong (như repo_deny_add)
         pass
     return res
+
+
+NOTIFY_CHANNELS = ("slack_webhook", "slack", "telegram")
+NOTIFY_TEST_TEXT = "cfharness: thử thông báo — kênh {label} hoạt động."
+_NOTIFY_LABELS = {"slack_webhook": "Slack (webhook)", "slack": "Slack 2 chiều", "telegram": "Telegram"}
+
+
+async def notify_test(hub: Any, p: dict[str, Any]) -> dict[str, Any]:
+    """`notify.test {text?, channels?}`.
+
+    - Không có `channels` (CLI `cfharness notify test` cũ) → như trước: chỉ Slack một chiều (webhook / bot+channel) → `{sent, kind|reason}`.
+    - `channels: "all"` → mọi kênh ĐÃ cấu hình + đang bật (kênh chưa cấu hình: `skipped`), hoặc danh sách con của
+      `slack_webhook|slack|telegram` (kênh nêu tên mà chưa cấu hình → `sent:false` + `reason`).
+      → `{sent: <có ít nhất một kênh gửi được>, channels: {<kênh>: {sent, chats?, kind?, reason?, skipped?}}}`.
+    Hub đóng băng (chuyển nhà) → không gửi gì (Telegram/Slack: `token()` đã None; webhook: kiểm ở đây)."""
+    from ..hub_freeze import frozen
+
+    text = str(p.get("text") or "")
+    chans = p.get("channels")
+    if chans is None:
+        if frozen(hub):
+            return {"sent": False, "reason": "hub đã chuyển sang máy khác (đóng băng) — không gửi thông báo"}
+        return await hub.notifier.send_now(text or ":white_check_mark: cfharness: thử thông báo Slack")
+    if chans == "all":
+        want, only_ready = list(NOTIFY_CHANNELS), True
+    elif isinstance(chans, (list, tuple)) and chans and all(isinstance(c, str) and c in NOTIFY_CHANNELS for c in chans):
+        want, only_ready = [c for c in NOTIFY_CHANNELS if c in chans], False
+    else:
+        raise HubError(f"channels phải là \"all\" hoặc danh sách con của {', '.join(NOTIFY_CHANNELS)}", code=-32602)
+    out: dict[str, dict[str, Any]] = {}
+    is_frozen = frozen(hub)
+    for ch in want:
+        msg = text or NOTIFY_TEST_TEXT.format(label=_NOTIFY_LABELS[ch])
+        if ch == "slack_webhook":
+            if is_frozen:
+                out[ch] = {"sent": False, "reason": "hub đã chuyển sang máy khác (đóng băng)"}
+                continue
+            if hub.notifier.target() is None:
+                bot = getattr(hub, "slack", None)
+                why = ("Slack 2 chiều đang chạy — webhook nhường" if bot is not None and bot.active() else
+                       "webhook Slack chưa cấu hình hoặc đang tắt")
+                out[ch] = {"sent": False, "skipped": True, "reason": why} if only_ready else {"sent": False, "reason": why}
+                continue
+            out[ch] = await hub.notifier.send_now(msg)
+            continue
+        bot = getattr(hub, ch, None)
+        ready = bot is not None and bot.api() is not None and (ch != "slack" or bot.app_token() is not None)
+        if not ready and only_ready:
+            out[ch] = {"sent": False, "skipped": True, "reason": f"{_NOTIFY_LABELS[ch]} chưa cấu hình hoặc đang tắt"}
+            continue
+        if bot is None:
+            out[ch] = {"sent": False, "reason": f"{_NOTIFY_LABELS[ch]} không có trong hub này"}
+            continue
+        out[ch] = await bot.send_test(msg)
+    return {"sent": any(r.get("sent") for r in out.values()), "channels": out}
 
 
 def register_rpc(d: "Daemon") -> None:
@@ -215,7 +270,7 @@ def register_rpc(d: "Daemon") -> None:
                     ((p["run_id"],) if p.get("run_id") else ()) + (int(p.get("limit") or 100),),
                 )
             ],
-            "notify.test": lambda p: hub.notifier.send_now(str(p.get("text") or ":white_check_mark: cfharness: thử thông báo Slack")),
+            "notify.test": lambda p: notify_test(hub, p),
             "run.continue": run_continue,
             "run.resume": run_resume,
             "agent.purge": agent_purge,
