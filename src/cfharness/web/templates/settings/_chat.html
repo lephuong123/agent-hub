@@ -1,0 +1,29 @@
+{#- Khối dùng chung của trang kênh chat (Telegram / Slack, plan-chat-setup-web §3.4) — import `with context` (cần `csrf`, `m`).
+    peers: người được phép có tên — `present.chat_peers` đã làm sạch (một dòng ≤ 60 ký tự); chỉ autoescape, không |safe.
+    diag: thẻ chẩn đoán từ `present.channel_state` — câu tiếng Việt cố định + nút sửa (đích nội bộ / thao tác ACTIONS). -#}
+{% import "_macros.html" as m with context %}
+
+{% macro peers(rows, revoke, next, kind) -%}
+<ul class="peer-list">
+  {% for p in rows %}
+  <li class="peer">
+    <span class="peer-who"><b>{{ p.name or ('@' ~ p.username if p.username else ('Nhóm' if p.group and kind == 'telegram' else ('Kênh' if p.group else 'Chưa rõ tên'))) }}</b>{% if p.name and p.username %} <span class="muted">@{{ p.username }}</span>{% endif %}
+      <span class="muted small">· {% if p.at %}từ {{ m.rel(p.at) }}{% else %}thêm trước khi hub lưu tên{% endif %} · <code>{{ p.chat_id }}</code>{% if p.user_id and p.user_id != p.chat_id %} <code>{{ p.user_id }}</code>{% endif %}</span></span>
+    <span class="actions">{{ m.act(revoke, "Gỡ", {"chat_id": p.chat_id}, "btn sm ghost", confirm="Gỡ " ~ (p.name or p.username or p.chat_id) ~ " (" ~ p.chat_id ~ ")? Người/chat này không nhận thông báo và không điều khiển được cfharness nữa.", next=next) }}</span>
+  </li>
+  {% else %}
+  <li class="muted small">Chưa có ai được phép.</li>
+  {% endfor %}
+</ul>
+{%- endmacro %}
+
+{% macro diag(ch, last_error=None, next=None) -%}
+{% if ch and ch.state in ('error', 'setup') %}
+<div class="banner {{ 'danger' if ch.state == 'error' else 'warn' }} chan-diag" id="{{ ch.kind }}-diag">
+  {{ m.icon('alert' if ch.state == 'error' else 'clock') }}
+  <span>{{ ch.message }}{% if ch.last_contact %} <span class="muted small">Liên lạc lần cuối {{ m.rel(ch.last_contact) }}.</span>{% endif %}</span>
+  {% if ch.fix %}{% if ch.fix.href %}<a class="btn sm" href="{{ ch.fix.href }}">{{ ch.fix.label }}</a>{% else %}{{ m.act(ch.fix.act, ch.fix.label, ch.fix.fields, "btn sm primary", next=next or ch.fix.next) }}{% endif %}{% endif %}
+  {% if last_error %}<details class="small"><summary>Chi tiết kỹ thuật</summary><code>{{ last_error }}</code></details>{% endif %}
+</div>
+{% endif %}
+{%- endmacro %}

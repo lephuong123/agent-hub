@@ -1133,6 +1133,9 @@ class SlackBot(ChatBot):
                     "allowed_user_ids": sorted(str(x) for x in (c.get("allowed_user_ids") or [])), "slash_command": self.slash(),
                     "connected_at": self.info.get("connected_at"), "open_modals": self.modals.count(),
                     "token_team_id": self.info.get("team_id")})
+        # webhook một chiều (SlackNotifier, notify/slack.py) — CHỈ cờ, không bao giờ URL; `webhook_yields`: 2 chiều đang chạy nên webhook nhường
+        hook = bool(c.get("webhook_url") or self._secret(str(c.get("webhook_secret") or "SLACK_WEBHOOK_URL")))
+        out.update({"webhook": hook, "webhook_yields": hook and self.active()})
         out.update(self.app_links())
         return self.with_diagnosis(out)
 

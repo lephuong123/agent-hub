@@ -9,6 +9,15 @@
   // thanh bên: chiều cao phần Luồng việc (đường chia kéo được) + nhóm hội thoại đang gập — áp trước khi vẽ để không nhảy
   try { var nh = parseInt(localStorage.getItem("cfh_side_nav_h"), 10); if (nh > 0) { d.style.setProperty("--side-nav-h", nh + "px"); d.classList.add("side-nav-sized"); } } catch (_) {}
   try { ["ws", "recent"].forEach(function (k) { if (localStorage.getItem("cfh_sf_" + k) === "1") d.classList.add("sf-" + k); }); } catch (_) {}
+  // link cũ #slack / #slack2 (Slack từng nằm trên trang Thông báo & kênh) → trang riêng /settings/notifications/slack
+  // (#slack = webhook một chiều → mục Nâng cao "#webhook"; #slack2 = 2 chiều → đầu trang). Không JS: neo vẫn nằm trên thẻ Slack.
+  try {
+    var SLACK_OLD = { slack: "#webhook", slack2: "" };
+    var oh = (location.hash || "").slice(1);
+    if ((location.pathname === "/settings" || location.pathname === "/settings/notifications") && Object.prototype.hasOwnProperty.call(SLACK_OLD, oh)) {
+      location.replace("/settings/notifications/slack" + SLACK_OLD[oh]); return;
+    }
+  } catch (_) {}
   // link cũ /settings#<id> (thẻ của trang Cài đặt dài trước đây) → tab /settings/<tab>, giữ #id (id cũ vẫn là neo trong tab mới)
   try {
     var sh = location.pathname === "/settings" ? (location.hash || "").slice(1) : "";

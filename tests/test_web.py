@@ -865,7 +865,7 @@ async def test_slack_connect_wizard(env, monkeypatch):
         return {"sent": True, "kind": "webhook"}
 
     monkeypatch.setattr(env.hub.notifier, "send_now", fake_send)  # không gọi mạng thật
-    r = await env.client.get("/settings/notifications")
+    r = await env.client.get("/settings/notifications/slack")  # webhook một chiều: Nâng cao của trang Slack
     assert "manifest_json=" in r.text and "Kết nối Slack" in r.text
     url = "https://hooks.slack.com/services/T000/B000/abcSECRETxyz"
     # URL sai dạng → từ chối, không lưu
@@ -881,8 +881,10 @@ async def test_slack_connect_wizard(env, monkeypatch):
     assert r.status_code == 303
     assert "SLACK_WEBHOOK_URL" in [x["name"] for x in env.hub.secrets.list()]
     assert env.hub.config.get("notify.slack.enabled") is True and sent
-    r = await env.client.get("/settings/notifications")
-    assert "đã kết nối" in r.text and "abcSECRETxyz" not in r.text
+    r = await env.client.get("/settings/notifications/slack")
+    assert "đã có webhook" in r.text and "abcSECRETxyz" not in r.text
+    note = (await env.client.get("/settings/notifications")).text  # thẻ Slack: webhook có → vẫn nhận thông báo (một chiều)
+    assert "chỉ thông báo" in note and "abcSECRETxyz" not in note
     assert audit_rows(env, "secret.set")[-1]["channel"] == "web"
     assert "abcSECRETxyz" not in json.dumps([dict(x) for x in env.hub.store.conn.execute("SELECT * FROM audit_log").fetchall()], default=str)
 

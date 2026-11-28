@@ -13,6 +13,17 @@
     agent, team, task, tri thức, lịch, lịch sử và session Claude đi theo. Hoặc bắt đầu mới: tạo agent ở trang <a href="/agents">Agent</a>.</p>
 </section>
 {% endif %}
+{% if chat_cta %}
+<section class="card chat-cta" id="chat-cta" data-dismiss="chat-cta">
+  <div class="card-head"><h2>{{ mc.icon('bell') }} Nhận yêu cầu duyệt trên điện thoại</h2>
+    <button type="button" class="btn sm ghost js-only" data-dismiss-btn title="Ẩn gợi ý này trên trình duyệt này">Ẩn</button></div>
+  <p class="muted small">Agent chờ bạn duyệt thao tác nguy hiểm, hỏi bạn, hay lỗi lặp lại — nhận ngay trên điện thoại và duyệt bằng một nút bấm.</p>
+  <div class="chat-cta-btns">
+    <a class="btn primary" href="/settings/notifications/telegram">{{ mc.icon('send') }}<span>Kết nối Telegram (2 phút)</span></a>
+    <a class="btn" href="/settings/notifications/slack">{{ mc.icon('chat') }}<span>Slack</span></a>
+  </div>
+</section>
+{% endif %}
 <div id="overview" hx-get="/partials/overview" hx-trigger="ov-dirty, every 30s" hx-swap="innerHTML">
 {% include "_overview.html" %}
 </div>

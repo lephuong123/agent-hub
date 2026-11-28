@@ -28,7 +28,7 @@ from telegram_fake import TOKEN, FakeTelegram
 
 BOSS = 555001
 PAGE = "/settings/notifications/telegram"
-TG_RPC = ("telegram.setup", "telegram.pending", "telegram.allow", "telegram.revoke", "telegram.disable", "telegram.test")
+TG_RPC = ("telegram.setup", "telegram.pending", "telegram.allow", "telegram.revoke", "telegram.disable", "telegram.test", "telegram.repair")
 BAD_TOKEN = "987654321:ZZZ-notTheRightToken_abcdefghijklmn"
 
 
@@ -124,8 +124,9 @@ async def test_page_requires_login_and_fresh_state(env):
     env.hub.secrets.set("TELEGRAM_BOT_TOKEN", BAD_TOKEN)
     assert await until(lambda: env.hub.telegram.info.get("last_error"))
     note = (await get(env, "/settings/notifications")).text
-    row = re.search(r"<dt>Telegram</dt>.*?</dd>", note, re.S).group(0)
-    assert "lỗi kết nối" in row and "đang hoạt động" not in row
+    row = re.search(r'<article class="chan-card" id="chan-telegram">.*?</article>', note, re.S).group(0)
+    assert 'pill danger' in row and "hoạt động" not in row and "dán token mới" in row  # chẩn đoán Unauthorized → nút dán token mới
+    assert 'href="/settings/notifications/telegram#tg-setup"' in row
     assert BAD_TOKEN not in note
 
 
@@ -212,6 +213,8 @@ async def test_setup_pair_allow_test_revoke_disable(env, tg, caplog):
     html = (await get(env, PAGE)).text
     assert "Đã kết nối" in html and 'action="/do/tg_test"' in html and 'action="/do/tg_revoke"' in html and f"/start {code}" not in html
     assert "Đã cho phép &lt;script&gt; (555001)" in html  # flash mang tên người nhắn — autoescape
+    # người được phép có TÊN (lúc ghép nối) — escape, kèm @username + id nhỏ
+    assert "@boss" in html and html.count("&lt;script&gt;alert(1)&lt;/script&gt;") >= 1 and "<script>alert(1)" not in html
     # gửi thử → telegram.test → tin tới chat
     before = len(tg.sent(BOSS))
     r = await post(env, "/do/tg_test", {"next": PAGE})
@@ -252,3 +255,30 @@ async def test_setup_pair_allow_test_revoke_disable(env, tg, caplog):
     assert secret_part not in blob and secret_part not in audit and secret_part not in caplog.text
     for s in env.auth.sessions.values():
         assert secret_part not in json.dumps(s.extra, default=str)
+
+
+async def test_webhook_conflict_diagnosed_and_repaired_from_web(env, tg):
+    """409 "webhook is active" → chẩn đoán trên thẻ kênh + trang Telegram (câu tiếng Việt, không chép lỗi thô vào câu) → nút "Gỡ webhook"
+    (có xác nhận) = `telegram.repair` → bot nhận tin lại. Người được phép không có tên (thêm tay) vẫn hiện id."""
+    env.hub.secrets.set("TELEGRAM_BOT_TOKEN", TOKEN)
+    env.hub.config.set("notify.telegram.allowed_chat_ids", [str(BOSS)])
+    assert await until(lambda: env.hub.telegram.info.get("polling"))
+    tg.webhook_url = "https://example.invalid/hook"
+    assert await until(lambda: "webhook" in str(env.hub.telegram.info.get("last_error") or ""))
+    await env.login()
+    note = (await get(env, "/settings/notifications")).text
+    card = re.search(r'<article class="chan-card" id="chan-telegram">.*?</article>', note, re.S).group(0)
+    assert "pill danger" in card and 'action="/do/tg_repair"' in card and "Gỡ webhook" in card and "Conflict" not in card
+    html = (await get(env, PAGE)).text
+    assert 'id="telegram-diag"' in html and 'action="/do/tg_repair"' in html and "Chi tiết kỹ thuật" in html
+    assert str(BOSS) in html and "thêm trước khi hub lưu tên" in html  # chat có từ trước (không có tên)
+    r = await post(env, "/do/tg_repair", {"next": PAGE})  # chưa xác nhận → trang xác nhận, chưa gọi RPC
+    assert r.status_code == 200 and "Gỡ webhook" in r.text and "telegram.repair" not in names(env)
+    r = await post(env, "/do/tg_repair", {"confirm": "yes", "next": PAGE})
+    assert r.status_code == 303 and names(env)[-1] == "telegram.repair" and tg.webhook_url == ""
+    assert audit_rows(env, "telegram.repair")[-1]["channel"] == "web"
+    assert "Đã gỡ webhook" in (await get(env, PAGE)).text
+    assert await until(lambda: env.hub.telegram.info.get("polling") and not env.hub.telegram.info.get("last_error"))
+    note = (await get(env, "/settings/notifications")).text
+    card = re.search(r'<article class="chan-card" id="chan-telegram">.*?</article>', note, re.S).group(0)
+    assert "pill ok" in card and "@hub_test_bot" in card and "1 người được phép" in card and 'value="telegram"' in card  # Gửi thử riêng kênh

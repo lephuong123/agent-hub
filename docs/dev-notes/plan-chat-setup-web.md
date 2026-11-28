@@ -163,3 +163,27 @@ Webhook 1 chiều chuyển xuống "Nâng cao → Chỉ nhận thông báo vào 
   `static/vendor/`? Đề xuất: `segno` (server-side SVG, không đụng CSP), hoặc bỏ QR nếu không muốn thêm dependency (deep link vẫn đủ trên điện thoại).
 - **Q4 — "Gửi thử tất cả":** mở rộng RPC `notify.test{channels}` (một chỗ, CLI dùng được) hay để web gọi lần lượt các RPC sẵn có? Đề xuất: mở rộng RPC.
 - **Q5 — Preset sự kiện áp chung hai kênh** (một lựa chọn) hay riêng từng kênh ngay trên đường chính? Đề xuất: chung, riêng trong Nâng cao.
+
+## 8. Đã làm (2026-11-28)
+
+| PR | Nhánh | Nội dung |
+|---|---|---|
+| #240 (PR1 + PR6) | `feat/web-telegram-wizard` | Wizard `/settings/notifications/telegram` (BotFather → dán token → deep link + **QR `segno`** SVG server-side → "Đây là tôi — cho phép" không trang trung gian, Q2); dòng Telegram ở trang Thông báo đọc `telegram.status`. |
+| #241 (PR4) | `feat/notify-event-groups` | `notify_events.py` (nhóm + nhãn + preset), khối "Nhận thông báo gì" (preset chung hai kênh, Q5), `config set notify.<kênh>.events` từ chối event lạ. |
+| #242 (PR2/PR3/PR5 phần nền) | `feat/chat-setup-backend` | RPC `slack.verify_bot`, `telegram.repair`, `notify.test{channels}` (Q4, nay HUMAN_ONLY), `status.peers`/`frozen`/`diagnosis`, `chat/diagnose.py` (thuần), `slack.status.links`. |
+| PR này (PR2/PR3/PR5 giao diện) | `feat/chat-setup-ui` (gộp 3 nhánh trên) | Thẻ kênh + `present.channel_state` (thuần, dựa trên `diagnosis`) dùng chung cho thẻ / trang Hoạt động / danh mục `/settings`; "Gửi thử tất cả" + "Gửi thử" từng kênh (`notify_test{channel}` → `notify.test{channels}`, không kênh nào gửi được → báo lỗi kèm lý do từng kênh); "Nâng cao" theo kênh trong thẻ (`cfg-notify-telegram`/`cfg-notify-slack`), cấu hình chung giữ `cfg-notify`; trang `/settings/notifications/slack` stepper 4 bước (`slack2_slash`, `slack2_verify`, `slack2_app`, `slack2_allow` không xác nhận cho DM đang chờ, `slack2_allow_confirm`), webhook một chiều vào "Nâng cao" (+ nhãn "đang nhường"); người được phép có tên ở cả hai trang (`present.chat_peers`, `settings/_chat.html`); chẩn đoán + `tg_repair` trên trang Telegram và thẻ kênh; thẻ "Nhận yêu cầu duyệt trên điện thoại" ở `/activity` (ẩn bằng `data-dismiss` + localStorage trong `app.js`, không JS vẫn hiện); neo cũ `#slack`/`#slack2` (early.js chuyển sang trang Slack, không JS vẫn có neo trên thẻ Slack). |
+
+Lệch so với plan:
+- `slack.status` thêm hai cờ `webhook` / `webhook_yields` (chỉ bool, không URL) để thẻ Slack và trang Hoạt động biết webhook một chiều đang có
+  mà không phải đọc `secret.list` (đọc nhạy cảm, có audit). Slack chỉ có webhook → thẻ "chỉ thông báo" (= `ok`, không hiện gợi ý ở trang Hoạt động).
+- `slack2_allow` (DM đang chờ) lấy `user_id` từ `slack.pending` của daemon, không tin form. `slack2_setup` (dán hai token một lần) vẫn nhận
+  (có trang xác nhận GHI ĐÈ) nhưng không còn form nào trên trang.
+- Đã có token mà dán lại (bot token bước 2 / app token bước 3) → phải tích "Ghi đè"; web hỏi lại `slack.status` ngay trước khi gửi (như Telegram).
+- "Trang chủ" của plan = trang Hoạt động (`/activity`, `overview.html`) — `/` hiện chuyển sang Điều phối.
+- Mô tả động ở `/settings` chỉ áp cho trang danh mục (thêm 2 RPC trạng thái trong RAM); cột nav con giữ mô tả tĩnh.
+
+Còn lại:
+- Nghiệm thu thật (§6) CHƯA chạy: bấm giờ Telegram ≤ 2 phút / Slack ≤ 5 phút trên Telegram + Slack thật, điện thoại (web public) và máy tính;
+  link `api.slack.com/apps/<id>/general` + `app_redirect` mới chỉ kiểm trên Slack giả.
+- Ảnh (hub demo, chưa kênh nào kết nối — trạng thái "đang chạy / lỗi" chưa có ảnh): `docs/screenshots/web/34-thong-bao-kenh.png` (+ `-mobile`, 390 px
+  không tràn ngang), `35-slack-tung-buoc.png`, `36-telegram-ket-noi.png`, `37-hoat-dong-goi-y-dien-thoai.png` — `web.demo` + Playwright Chromium headless.

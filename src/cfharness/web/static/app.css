@@ -1631,3 +1631,27 @@ html { overflow-x: clip; }
 .nev-items { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 4px 26px; }
 .msel-grp { margin: 4px 0 8px; }
 .msel-grp > b { display: block; color: var(--muted); }
+/* kênh chat (plan-chat-setup-web): thẻ kênh ở Thông báo & kênh, stepper Slack, người được phép có tên, thẻ gợi ý ở trang Hoạt động */
+.chan-list { display: flex; flex-direction: column; gap: var(--s3); }
+.chan-card { border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; }
+.chan-card .chan-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chan-card .chan-head h3 { margin: 0; font-size: 1em; }
+.chan-card .chan-msg { margin: 6px 0; }
+.chan-card .chan-meta { color: var(--muted); font-size: var(--fs-sm); margin: 0 0 8px; }
+.chan-card .chan-btns { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.chan-card details.cfg-group { margin-top: 10px; }
+.chan-diag { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.chan-diag details { flex-basis: 100%; }
+.stepper { display: flex; gap: 6px; list-style: none; padding: 0; margin: var(--s3) 0; flex-wrap: wrap; }
+.stepper li { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); font-size: var(--fs-sm); }
+.stepper li span { font-weight: 700; }
+.stepper li.now { border-color: var(--line-2); color: var(--text); font-weight: 650; }
+.stepper li.done { color: var(--ok); border-color: var(--ok-line); background: var(--ok-soft); }
+.slack-steps > section { border-top: 1px solid var(--line); padding-top: var(--s3); margin-top: var(--s3); }
+.inline-form { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.inline-form input[name="slash"] { display: block; max-width: 16em; }
+.peer-list { list-style: none; padding: 0; margin: 0 0 var(--s3); }
+.peer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.peer .peer-who { min-width: 0; overflow-wrap: anywhere; }
+.chat-cta .chat-cta-btns { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+html:not(.js) .js-only { display: none; }

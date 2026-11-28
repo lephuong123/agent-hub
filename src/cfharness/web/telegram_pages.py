@@ -10,7 +10,8 @@
    poll `telegram.pending` (htmx `/partials/telegram/pending`, 3 s, không gia hạn phiên). Chat riêng vừa ghép nối → "Đây là tôi — cho phép"
    gọi thẳng `telegram.allow` (Q2: không trang xác nhận trung gian; web kiểm lại người đó đang thật sự ở danh sách chờ). Nhóm / thêm bằng
    chat id thủ công vẫn có trang xác nhận.
-4. Xong: trạng thái (`telegram.status`), gửi tin thử, gỡ chat, mã mới, tắt / tắt và xoá token, "Nâng cao" cho nhóm.
+4. Xong: trạng thái (`telegram.status`), người được phép có tên (`status.peers`), gửi tin thử, gỡ chat, mã mới, tắt / tắt và xoá token,
+   "Nâng cao" cho nhóm. Chẩn đoán (`status.diagnosis`, `present.channel_state`) + nút sửa (dán token mới, "Gỡ webhook" = `telegram.repair`).
 
 Tên/username người nhắn là DỮ LIỆU không tin cậy: một dòng ≤ 60 ký tự (`termsafe.one_line`), autoescape, không `|safe`.
 Mọi thao tác ghi qua `ACTIONS` (CSRF + Origin + khoá phiên WT-1, `_audit.channel=web`); `telegram.*` ∈ HUMAN_ONLY và tự ghi audit.
@@ -33,6 +34,7 @@ from starlette.routing import Route
 from ..chat.rpc import CHAT_RE, TOKEN_RE  # một nguồn sự thật cho dạng token/chat id (RPC kiểm lại)
 from ..rpc import DaemonUnavailable, RpcError
 from ..termsafe import one_line
+from . import present as P
 from .app import render, rpc, session_of, ws
 
 PAIR_KEY = "telegram_pair"
@@ -144,6 +146,7 @@ async def telegram_ctx(request: Request) -> dict[str, Any]:
     except (RpcError, DaemonUnavailable, OSError):
         allow_groups = False
     return {"tg": st, "tg_stage": _stage(st), "tg_pair": _pair(request, st), "tg_pending": await _pending(request, st),
+            "tg_peers": P.chat_peers((st or {}).get("peers")), "tg_chan": P.channel_state("telegram", st),
             "tg_botfather": BOTFATHER_URL, "tg_name_hint": bot_name_hint(), "tg_token_pattern": TOKEN_PATTERN, "tg_allow_groups": allow_groups}
 
 
@@ -257,6 +260,11 @@ def _test_ok(r: Any, f: FormData) -> str:
     return f"Gửi thử chưa được: {one_line(r.get('reason') or '?', 300)}"
 
 
+def _repair_ok(r: Any, f: FormData) -> str:
+    return ("Đã gỡ webhook — bot nhận tin lại bằng long polling" if (r or {}).get("had_webhook") else
+            "Bot không có webhook nào — đã khởi động lại kết nối; nếu vẫn lỗi, có thể bot đang chạy ở máy/hub khác")
+
+
 ALLOW_WARN = "Người này sẽ duyệt được thao tác phá huỷ, giao việc, bật/tắt ESTOP… Chỉ xác nhận nếu đúng là bạn (hoặc người bạn tin)."
 
 
@@ -274,6 +282,10 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
     actions["tg_revoke"] = Action("telegram.revoke", lambda f: {"chat_id": _chat(f)}, lambda r, f: f"Đã gỡ chat {f.get('chat_id')} khỏi danh sách được phép",
                                   confirm=lambda f: f"Gỡ chat {f.get('chat_id')}? Chat này không nhận thông báo và không điều khiển được cfharness nữa.",
                                   danger=True)
+    # chẩn đoán 409 "webhook is active" (chat/diagnose.py → action repair_webhook) → `telegram.repair` (getWebhookInfo + deleteWebhook)
+    actions["tg_repair"] = Action("telegram.repair", lambda f: {}, _repair_ok,
+                                  confirm="Gỡ webhook của bot để hub nhận tin bằng long polling? Nếu bot đang được dịch vụ khác dùng qua webhook, "
+                                          "dịch vụ đó sẽ ngừng nhận tin.")
     actions["tg_test"] = Action("telegram.test", lambda f: {"text": "cfharness: thử kênh Telegram từ giao diện web — kênh hoạt động."}, _test_ok)
     actions["tg_disable"] = Action("telegram.disable", lambda f: {"forget_token": f.get("forget") == "1"},
                                    lambda r, f: "Đã tắt Telegram" + (" và xoá token" if (r or {}).get("token_removed") else ""),

@@ -2,6 +2,7 @@
     tg_stage: down | token | off | pair | done. Token không bao giờ được render lại; tên người nhắn chỉ autoescape. -#}
 {% extends "settings/_layout.html" %}
 {% import "_macros.html" as m with context %}
+{% import "settings/_chat.html" as CH with context %}
 {% block title %}Telegram · Thông báo & kênh · Cài đặt{% endblock %}
 {% block h1 %}Kết nối Telegram{% endblock %}
 {% block sub %}Nhận yêu cầu duyệt, lỗi, digest trên điện thoại — duyệt bằng nút, nhắn điều phối viên. <a href="/settings/notifications">← Thông báo &amp; kênh</a>{% endblock %}
@@ -13,6 +14,7 @@
 {% else %}
 
 {% if tg_stage in ("pair", "done", "off") %}
+{{ CH.diag(tg_chan, t.last_error, NEXT) }}
 <section class="card" id="tg-status">
   <div class="card-head"><h2>{{ m.icon('chat') }} Bot{% if t.bot_username %} @{{ t.bot_username }}{% endif %}</h2>
     {% if tg_stage == "off" %}<span class="pill muted">đã tắt</span>
@@ -20,7 +22,7 @@
     {% elif t.polling %}<span class="pill ok">{{ m.icon('dot', 'pulse') }}đang hoạt động</span>
     {% else %}<span class="pill warn">{{ m.icon('clock') }}đang kết nối…</span>{% endif %}</div>
   <dl class="kv cols">
-    <div><dt>Liên lạc lần cuối</dt><dd>{{ m.rel(t.last_poll_at) }}{% if t.last_error %}<div class="small danger-t">{{ t.last_error }}</div>{% endif %}</dd></div>
+    <div><dt>Liên lạc lần cuối</dt><dd>{{ m.rel(t.last_poll_at) }}</dd></div>
     <div><dt>Đã gửi</dt><dd>{{ t.sent or 0 }} tin{% if t.failed %} · <span class="danger-t">{{ t.failed }} lỗi</span>{% endif %}</dd></div>
   </dl>
   {% if tg_stage == "off" %}
@@ -36,12 +38,8 @@
 <section class="card" id="tg-done">
   <h2>{{ m.icon('check') }} Đã kết nối</h2>
   <p class="muted small">Thông báo duyệt, lỗi lặp, digest… sẽ tới các chat dưới đây. Nhắn chữ thường cho bot = nhắn điều phối viên.</p>
-  <h3 class="small">Chat được phép</h3>
-  <table class="tbl"><tbody>
-    {% for c in t.allowed_chat_ids or [] %}<tr><td><code>{{ c }}</code> <span class="muted small">{{ 'nhóm' if c.startswith('-') else 'chat riêng' }}</span></td>
-      <td class="actions">{{ m.act("tg_revoke", "Gỡ", {"chat_id": c}, "btn sm ghost", confirm="Gỡ chat " ~ c ~ "? Chat này không nhận thông báo và không điều khiển được cfharness nữa.", next=NEXT) }}</td></tr>
-    {% endfor %}
-  </tbody></table>
+  <h3 class="small">Người được phép</h3>
+  {{ CH.peers(tg_peers, "tg_revoke", NEXT, "telegram") }}
   <div class="row gap wrap-row">
     {{ m.act("tg_test", "Gửi tin thử", {}, "btn primary", next=NEXT, ic="send") }}
     {{ m.act("tg_pair", "Thêm điện thoại / tạo mã mới", {}, "btn sm", next=NEXT, ic="plus") }}
@@ -60,16 +58,12 @@
     <p class="muted small">Tạo mã ghép nối một lần, rồi mở bot trong Telegram và bấm <b>Start</b>.</p>
     {{ m.act("tg_pair", "Tạo mã ghép nối", {}, "btn primary", next=NEXT, ic="plus") }}
   {% endif %}
-  {% if t.allowed_chat_ids %}<p class="muted small">Đã có {{ t.allowed_chat_ids|length }} chat được phép — <a href="#tg-advanced">quản lý bên dưới</a>.</p>{% endif %}
+  {% if t.allowed_chat_ids %}<p class="muted small">Đã có {{ t.allowed_chat_ids|length }} chat được phép — <a href="#tg-chats">xem bên dưới</a>.</p>{% endif %}
 </section>
 {% if t.allowed_chat_ids %}
 <section class="card" id="tg-chats">
-  <h2>Chat được phép</h2>
-  <table class="tbl"><tbody>
-    {% for c in t.allowed_chat_ids %}<tr><td><code>{{ c }}</code></td>
-      <td class="actions">{{ m.act("tg_revoke", "Gỡ", {"chat_id": c}, "btn sm ghost", confirm="Gỡ chat " ~ c ~ "? Chat này không nhận thông báo và không điều khiển được cfharness nữa.", next=NEXT) }}</td></tr>
-    {% endfor %}
-  </tbody></table>
+  <h2>Người được phép</h2>
+  {{ CH.peers(tg_peers, "tg_revoke", NEXT, "telegram") }}
   {{ m.act("tg_test", "Gửi tin thử", {}, "btn sm", next=NEXT, ic="send") }}
 </section>
 {% endif %}
@@ -106,7 +100,7 @@
 <details class="card" id="tg-advanced">
   <summary><h2 class="inline-h">Nâng cao</h2></summary>
   <p class="small"><b>Nhóm Telegram</b> — hiện {{ 'đang BẬT' if tg_allow_groups else 'đang tắt' }} (<code>notify.telegram.allow_groups</code>).
-    Bật ở <a href="/settings/notifications#notify-cfg">Cấu hình thông báo</a>, thêm bot vào nhóm, tạo mã mới rồi gõ <code>/start &lt;mã&gt;</code> trong nhóm.
+    Bật ở <a href="/settings/notifications#cfg-notify-telegram">Nâng cao — Telegram</a>, thêm bot vào nhóm, tạo mã mới rồi gõ <code>/start &lt;mã&gt;</code> trong nhóm.
     Mọi thông báo sẽ vào nhóm; chỉ người gõ mã (và người bạn thêm) mới bấm được nút duyệt.</p>
   <p class="small"><b>Thêm chat bằng id</b> (khi đã biết id, không qua ghép nối — luôn có bước xác nhận):</p>
   <form method="post" action="/do/tg_allow_confirm" class="form" autocomplete="off">

@@ -308,6 +308,33 @@
     for (var i = 0; i < bs.length; i++) bs[i].disabled = false;
   });
 
+  // ------------------------------------------------------------ neo #id nằm trong <details> đang đóng (vd /settings/notifications/slack#webhook) → mở ra
+  try {
+    var hid = (location.hash || "").slice(1);
+    var ht = hid && /^[A-Za-z][\w-]*$/.test(hid) ? document.getElementById(hid) : null;
+    if (ht) {
+      for (var dd = ht.closest("details"); dd; dd = dd.parentElement ? dd.parentElement.closest("details") : null) dd.open = true;
+      ht.scrollIntoView();
+    }
+  } catch (_) {}
+
+  // ------------------------------------------------------------ thẻ gợi ý ẩn được (vd "Nhận yêu cầu duyệt trên điện thoại" ở trang Hoạt động)
+  // [data-dismiss="<khoá>"]: đã ẩn thì không hiện lại trên trình duyệt này (localStorage — tiện ích theo người xem; lỗi/không JS → luôn hiện)
+  (function () {
+    var cards = document.querySelectorAll("[data-dismiss]");
+    for (var i = 0; i < cards.length; i++) {
+      (function (card) {
+        var k = "cfh_dismiss_" + card.getAttribute("data-dismiss");
+        try { if (localStorage.getItem(k) === "1") { card.hidden = true; return; } } catch (_) {}
+        var b = card.querySelector("[data-dismiss-btn]");
+        if (b) b.addEventListener("click", function () {
+          card.hidden = true;
+          try { localStorage.setItem(k, "1"); } catch (_) {}
+        });
+      })(cards[i]);
+    }
+  })();
+
   // ------------------------------------------------------------ transcript dùng chung (trang run; trang Điều phối sẽ dùng lại)
   function nearBottom(el) { return el.scrollHeight - el.scrollTop - el.clientHeight < 120; }
   function fromHTML(html) {
